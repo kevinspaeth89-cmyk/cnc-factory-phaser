@@ -218,16 +218,25 @@
     }
     $('storage-upgrade').disabled=state.money<STORAGE_UPGRADE;
     $('machine-shop').replaceChildren(...Object.entries(catalog).map(([type,c])=>{
-      const div=document.createElement('div');div.className='shop-item';
-      const label=document.createElement('span');
-      label.textContent=`${c.name} · ${c.kind} · ${Math.round(c.rate*100)} % Tempo`;
+      const card=document.createElement('article');
+      const affordable=state.money>=c.price,full=state.machines.length>=4;
+      card.className='machine-card '+(c.kind==='Fräsen'?'mill-card':'turn-card')+((!affordable||full)?' locked':'');
+      const head=document.createElement('div');head.className='machine-card-head';
+      head.innerHTML=`<span class="machine-kind">${c.kind}</span><span class="machine-speed">${Math.round(c.rate*100)} % Tempo</span>`;
+      const title=document.createElement('h4');title.textContent=c.name;
+      const bar=document.createElement('div');bar.className='machine-rate';
+      const fill=document.createElement('span');fill.style.width=Math.min(100,Math.round(c.rate/1.55*100))+'%';bar.append(fill);
+      const foot=document.createElement('div');foot.className='machine-card-foot';
+      const note=document.createElement('small');
+      note.textContent=full?'Alle 4 Plätze belegt':affordable?'Sofort verfügbar':'Guthaben reicht nicht';
       const button=document.createElement('button');
-      button.type='button';button.className='action';
-      button.textContent=euro(c.price);
-      button.disabled=state.machines.length>=4||state.money<c.price;
+      button.type='button';button.className='action machine-buy';
+      button.textContent=full?'Halle voll':euro(c.price);
+      button.disabled=full||!affordable;
       button.addEventListener('click',()=>buyMachine(type));
-      div.append(label,button);
-      return div;
+      foot.append(note,button);
+      card.append(head,title,bar,foot);
+      return card;
     }));
     $('operator-1').textContent=m.operator1?'S1 abziehen':'S1 zuweisen';
     $('operator-2').textContent=m.operator2?'S2 abziehen':'S2 zuweisen';
