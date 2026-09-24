@@ -10,4 +10,4 @@ Die Schichten laufen Montag bis Freitag von 06:00–14:00 und 14:00–22:00. Au�
 
 ## Entwicklung
 
-`index.html` enthält die adaptive Bedienoberfläche. `game.js` enthält Spielstand, Ökonomie und Phaser-Szene. Die vier Hallengrafiken zeigen abhängig von der Zahl gekaufter Maschinen einen bis vier belegte Plätze. NX-350, NX-420 und AT-600 haben jeweils eine eigene Nahansicht. Eine lokale Vorschau lässt sich mit `python3 -m http.server` starten.
+`index.html` enthält die adaptive Bedienoberfläche. `game.js` enthält Spielstand, Ökonomie und Phaser-Szene. Die Hallenbasis `hall-empty-four-bays.webp` zeigt vier tatsächlich leere Stellplätze. Gekaufte Dreh- und Fräsmaschinen werden pro Platz als eigene Bildebene eingeblendet und verschwinden beim Verkauf wieder. NX-350, NX-420 und AT-600 haben jeweils eine eigene Nahansicht. Eine lokale Vorschau lässt sich mit `python3 -m http.server` starten.

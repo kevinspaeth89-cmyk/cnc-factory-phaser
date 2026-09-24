@@ -17,7 +17,7 @@
     mill3: {name:'Veltron VX-500',kind:'Fräsen',price:10500,rate:1.12},
     mill5: {name:'Orionis OM-650X',kind:'Fräsen',price:14800,rate:1.38}
   };
-  const hallBaseArtwork='hall-four-bays.jpg?v=2';
+  const hallBaseArtwork='hall-empty-four-bays.webp?v=1';
   const turningHallArtwork='hall-four-machines.webp?v=1';
   const hallMachineArtwork = {
     mill3:'assets/veltron-vx500-hall.webp?v=1',
