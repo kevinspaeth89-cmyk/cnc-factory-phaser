@@ -13,6 +13,16 @@ html,body,#wrap{margin:0;width:100%;height:100%;overflow:hidden;background:#0710
 #badge{display:none}
 #fallback small{display:block;color:#9cafba;margin-top:10px}
 canvas{display:block}
+
+#quickControls{position:absolute;z-index:400;left:50%;bottom:9px;transform:translateX(-50%);display:flex;gap:6px;align-items:center;padding:6px 8px;border-radius:12px;background:#07131bef;border:1px solid #3d6075;box-shadow:0 12px 35px #000a;backdrop-filter:blur(8px)}
+#quickControls button{height:40px;min-width:88px;padding:0 11px;border-radius:9px;border:1px solid #426579;background:#173345;color:#fff;font:700 11px Arial,sans-serif;cursor:pointer}
+#quickControls button.primary{background:#17628f;border-color:#479bc7}
+#quickControls button.green{background:#205f43;border-color:#458c6b}
+#quickControls button.warn{background:#695126;border-color:#9b7b3e}
+#quickControls .speedBtn{min-width:42px;width:42px;padding:0}
+#playHint{position:absolute;z-index:390;left:50%;bottom:60px;transform:translateX(-50%);max-width:84%;padding:6px 10px;border-radius:9px;background:#132936e8;border:1px solid #426579;color:#e8f2f6;font:700 11px Arial,sans-serif;text-align:center;pointer-events:none}
+@media(max-width:760px){#quickControls{gap:3px;padding:4px 5px;bottom:4px;max-width:99%;overflow-x:auto}#quickControls button{height:36px;min-width:72px;padding:0 7px;font-size:9px}#quickControls .speedBtn{min-width:35px;width:35px}#playHint{bottom:47px;font-size:9px;padding:4px 7px}}
+
 </style>
 </head>
 <body>
@@ -25,6 +35,19 @@ canvas{display:block}
   </div>
   <div id="game"></div>
   <div id="badge" aria-hidden="true"></div>
+
+  <div id="quickControls">
+    <button class="primary" id="qcOrders">📋 Aufträge</button>
+    <button class="green" id="qcMachine">⚙ Maschine</button>
+    <button class="warn" id="qcMaterial">📦 Material</button>
+    <button id="qcPause">⏸ Pause</button>
+    <button class="speedBtn" data-q-speed="1">1×</button>
+    <button class="speedBtn" data-q-speed="2">2×</button>
+    <button class="speedBtn" data-q-speed="5">5×</button>
+    <button class="speedBtn" data-q-speed="10">10×</button>
+  </div>
+  <div id="playHint">Auftrag starten → Produktion beobachten → Geld verdienen → KRYVEX verbessern</div>
+
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/phaser/3.90.0/phaser.min.js"></script>
@@ -50,6 +73,7 @@ class Game extends Phaser.Scene{
   preload(){ this.load.image('cell',IMAGE); }
 
   create(){
+    window.cncScene=this;
     this.orders=[
       {id:'A12',customer:'Veltraxis Mobility',part:'Wellenflansch A12',material:'1.4301 Edelstahl',kg:72,qty:50,reward:8400,duration:48,deadlineHours:7,accent:0x4abef2},
       {id:'B07',customer:'Myridian Fluidics',part:'Ventilgehäuse B07',material:'1.4404 Edelstahl',kg:96,qty:40,reward:11200,duration:62,deadlineHours:9,accent:0x9f79e8},
@@ -121,10 +145,10 @@ class Game extends Phaser.Scene{
 
     // Rebranding: reale Hersteller-/Modellschrift im Render wird durch die Spielmarke ersetzt.
     const brand=this.add.container(0,0).setDepth(7);
-    const makerPlate=this.add.rectangle(291,349,118,31,0x111417,.98).setStrokeStyle(1,0x3a4650);
-    const makerText=this.add.text(291,349,'KRYVEX',{fontSize:'15px',fontStyle:'bold',color:'#f5f7f9'}).setOrigin(.5);
-    const modelPlate=this.add.rectangle(460,402,122,34,0x111417,.98).setStrokeStyle(1,0x303b44);
-    const modelText=this.add.text(460,402,'KX 350',{fontSize:'18px',fontStyle:'bold',color:'#f5f7f9'}).setOrigin(.5);
+    const makerPlate=this.add.rectangle(282,348,150,66,0x111417,.995).setStrokeStyle(1,0x3a4650);
+    const makerText=this.add.text(282,348,'KRYVEX',{fontSize:'17px',fontStyle:'bold',color:'#f5f7f9'}).setOrigin(.5);
+    const modelPlate=this.add.rectangle(452,414,146,72,0x111417,.995).setStrokeStyle(1,0x303b44);
+    const modelText=this.add.text(452,414,'KX-350',{fontSize:'20px',fontStyle:'bold',color:'#f5f7f9'}).setOrigin(.5);
     brand.add([makerPlate,makerText,modelPlate,modelText]);
 
     // darker edge vignette
@@ -135,7 +159,7 @@ class Game extends Phaser.Scene{
     // machine status mini card
     this.floatCard=this.add.container(285,178).setDepth(20);
     this.floatCard.add(this.add.rectangle(0,0,445,92,0x0b151d,.96).setOrigin(0).setStrokeStyle(2,0x49697b));
-    this.floatTitle=this.add.text(18,14,'KX-350 · DREHZENTRUM',{fontSize:'19px',fontStyle:'bold',color:COL.text});
+    this.floatTitle=this.add.text(18,14,'KRYVEX KX-350 · DREHZENTRUM',{fontSize:'19px',fontStyle:'bold',color:COL.text});
     this.floatStatus=this.add.text(18,43,'● Bereit',{fontSize:'13px',fontStyle:'bold',color:COL.greenText});
     this.floatCard.add([this.floatTitle,this.floatStatus]);
     this.floatCard.add(this.add.rectangle(18,76,330,9,0x263944).setOrigin(0,.5));
@@ -237,7 +261,7 @@ class Game extends Phaser.Scene{
   drawDetailPanel(){
     this.detailPanel=this.add.container(1068,100).setDepth(200).setVisible(false);
     this.detailPanel.add(this.add.rectangle(0,0,350,700,0x09141c,.99).setOrigin(0).setStrokeStyle(2,0x426377));
-    this.detailPanel.add(this.add.text(22,22,'KX-350',{fontSize:'26px',fontStyle:'bold',color:COL.text}));
+    this.detailPanel.add(this.add.text(22,22,'KRYVEX KX-350',{fontSize:'26px',fontStyle:'bold',color:COL.text}));
     this.detailSub=this.add.text(22,60,'Drehzentrum · Level 1',{fontSize:'13px',color:COL.muted});
     this.detailPanel.add(this.detailSub);
 
@@ -395,7 +419,7 @@ class Game extends Phaser.Scene{
     const cost=9000*this.state.machineLevel;
     if(this.state.money<cost){this.toast('Nicht genug Geld für Upgrade');return;}
     this.state.money-=cost;this.state.machineLevel++;
-    this.toast('KX-350 auf Level '+this.state.machineLevel+' aufgerüstet');
+    this.toast('KRYVEX KX-350 auf Level '+this.state.machineLevel+' aufgerüstet');
     this.refreshAll();this.saveGame();
   }
   doMaintenance(){
@@ -515,6 +539,22 @@ new Phaser.Game({
   render:{antialias:true,pixelArt:false},
   scene:[Game]
 });
+
+const qc=(id)=>document.getElementById(id);
+qc('qcOrders')?.addEventListener('click',()=>window.cncScene?.openOrders());
+qc('qcMachine')?.addEventListener('click',()=>window.cncScene?.openDetails());
+qc('qcMaterial')?.addEventListener('click',()=>window.cncScene?.buyMaterial());
+qc('qcPause')?.addEventListener('click',()=>{
+  const s=window.cncScene;
+  if(!s)return;
+  if(!s.state.active){s.toast('Kein Auftrag aktiv');return;}
+  s.state.paused=!s.state.paused;s.refreshAll();
+});
+document.querySelectorAll('[data-q-speed]').forEach(btn=>btn.addEventListener('click',()=>{
+  const s=window.cncScene;if(!s)return;
+  s.state.speed=Number(btn.dataset.qSpeed);s.state.paused=false;s.refreshAll();
+}));
+
 })();
 </script>
 </body>
