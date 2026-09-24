@@ -2,57 +2,143 @@
   'use strict';
   const $ = id => document.getElementById(id);
   const euro = amount => '€ ' + Math.round(amount).toLocaleString('de-DE');
+  const SAVE_KEY = 'cnc_factory_save_v3';
+  const START = Date.UTC(2026, 0, 5, 6);
+  const HIRING_FEE = 150;
+  const STORAGE_RATE = .08; // euros per kg and game day
+  const STORAGE_UPGRADE = 4000;
+  const MATERIAL_PRICE = 2200;
+  const catalog = {
+    standard: {name:'Nexora NX-350',kind:'Drehen',price:6500,rate:1},
+    rapid: {name:'Nexora NX-420',kind:'Drehen',price:9000,rate:1.25},
+    premium: {name:'Aurex AT-600',kind:'Drehen',price:12500,rate:1.55}
+  };
   const orders = [
     {id:'A12',customer:'Veltraxis Mobility',part:'Wellenflansch A12',material:'1.4301 Edelstahl',kg:72,qty:50,reward:8400,duration:48,deadlineHours:7},
     {id:'B07',customer:'Orionis Fluidics',part:'Ventilgehäuse B07',material:'1.4404 Edelstahl',kg:96,qty:40,reward:11200,duration:62,deadlineHours:9},
     {id:'C21',customer:'Kaeldor Components',part:'Distanzring C21',material:'C45 Stahl',kg:48,qty:80,reward:6900,duration:38,deadlineHours:6}
   ];
-  const defaults = () => ({money:14000,material:120,machineLevel:1,maintenance:90,tool:82,speed:1,paused:false,activeId:null,progress:0,produced:0,selected:null,gameMinutes:0,deadlineAt:null,completed:0});
-  let state = defaults();
+  const freshMachine = (bay, type='standard') => ({
+    bay,type,level:1,maintenance:90,tool:82,operator1:false,operator2:false,
+    activeId:null,progress:0,produced:0,deadlineAt:null
+  });
+  const defaults = () => {
+    const first=freshMachine(1);
+    first.operator1=true;
+    return {money:14000,material:120,capacity:300,staff:{shift1:1,shift2:0},
+      machines:[first],selectedBay:1,speed:1,paused:false,gameMinutes:0,completed:0,
+      payrollDue:0,wagesPaid:0,storagePaid:0,energyPaid:0,selected:null};
+  };
+  let state=defaults();
+  function validMachine(m) {
+    return m && Number.isInteger(m.bay) && m.bay>=1 && m.bay<=4 &&
+      !!catalog[m.type] && typeof m.progress==='number';
+  }
   try {
-    const saved = JSON.parse(localStorage.getItem('cnc_factory_save_v2') || 'null');
-    if (saved && typeof saved.money === 'number' && Number.isFinite(saved.money)) {
-      state = {...state,...saved};
-      if (!orders.some(o => o.id === state.activeId)) state.activeId = null;
-      if (![1,2,5,10].includes(state.speed)) state.speed = 1;
+    const stored=JSON.parse(localStorage.getItem(SAVE_KEY) || 'null');
+    if(stored && Number.isFinite(stored.money) && Array.isArray(stored.machines)) {
+      state={...defaults(),...stored};
+      state.machines=stored.machines.filter(validMachine).map(m=>({...freshMachine(m.bay,m.type),...m}));
+      if(!state.machines.some(m=>m.bay===1))state.machines.unshift(defaults().machines[0]);
+      state.machines=state.machines.filter((m,i,a)=>a.findIndex(x=>x.bay===m.bay)===i);
+      state.staff={shift1:Math.max(0,Number(stored.staff?.shift1)||0),shift2:Math.max(0,Number(stored.staff?.shift2)||0)};
+    } else {
+      const legacy=JSON.parse(localStorage.getItem('cnc_factory_save_v2') || 'null');
+      if(legacy && Number.isFinite(legacy.money)) {
+        state.money=legacy.money;
+        state.material=Number.isFinite(legacy.material)?legacy.material:120;
+        state.gameMinutes=(Number(legacy.gameMinutes)||0)+360;
+        state.completed=Number(legacy.completed)||0;
+        state.speed=[1,2,5,10].includes(legacy.speed)?legacy.speed:1;
+        state.paused=!!legacy.paused;
+        state.selected=legacy.selected;
+        const m=state.machines[0];
+        m.level=Number(legacy.machineLevel)||1;
+        m.maintenance=Number.isFinite(legacy.maintenance)?legacy.maintenance:90;
+        m.tool=Number.isFinite(legacy.tool)?legacy.tool:82;
+        if(orders.some(o=>o.id===legacy.activeId)){
+          m.activeId=legacy.activeId;
+          m.progress=Number(legacy.progress)||0;
+          m.produced=Number(legacy.produced)||0;
+          m.deadlineAt=Number.isFinite(legacy.deadlineAt)?legacy.deadlineAt+360:null;
+        }
+      }
     }
-  } catch (_) { /* Private browsing can disable local storage. */ }
-  const save = () => { try { localStorage.setItem('cnc_factory_save_v2',JSON.stringify(state)); } catch (_) {} };
-  const active = () => orders.find(o => o.id === state.activeId) || null;
-  let visual = null;
-  let messageTimer;
-  let currentPanel = null;
-  let zoomTimer;
-  function say(message) {
-    $('message').textContent = message;
+  } catch (_) { /* Storage may be unavailable. */ }
+  state.speed=[1,2,5,10].includes(state.speed)?state.speed:1;
+  state.capacity=Math.max(300,Number(state.capacity)||300,Math.ceil(state.material));
+  state.selectedBay=state.machines.some(m=>m.bay===state.selectedBay)?state.selectedBay:1;
+  // Restored assignments may be malformed. Preserve the starter's operator.
+  for(const shift of [1,2]){
+    const key='operator'+shift,staffKey='shift'+shift;
+    let assigned=0;
+    state.machines.forEach(m=>{if(m[key]){if(assigned<state.staff[staffKey])assigned++;else m[key]=false;}});
+  }
+  const save = () => {try{localStorage.setItem(SAVE_KEY,JSON.stringify(state));}catch(_){}};
+  const selectedMachine=()=>state.machines.find(m=>m.bay===state.selectedBay);
+  const machineAt=bay=>state.machines.find(m=>m.bay===bay);
+  const job=m=>orders.find(o=>o.id===m.activeId)||null;
+  const dateAt=min=>new Date(START+Math.floor(min)*60000);
+  const shiftAt=min=>{
+    const d=dateAt(min),day=d.getUTCDay(),hour=d.getUTCHours();
+    return day===0||day===6 ? 0 : hour>=6&&hour<14 ? 1 : hour>=14&&hour<22 ? 2 : 0;
+  };
+  const clock=()=>{
+    const d=dateAt(state.gameMinutes),day=['So','Mo','Di','Mi','Do','Fr','Sa'][d.getUTCDay()];
+    return `${day} ${String(d.getUTCHours()).padStart(2,'0')}:${String(d.getUTCMinutes()).padStart(2,'0')}`;
+  };
+  const operating=m=>!!job(m)&&!state.paused&&!!shiftAt(state.gameMinutes)&&
+    !!m['operator'+shiftAt(state.gameMinutes)]&&m.tool>=1&&m.maintenance>=8;
+  let visual=null, currentPanel=null, messageTimer, zoomTimer, phaserGame=null;
+  function say(message){
+    $('message').textContent=message;
     clearTimeout(messageTimer);
-    messageTimer = setTimeout(() => { if ($('message').textContent === message) $('message').textContent = ''; },5000);
+    messageTimer=setTimeout(()=>{if($('message').textContent===message)$('message').textContent='';},5000);
   }
-  function tab(name) {
-    currentPanel = name;
-    $('drawer').hidden = false;
-    $('scrim').hidden = false;
-    $('drawer-title').textContent = name === 'orders' ? 'Aufträge' : 'Maschine';
-    $('orders-panel').hidden = name !== 'orders';
-    $('machine-panel').hidden = name !== 'machine';
-    $('orders-tab').classList.toggle('active',name === 'orders');
-    $('machine-tab').classList.toggle('active',name === 'machine');
-    $('orders-tab').setAttribute('aria-expanded',name === 'orders');
-    $('machine-tab').setAttribute('aria-expanded',name === 'machine');
-    $('speed-menu').hidden = true;
+  function statusFor(m){
+    if(!m)return 'Freier Stellplatz';
+    if(state.paused)return 'Pausiert';
+    if(m.maintenance<8)return 'Wartung fällig';
+    if(m.tool<1)return 'Werkzeug verschlissen';
+    if(!job(m))return 'Bereit';
+    const shift=shiftAt(state.gameMinutes);
+    if(!shift)return 'Betrieb geschlossen';
+    if(!m['operator'+shift])return `Kein Bediener Schicht ${shift}`;
+    return 'Produktion läuft';
+  }
+  function tab(name){
+    currentPanel=name;
+    $('drawer').hidden=false;
+    $('scrim').hidden=false;
+    $('drawer-title').textContent={orders:'Aufträge',machine:'Maschine',business:'Betrieb'}[name];
+    for(const panel of ['orders','machine','business']){
+      $(panel+'-panel').hidden=name!==panel;
+      $(panel+'-tab').classList.toggle('active',name===panel);
+      $(panel+'-tab').setAttribute('aria-expanded',String(name===panel));
+    }
+    $('speed-menu').hidden=true;
     $('speed-toggle').setAttribute('aria-expanded','false');
+    renderOrders();
+    renderBusiness();
   }
-  function closeDrawer() {
-    currentPanel = null;
-    $('drawer').hidden = true;
-    $('scrim').hidden = true;
-    for(const id of ['orders-tab','machine-tab']) {
-      $(id).classList.remove('active');
-      $(id).setAttribute('aria-expanded','false');
+  function closeDrawer(){
+    currentPanel=null;
+    $('drawer').hidden=true;
+    $('scrim').hidden=true;
+    for(const panel of ['orders','machine','business']){
+      $(panel+'-tab').classList.remove('active');
+      $(panel+'-tab').setAttribute('aria-expanded','false');
     }
   }
-  function showMachine() {
-    if(typeof Phaser==='undefined') {say('Maschinenansicht konnte nicht geladen werden. Bitte die Seite neu laden.');return;}
+  function selectBay(bay){
+    if(!machineAt(bay))return;
+    state.selectedBay=bay;
+    save();renderOrders();renderBusiness();render();
+  }
+  function showMachine(bay=state.selectedBay){
+    if(!machineAt(bay))return;
+    selectBay(bay);
+    if(typeof Phaser==='undefined'){say('Maschinenansicht konnte nicht geladen werden. Bitte neu laden.');return;}
     if(!$('detail-view').hidden)return;
     $('hall-map').classList.add('zooming');
     clearTimeout(zoomTimer);
@@ -61,121 +147,241 @@
       $('detail-view').hidden=false;
       ensureGame();
       visual?.scale.refresh();
-    },window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 300);
+    },window.matchMedia('(prefers-reduced-motion: reduce)').matches?0:300);
   }
-  function showHall() {
+  function showHall(){
     clearTimeout(zoomTimer);
     $('detail-view').hidden=true;
     $('hall-view').hidden=false;
     $('hall-map').classList.remove('zooming');
   }
-  function renderOrders() {
-    $('orders').replaceChildren(...orders.map(o => {
-      const card = document.createElement('article');
-      card.className = 'card' + (state.selected === o.id ? ' selected' : '') + (state.activeId === o.id ? ' running' : '');
-      card.innerHTML = `<div class="top"><span>${o.customer}</span><span>#${o.id}</span></div><h3>${o.part}</h3><p>${o.material} · ${o.qty} Teile</p><div class="values"><span>${o.kg} kg · Frist ${o.deadlineHours} h</span><b>${euro(o.reward)}</b></div>`;
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.textContent = state.activeId === o.id ? 'Produktion läuft' : 'Auftrag starten';
-      button.disabled = !!state.activeId;
-      button.addEventListener('click',event => {event.stopPropagation(); startOrder(o.id);});
+  function renderOrders(){
+    $('order-machine').replaceChildren(...state.machines.map(m=>{
+      const opt=document.createElement('option');
+      opt.value=m.bay;opt.textContent=`Platz ${m.bay} · ${catalog[m.type].name}`;
+      opt.selected=m.bay===state.selectedBay;
+      return opt;
+    }));
+    $('orders').replaceChildren(...orders.map(o=>{
+      const m=selectedMachine(),card=document.createElement('article');
+      const running=state.machines.find(x=>x.activeId===o.id);
+      card.className='card'+(state.selected===o.id?' selected':'')+(running?' running':'');
+      card.innerHTML=`<div class="top"><span>${o.customer}</span><span>#${o.id}</span></div><h3>${o.part}</h3><p>${o.material} · ${o.qty} Teile</p><div class="values"><span>${o.kg} kg · Frist ${o.deadlineHours} h</span><b>${euro(o.reward)}</b></div>`;
+      if(running){const p=document.createElement('p');p.textContent=`Läuft auf Platz ${running.bay} · ${running.produced}/${o.qty} Teile`;card.append(p);}
+      const button=document.createElement('button');
+      button.type='button';
+      button.textContent=running?'Produktion läuft':`Auf Platz ${m.bay} starten`;
+      button.disabled=!!running||!!job(m);
+      button.addEventListener('click',event=>{event.stopPropagation();startOrder(o.id);});
       card.append(button);
-      card.addEventListener('click',() => {state.selected=o.id;save();renderOrders();});
+      card.addEventListener('click',()=>{state.selected=o.id;save();renderOrders();});
       return card;
     }));
   }
-  function clock() {
-    const minutes = Math.floor(state.gameMinutes);
-    const day = ['Mo','Di','Mi','Do','Fr'][Math.floor(minutes/1440)%5];
-    return `${day} ${String(Math.floor(minutes%1440/60)).padStart(2,'0')}:${String(minutes%60).padStart(2,'0')}`;
+  function renderBusiness(){
+    const m=selectedMachine();
+    $('staff-summary').textContent=`S1: ${state.staff.shift1} · S2: ${state.staff.shift2} · ${state.machines.length}/4 Maschinen`;
+    renderCosts();
+    $('hire-1').disabled=state.money<HIRING_FEE||state.staff.shift1>=4;
+    $('hire-2').disabled=state.money<HIRING_FEE||state.staff.shift2>=4;
+    for(const shift of [1,2]){
+      const assigned=state.machines.filter(x=>x['operator'+shift]).length;
+      $('fire-'+shift).disabled=state.staff['shift'+shift]<=assigned;
+      $('free-'+shift).textContent=`${state.staff['shift'+shift]-assigned} frei`;
+    }
+    $('storage-upgrade').disabled=state.money<STORAGE_UPGRADE;
+    $('machine-shop').replaceChildren(...Object.entries(catalog).map(([type,c])=>{
+      const div=document.createElement('div');div.className='shop-item';
+      const label=document.createElement('span');
+      label.textContent=`${c.name} · ${Math.round(c.rate*100)} % Tempo`;
+      const button=document.createElement('button');
+      button.type='button';button.className='action';
+      button.textContent=euro(c.price);
+      button.disabled=state.machines.length>=4||state.money<c.price;
+      button.addEventListener('click',()=>buyMachine(type));
+      div.append(label,button);
+      return div;
+    }));
+    $('operator-1').textContent=m.operator1?'S1 abziehen':'S1 zuweisen';
+    $('operator-2').textContent=m.operator2?'S2 abziehen':'S2 zuweisen';
+    for(const shift of [1,2]){
+      const assigned=state.machines.filter(x=>x['operator'+shift]).length;
+      $('operator-'+shift).disabled=!m['operator'+shift]&&assigned>=state.staff['shift'+shift];
+    }
   }
-  function render() {
-    const o=active(), pct=Math.max(0,Math.min(100,state.progress));
+  function renderCosts(){
+    $('payroll-due').textContent=euro(state.payrollDue);
+    $('wages-paid').textContent=euro(state.wagesPaid);
+    $('energy-paid').textContent=euro(state.energyPaid);
+    $('storage-paid').textContent=euro(state.storagePaid);
+    $('storage-info').textContent=`${Math.floor(state.material)} / ${state.capacity} kg · ${euro(state.material*STORAGE_RATE)} pro Spieltag`;
+  }
+  function render(){
+    const m=selectedMachine(),o=job(m),pct=Math.max(0,Math.min(100,m.progress));
     $('money').textContent=euro(state.money);
     $('material').textContent=Math.floor(state.material)+' kg';
-    $('parts').textContent=o ? `${state.produced} / ${o.qty}` : `${state.completed} fertig`;
-    $('part-name').textContent=o ? o.part : 'Auftrag auswählen';
+    $('parts').textContent=`${state.machines.length} / 4`;
+    $('part-name').textContent=o?o.part:'Auftrag auswählen';
     $('progress').style.width=pct+'%';
-    $('progress-label').textContent=o ? `${Math.floor(pct)} % · ${state.produced} / ${o.qty} Teile` : 'Bereit für den nächsten Auftrag';
+    $('progress-label').textContent=o?`${Math.floor(pct)} % · ${m.produced} / ${o.qty} · ${statusFor(m)}`:statusFor(m);
     $('clock').textContent=clock();
-    const status=$('status');
-    status.textContent=o ? (state.paused ? '● Pausiert' : '● Produktion läuft') : '● Bereit';
-    status.classList.toggle('paused',!!o && state.paused);
-    $('pause').textContent=state.paused ? '▶ Fortsetzen' : '⏸ Pause';
+    $('status').textContent='● '+statusFor(m);
+    $('status').classList.toggle('paused',state.paused);
+    $('pause').textContent=state.paused?'▶ Weiter':'⏸ Pause';
     $('pause').classList.toggle('active',state.paused);
-    $('pause').disabled=!o;
     document.querySelectorAll('[data-speed]').forEach(b=>b.classList.toggle('active',Number(b.dataset.speed)===state.speed));
     $('speed-value').textContent=state.speed+'×';
-    $('machine-meta').textContent=`Level ${state.machineLevel} · ${Math.round((state.machineLevel-1)*13)} % schneller · ${state.completed} Aufträge abgeschlossen`;
-    $('upgrade-cost').textContent=euro(9000*state.machineLevel)+' · +13 % Tempo';
-    $('tool-label').textContent=Math.round(state.tool)+' %';
-    $('tool-meter').style.width=Math.max(0,state.tool)+'%';
-    $('maintenance-label').textContent=Math.round(state.maintenance)+' %';
-    $('maintenance-meter').style.width=Math.max(0,state.maintenance)+'%';
-    $('buy-material').disabled=state.money<2200;
-    $('change-tool').disabled=!!o || state.money<650 || state.tool>=99;
-    $('maintenance').disabled=!!o || state.money<1200 || state.maintenance>=99;
-    $('upgrade').disabled=state.money<9000*state.machineLevel;
-    if(visual)visual.running=!!o&&!state.paused;
+    $('machine-heading').textContent=catalog[m.type].name;
+    $('machine-readout').textContent=`${catalog[m.type].name.toUpperCase()} · PLATZ ${m.bay}`;
+    $('machine-meta').textContent=`Platz ${m.bay} · Level ${m.level} · ${statusFor(m)}`;
+    $('upgrade-cost').textContent=euro(9000*m.level)+' · +13 % Tempo';
+    $('tool-label').textContent=Math.round(m.tool)+' %';
+    $('tool-meter').style.width=Math.max(0,m.tool)+'%';
+    $('maintenance-label').textContent=Math.round(m.maintenance)+' %';
+    $('maintenance-meter').style.width=Math.max(0,m.maintenance)+'%';
+    $('buy-material').disabled=state.money<MATERIAL_PRICE||state.material+100>state.capacity;
+    $('change-tool').disabled=!!o||state.money<650||m.tool>=99;
+    $('maintenance').disabled=!!o||state.money<1200||m.maintenance>=99;
+    $('upgrade').disabled=state.money<9000*m.level;
+    for(let bay=1;bay<=4;bay++){
+      const b=$('bay-'+bay),machine=machineAt(bay);
+      b.classList.toggle('installed',!!machine);
+      b.classList.toggle('selected-bay',bay===m.bay);
+      b.classList.toggle('working-bay',!!machine&&operating(machine));
+      b.querySelector('span').textContent=machine?catalog[machine.type].name:`+ Platz ${bay}`;
+      b.setAttribute('aria-label',machine?`${catalog[machine.type].name}, Platz ${bay} ansehen`:`Freier Stellplatz ${bay}, Maschinen kaufen`);
+      b.title=machine?statusFor(machine):'Maschine kaufen';
+    }
+    if(visual)visual.running=operating(m);
   }
-  function startOrder(id) {
-    const o=orders.find(item=>item.id===id);
-    if(!o || active()) {say('Zuerst den laufenden Auftrag abschließen.');return;}
-    if(state.material<o.kg) {say(`Es fehlen ${o.kg-state.material} kg Material. Im Maschinen-Reiter kaufen.`);tab('machine');return;}
-    if(state.maintenance<20) {say('Vor dem Start ist eine Wartung erforderlich.');tab('machine');return;}
-    if(state.tool<15) {say('Vor dem Start muss das Werkzeug gewechselt werden.');tab('machine');return;}
+  function startOrder(id){
+    const o=orders.find(x=>x.id===id),m=selectedMachine();
+    if(!o||!m||job(m)||state.machines.some(x=>x.activeId===id)){say('Diese Maschine oder dieser Auftrag ist bereits belegt.');return;}
+    if(state.material<o.kg){say(`Es fehlen ${o.kg-state.material} kg Material.`);tab('machine');return;}
+    if(m.maintenance<8||m.tool<1){say('Vorher Werkzeug oder Wartung erneuern.');tab('machine');return;}
     state.material-=o.kg;
-    state.activeId=id;
-    state.selected=id;
-    state.deadlineAt=state.gameMinutes+o.deadlineHours*60;
-    state.progress=0;state.produced=0;state.paused=false;
-    save();renderOrders();render();closeDrawer();showMachine();say(`${o.part} gestartet. Produktion läuft.`);
+    m.activeId=id;m.progress=0;m.produced=0;
+    m.deadlineAt=state.gameMinutes+o.deadlineHours*60;
+    save();renderOrders();renderBusiness();render();closeDrawer();showMachine(m.bay);
+    say(`${o.part} auf Platz ${m.bay} angenommen. ${statusFor(m)}.`);
   }
-  function tick(dt) {
+  function buyMachine(type){
+    const c=catalog[type],bay=[2,3,4].find(x=>!machineAt(x));
+    if(!c||!bay||state.money<c.price)return;
+    state.money-=c.price;
+    state.machines.push(freshMachine(bay,type));
+    selectBay(bay);renderBusiness();save();
+    say(`${c.name} auf Platz ${bay} gekauft. Bediener zuweisen.`);
+  }
+  function toggleOperator(shift){
+    const m=selectedMachine(),key='operator'+shift;
+    if(!m[key]&&state.machines.filter(x=>x[key]).length>=state.staff['shift'+shift])return;
+    m[key]=!m[key];
+    renderBusiness();render();save();
+    say(`Schicht ${shift}: Bediener ${m[key]?'zugewiesen':'abgezogen'}.`);
+  }
+  function tick(dt){
     if(state.paused)return;
-    state.gameMinutes+=dt*state.speed*6;
-    const o=active();
-    if(!o) {render();return;}
-    const factor=(1+(state.machineLevel-1)*.13)*Math.max(.65,state.maintenance/100*.75+.25);
-    const gain=100/o.duration*dt*state.speed*factor;
-    state.progress=Math.min(100,state.progress+gain);
-    state.produced=Math.min(o.qty,Math.floor(o.qty*state.progress/100));
-    state.maintenance=Math.max(0,state.maintenance-gain*.12);
-    state.tool=Math.max(0,state.tool-gain*.18);
-    if(state.progress>=100) {
-      const late=state.deadlineAt!==null && state.gameMinutes>state.deadlineAt;
-      const payout=late?Math.round(o.reward*.8):o.reward;
-      state.money+=payout;state.completed++;state.activeId=null;state.progress=0;state.produced=0;
-      state.deadlineAt=null;state.speed=1;state.paused=false;
-      save();renderOrders();render();say(`${o.part} abgeschlossen · ${euro(payout)}${late?' (20 % Verspätungsabzug)':''}`);
-      return;
+    // Slice at minute boundaries so shift changes and month end are charged exactly once.
+    let left=dt*state.speed*6;
+    while(left>1e-8){
+      const step=Math.min(left,1-(state.gameMinutes%1)||1);
+      const before=dateAt(state.gameMinutes),shift=shiftAt(state.gameMinutes);
+      if(shift)state.payrollDue+=state.staff['shift'+shift]*(shift===1?24:26)*step/60;
+      state.money-=state.material*STORAGE_RATE*step/1440;
+      state.storagePaid+=state.material*STORAGE_RATE*step/1440;
+      for(const m of state.machines){
+        const o=job(m);
+        if(!o||!operating(m))continue;
+        const power=14*.28*step/60;
+        state.money-=power;state.energyPaid+=power;
+        const factor=catalog[m.type].rate*(1+(m.level-1)*.13)*Math.max(.65,m.maintenance/100*.75+.25);
+        const gain=100/o.duration*(step/6)*factor;
+        m.progress=Math.min(100,m.progress+gain);
+        m.produced=Math.min(o.qty,Math.floor(o.qty*m.progress/100));
+        m.maintenance=Math.max(0,m.maintenance-gain*.12);
+        m.tool=Math.max(0,m.tool-gain*.18);
+        if(m.progress>=100){
+          const late=m.deadlineAt!==null&&state.gameMinutes+step>m.deadlineAt;
+          const payout=late?Math.round(o.reward*.8):o.reward;
+          state.money+=payout;state.completed++;
+          m.activeId=null;m.progress=0;m.produced=0;m.deadlineAt=null;
+          state.speed=1;
+          save();renderOrders();
+          say(`${catalog[m.type].name}: ${o.part} fertig · ${euro(payout)}${late?' (20 % Fristabzug)':''}`);
+        }
+      }
+      state.gameMinutes+=step;left-=step;
+      const after=dateAt(state.gameMinutes);
+      if(after.getUTCMonth()!==before.getUTCMonth()||after.getUTCFullYear()!==before.getUTCFullYear()){
+        if(state.payrollDue){
+          state.money-=state.payrollDue;state.wagesPaid+=state.payrollDue;
+          say(`Monatliche Lohnabrechnung: −${euro(state.payrollDue)}.`);
+          state.payrollDue=0;save();
+        }
+      }
     }
     render();
+    if(currentPanel==='business')renderCosts();
   }
-  $('orders-tab').addEventListener('click',()=>currentPanel==='orders'?closeDrawer():tab('orders'));
-  $('machine-tab').addEventListener('click',()=>currentPanel==='machine'?closeDrawer():tab('machine'));
+  for(const name of ['orders','machine','business'])
+    $(name+'-tab').addEventListener('click',()=>currentPanel===name?closeDrawer():tab(name));
   $('close-drawer').addEventListener('click',closeDrawer);
   $('scrim').addEventListener('click',closeDrawer);
-  $('machine-bay').addEventListener('click',showMachine);
+  for(let bay=1;bay<=4;bay++)$('bay-'+bay).addEventListener('click',()=>{
+    if(machineAt(bay))showMachine(bay);
+    else{tab('business');say(`Platz ${bay} ist frei. Wähle eine Maschine im Betrieb.`);}
+  });
   $('back-to-hall').addEventListener('click',showHall);
-  document.querySelectorAll('[data-empty-bay]').forEach(b=>b.addEventListener('click',()=>say(`Stellplatz ${b.dataset.emptyBay} ist frei für eine künftige Maschine.`)));
+  $('order-machine').addEventListener('change',event=>selectBay(Number(event.target.value)));
   $('speed-toggle').addEventListener('click',()=>{
     const opening=$('speed-menu').hidden;
-    $('speed-menu').hidden=!opening;
-    $('speed-toggle').setAttribute('aria-expanded',opening);
     if(opening)closeDrawer();
+    $('speed-menu').hidden=!opening;
+    $('speed-toggle').setAttribute('aria-expanded',String(opening));
   });
-  document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeDrawer();$('speed-menu').hidden=true;$('speed-toggle').setAttribute('aria-expanded','false');}});
-  $('buy-material').addEventListener('click',()=>{if(state.money<2200)return;state.money-=2200;state.material+=100;save();render();say('100 kg Rohmaterial eingelagert.');});
-  $('change-tool').addEventListener('click',()=>{if(active()||state.money<650||state.tool>=99)return;state.money-=650;state.tool=100;save();render();say('Werkzeug gewechselt.');});
-  $('maintenance').addEventListener('click',()=>{if(active()||state.money<1200||state.maintenance>=99)return;state.money-=1200;state.maintenance=100;save();render();say('Wartung abgeschlossen.');});
-  $('upgrade').addEventListener('click',()=>{const cost=9000*state.machineLevel;if(state.money<cost)return;state.money-=cost;state.machineLevel++;save();render();say('Nexora NX-350 verbessert.');});
-  $('pause').addEventListener('click',()=>{if(!active())return;state.paused=!state.paused;save();render();say(state.paused?'Produktion pausiert.':'Produktion fortgesetzt.');});
-  document.querySelectorAll('[data-speed]').forEach(b=>b.addEventListener('click',()=>{state.speed=Number(b.dataset.speed);save();render();$('speed-menu').hidden=true;$('speed-toggle').setAttribute('aria-expanded','false');}));
+  document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeDrawer();$('speed-menu').hidden=true;}});
+  $('buy-material').addEventListener('click',()=>{
+    if(state.money<MATERIAL_PRICE||state.material+100>state.capacity)return;
+    state.money-=MATERIAL_PRICE;state.material+=100;save();render();renderBusiness();say('100 kg Material eingelagert.');
+  });
+  $('change-tool').addEventListener('click',()=>{
+    const m=selectedMachine();if(job(m)||state.money<650||m.tool>=99)return;
+    state.money-=650;m.tool=100;save();render();say('Werkzeug gewechselt.');
+  });
+  $('maintenance').addEventListener('click',()=>{
+    const m=selectedMachine();if(job(m)||state.money<1200||m.maintenance>=99)return;
+    state.money-=1200;m.maintenance=100;save();render();say('Wartung abgeschlossen.');
+  });
+  $('upgrade').addEventListener('click',()=>{
+    const m=selectedMachine(),cost=9000*m.level;if(state.money<cost)return;
+    state.money-=cost;m.level++;save();render();say(`${catalog[m.type].name} verbessert.`);
+  });
+  for(const shift of [1,2]){
+    $('operator-'+shift).addEventListener('click',()=>toggleOperator(shift));
+    $('hire-'+shift).addEventListener('click',()=>{
+      if(state.money<HIRING_FEE||state.staff['shift'+shift]>=4)return;
+      state.money-=HIRING_FEE;state.staff['shift'+shift]++;
+      save();renderBusiness();render();say(`Bediener Schicht ${shift} eingestellt.`);
+    });
+    $('fire-'+shift).addEventListener('click',()=>{
+      if(state.staff['shift'+shift]<=state.machines.filter(m=>m['operator'+shift]).length)return;
+      state.staff['shift'+shift]--;save();renderBusiness();render();say(`Freier Bediener Schicht ${shift} entlassen.`);
+    });
+  }
+  $('storage-upgrade').addEventListener('click',()=>{
+    if(state.money<STORAGE_UPGRADE)return;
+    state.money-=STORAGE_UPGRADE;state.capacity+=200;
+    save();renderBusiness();render();say('Lager um 200 kg erweitert.');
+  });
+  $('pause').addEventListener('click',()=>{state.paused=!state.paused;save();render();say(state.paused?'Spiel pausiert.':'Spiel fortgesetzt.');});
+  document.querySelectorAll('[data-speed]').forEach(b=>b.addEventListener('click',()=>{
+    state.speed=Number(b.dataset.speed);save();render();
+    $('speed-menu').hidden=true;$('speed-toggle').setAttribute('aria-expanded','false');
+  }));
   document.addEventListener('visibilitychange',()=>{if(document.hidden)save();});
-  renderOrders();render();
-  if(typeof Phaser==='undefined') {say('Spiel konnte nicht geladen werden. Bitte die Seite neu laden.');return;}
-  class FactoryScene extends Phaser.Scene {
+  renderOrders();renderBusiness();render();
+  class FactoryScene extends (typeof Phaser==='undefined'?class{}:Phaser.Scene) {
     constructor(){super('factory');this.running=false;this.elapsed=0;}
     preload(){this.load.image('nexora','cell-nexora.jpg?v=c523bfea');}
     create(){
@@ -183,7 +389,6 @@
       const base=this.add.graphics();
       base.fillGradientStyle(0x253943,0x253943,0x101e29,0x101e29).fillRect(0,0,1000,800);
       this.add.image(500,400,'nexora').setDisplaySize(1000,836);
-      // Rotating spindle glint and flying chips are anchored inside the real machine window.
       this.spindle=this.add.graphics().setBlendMode(Phaser.BlendModes.ADD);
       this.sparks=Array.from({length:20},()=>{
         const p=this.add.circle(440,385,Phaser.Math.FloatBetween(.8,2.3),0x9cefff,0).setBlendMode(Phaser.BlendModes.ADD);
@@ -193,9 +398,7 @@
       render();
     }
     update(_time,delta){
-      const dt=Math.min(delta/1000,.2);
-      this.elapsed+=dt;
-      this.spindle.clear();
+      const dt=Math.min(delta/1000,.2);this.elapsed+=dt;this.spindle.clear();
       const on=this.running;
       if(on){
         this.spindle.lineStyle(3,0x97e6ff,.55).beginPath().arc(445,377,31,this.elapsed*9,this.elapsed*9+1.7).strokePath();
@@ -204,14 +407,14 @@
       this.sparks.forEach(p=>{
         const t=this.elapsed*p.speed*4+p.phase;
         p.sprite.setPosition(445+Math.cos(t)*p.radius,390+Math.sin(t*.8)*p.radius*.46);
-        p.sprite.setAlpha(on ? .14+.6*Math.max(0,Math.sin(t*2)) : 0);
+        p.sprite.setAlpha(on?.14+.6*Math.max(0,Math.sin(t*2)):0);
       });
-      this.tower.setAlpha(on ? .18+.45*(.5+.5*Math.sin(this.elapsed*8)) : .09);
+      this.tower.setAlpha(on?.18+.45*(.5+.5*Math.sin(this.elapsed*8)):.09);
     }
   }
-  let phaserGame = null;
-  function ensureGame() {
-    if(!phaserGame) phaserGame = new Phaser.Game({type:Phaser.AUTO,parent:'game',width:1000,height:800,backgroundColor:'#152a35',scale:{mode:Phaser.Scale.ENVELOP,autoCenter:Phaser.Scale.CENTER_BOTH},render:{antialias:true,pixelArt:false},scene:[FactoryScene]});
+  function ensureGame(){
+    if(typeof Phaser==='undefined')return;
+    if(!phaserGame)phaserGame=new Phaser.Game({type:Phaser.AUTO,parent:'game',width:1000,height:800,backgroundColor:'#152a35',scale:{mode:Phaser.Scale.ENVELOP,autoCenter:Phaser.Scale.CENTER_BOTH},render:{antialias:true,pixelArt:false},scene:[FactoryScene]});
   }
   let previous=performance.now(),accumulator=0;
   function frame(now){
@@ -221,5 +424,5 @@
   }
   requestAnimationFrame(frame);
   setInterval(save,5000);
-  window.cncFactory={getState:()=>({...state}),orders:orders.map(o=>({...o}))};
+  window.cncFactory={getState:()=>JSON.parse(JSON.stringify(state)),orders:orders.map(o=>({...o}))};
 })();
