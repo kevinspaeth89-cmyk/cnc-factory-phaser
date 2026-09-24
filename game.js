@@ -473,16 +473,17 @@
       this.tower.setAlpha(!this.millGroup.visible&&on?.18+.45*(.5+.5*Math.sin(this.elapsed*8)):.09);
       if(this.millGroup.visible){
         const travel=on?Math.sin(this.elapsed*1.35)*92:0;
-        this.millTable.x=travel;
-        this.millWorkpiece.x=travel;
-        this.millHead.x=on?Math.sin(this.elapsed*.72)*26:0;
-        this.millSpindle.x=this.millHead.x;
-        this.millTool.x=this.millHead.x;
-        this.millGlow.x=this.millHead.x+travel;
+        const headTravel=on?Math.sin(this.elapsed*.72)*26:0;
+        this.millTable.x=470+travel;
+        this.millWorkpiece.x=470+travel;
+        this.millHead.x=470+headTravel;
+        this.millSpindle.x=470+headTravel;
+        this.millTool.x=470+headTravel;
+        this.millGlow.x=470+headTravel+travel;
         this.millGlow.setAlpha(on?.16+.32*(.5+.5*Math.sin(this.elapsed*18)):.05);
         this.millSparks.forEach(p=>{
           const t=this.elapsed*p.speed*5+p.phase;
-          p.sprite.setPosition(470+this.millHead.x+travel+Math.cos(t)*p.radius,448+Math.sin(t*.9)*p.radius*.42);
+          p.sprite.setPosition(this.millGlow.x+Math.cos(t)*p.radius,448+Math.sin(t*.9)*p.radius*.42);
           p.sprite.setAlpha(on?.12+.7*Math.max(0,Math.sin(t*1.7)):0);
         });
         this.millScreen.setFillStyle(on?0x39a8c2:0x2a7188,1);
