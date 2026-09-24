@@ -8,6 +8,8 @@
   const STORAGE_RATE = .08; // euros per kg and game day
   const STORAGE_UPGRADE = 4000;
   const MATERIAL_PRICE = 2200;
+  const SELL_BASE_RATE = .60;
+  const SELL_UPGRADE_RATE = .35;
   const catalog = {
     standard: {name:'Nexora NX-350',kind:'Drehen',price:6500,rate:1},
     rapid: {name:'Nexora NX-420',kind:'Drehen',price:9000,rate:1.25},
@@ -90,6 +92,8 @@
   const machineAt=bay=>state.machines.find(m=>m.bay===bay);
   const job=m=>orders.find(o=>o.id===m.activeId)||null;
   const compatible=(m,o)=>!!m&&!!o&&catalog[m.type].kind===o.kind;
+  const upgradeInvestment=m=>9000*((m.level-1)*m.level/2);
+  const resaleValue=m=>Math.round(catalog[m.type].price*SELL_BASE_RATE+upgradeInvestment(m)*SELL_UPGRADE_RATE);
   const dateAt=min=>new Date(START+Math.floor(min)*60000);
   const shiftAt=min=>{
     const d=dateAt(min),day=d.getUTCDay(),hour=d.getUTCHours();
@@ -216,6 +220,8 @@
     }));
     $('operator-1').textContent=m.operator1?'S1 abziehen':'S1 zuweisen';
     $('operator-2').textContent=m.operator2?'S2 abziehen':'S2 zuweisen';
+    $('sell-machine-value').textContent=euro(resaleValue(m));
+    $('sell-machine').disabled=state.machines.length<=1||!!job(m);
     for(const shift of [1,2]){
       const assigned=state.machines.filter(x=>x['operator'+shift]).length;
       $('operator-'+shift).disabled=!m['operator'+shift]&&assigned>=state.staff['shift'+shift];
@@ -260,6 +266,8 @@
     $('change-tool').disabled=!!o||state.money<650||m.tool>=99;
     $('maintenance').disabled=!!o||state.money<1200||m.maintenance>=99;
     $('upgrade').disabled=state.money<9000*m.level;
+    $('sell-machine-value').textContent=euro(resaleValue(m));
+    $('sell-machine').disabled=state.machines.length<=1||!!o;
     for(let bay=1;bay<=4;bay++){
       const b=$('bay-'+bay),machine=machineAt(bay);
       b.classList.toggle('installed',!!machine);
@@ -293,6 +301,32 @@
     state.machines.push(freshMachine(bay,type));
     selectBay(bay);renderBusiness();save();
     say(`${c.name} auf Platz ${bay} gekauft. Bediener zuweisen.`);
+  }
+  function sellMachine(){
+    const m=selectedMachine();
+    if(!m)return;
+    if(state.machines.length<=1){say('Die letzte Maschine kann nicht verkauft werden.');return;}
+    if(job(m)){say('Laufenden Auftrag zuerst abschließen.');return;}
+    const name=catalog[m.type].name,value=resaleValue(m),oldBay=m.bay;
+    state.machines=state.machines.filter(x=>x!==m).sort((a,b)=>a.bay-b.bay);
+    state.machines.forEach((machine,index)=>{machine.bay=index+1;});
+    state.selectedBay=Math.min(oldBay,state.machines.length);
+    state.money+=value;
+    showHall();save();renderOrders();renderBusiness();render();
+    say(`${name} verkauft · +${euro(value)}.`);
+  }
+  function newGame(){
+    if(!window.confirm('Neues Spiel starten? Der aktuelle Spielstand wird vollständig gelöscht.'))return;
+    try{
+      localStorage.removeItem(SAVE_KEY);
+      localStorage.removeItem('cnc_factory_save_v2');
+    }catch(_){}
+    state=defaults();
+    clearTimeout(zoomTimer);
+    closeDrawer();
+    showHall();
+    save();renderOrders();renderBusiness();render();
+    say('Neues Spiel gestartet.');
   }
   function toggleOperator(shift){
     const m=selectedMachine(),key='operator'+shift;
@@ -378,6 +412,8 @@
     const m=selectedMachine(),cost=9000*m.level;if(state.money<cost)return;
     state.money-=cost;m.level++;save();render();say(`${catalog[m.type].name} verbessert.`);
   });
+  $('sell-machine').addEventListener('click',sellMachine);
+  $('new-game').addEventListener('click',newGame);
   for(const shift of [1,2]){
     $('operator-'+shift).addEventListener('click',()=>toggleOperator(shift));
     $('hire-'+shift).addEventListener('click',()=>{
