@@ -17,12 +17,8 @@
     mill3: {name:'Veltron VX-500',kind:'Fräsen',price:10500,rate:1.12},
     mill5: {name:'Orionis OM-650X',kind:'Fräsen',price:14800,rate:1.38}
   };
-  const hallArtwork = {
-    1:'hall-four-bays.jpg?v=2',
-    2:'hall-two-machines.webp?v=1',
-    3:'hall-three-machines.webp?v=1',
-    4:'hall-four-machines.webp?v=1'
-  };
+  const hallBaseArtwork='hall-four-bays.jpg?v=2';
+  const turningHallArtwork='hall-four-machines.webp?v=1';
   const hallMachineArtwork = {
     mill3:'assets/veltron-vx500-hall.webp?v=1',
     mill5:'assets/orionis-om650x-hall.webp?v=1'
@@ -258,12 +254,8 @@
   }
   function render(){
     const m=selectedMachine(),o=job(m),pct=Math.max(0,Math.min(100,m.progress));
-    const hallStage=Math.max(...state.machines.map(x=>x.bay),1);
-    const hallImage=$('hall-image'),hallCount=String(hallStage);
-    if(hallImage.dataset.hallCount!==hallCount){
-      hallImage.src=hallArtwork[hallStage];
-      hallImage.dataset.hallCount=hallCount;
-    }
+    const hallImage=$('hall-image');
+    if(hallImage.getAttribute('src')!==hallBaseArtwork)hallImage.src=hallBaseArtwork;
     $('money').textContent=euro(state.money);
     $('material').textContent=Math.floor(state.material)+' kg';
     $('parts').textContent=`${state.machines.length} / 4`;
@@ -314,22 +306,29 @@
       b.classList.toggle('warning-bay',!!machine&&(machine.maintenance<8||machine.tool<1));
       b.classList.toggle('waiting-bay',!!machine&&!!job(machine)&&!operating(machine)&&machine.maintenance>=8&&machine.tool>=1);
       const milling=!!machine&&catalog[machine.type].kind==='Fräsen';
+      const turning=!!machine&&catalog[machine.type].kind==='Drehen';
       b.classList.toggle('milling-bay',milling);
+      b.classList.toggle('turning-bay',turning);
+
       let machineArt=b.querySelector('.bay-machine');
-      let bayPatch=b.querySelector('.bay-patch');
-      const needsPatch=!machine||milling;
-      if(needsPatch){
-        if(!bayPatch){
-          bayPatch=document.createElement('img');
-          bayPatch.className='bay-patch';
-          bayPatch.alt='';
-          bayPatch.src='hall-four-bays.jpg?v=2';
-          b.prepend(bayPatch);
+      let turningFrame=b.querySelector('.bay-turning-frame');
+
+      if(turning){
+        if(!turningFrame){
+          turningFrame=document.createElement('div');
+          turningFrame.className='bay-turning-frame';
+          const turningArt=document.createElement('img');
+          turningArt.className='bay-turning-art';
+          turningArt.alt='';
+          turningArt.src=turningHallArtwork;
+          turningFrame.append(turningArt);
+          b.prepend(turningFrame);
         }
-        bayPatch.hidden=false;
-      }else if(bayPatch){
-        bayPatch.hidden=true;
+        turningFrame.hidden=false;
+      }else if(turningFrame){
+        turningFrame.hidden=true;
       }
+
       if(milling){
         if(!machineArt){
           machineArt=document.createElement('img');
