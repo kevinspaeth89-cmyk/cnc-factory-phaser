@@ -4,7 +4,21 @@ const html=fs.readFileSync(dir+'/index.html','utf8'), ids=[...html.matchAll(/id=
 function boot(storage,options={}){
   const elements=new Map();
   class El {
-    constructor(id=''){this.id=id;this.children=[];this.style={};this.attrs={};this.dataset={};this.events={};this.hidden=false;this.classList={add(){},remove(){},toggle(){}};this.textContent='';}
+    constructor(id=''){
+      this.id=id;this.children=[];this.style={};this.attrs={};this.dataset={};this.events={};this.hidden=false;
+      const classes=new Set();
+      this.classList={
+        add:(...names)=>names.forEach(name=>classes.add(name)),
+        remove:(...names)=>names.forEach(name=>classes.delete(name)),
+        contains:name=>classes.has(name),
+        toggle:(name,force)=>{
+          const present=force===undefined?!classes.has(name):!!force;
+          if(present)classes.add(name);else classes.delete(name);
+          return present;
+        }
+      };
+      this.textContent='';
+    }
     addEventListener(type,fn){this.events[type]=fn}
     append(...children){this.children.push(...children);for(const child of children)if(child.id)elements.set(child.id,child)}
     prepend(...children){this.children.unshift(...children)}
@@ -128,3 +142,21 @@ expandedHall.get('hall-map').clientWidth=320;
 expandedHall.resize();
 assert.ok(Number.parseInt(popup.style.left,10)+popup.offsetWidth<=314);
 console.log('Hall preview: first tap previews, switching changes preview, second tap opens, back and reload reset');
+
+const artworkStorage={cnc_factory_save_v3:JSON.stringify({
+  money:14000,material:0,capacity:300,staff:{shift1:0,shift2:0},
+  machines:[
+    {bay:1,type:'mill3',progress:0},
+    {bay:2,type:'standard',progress:0},
+    {bay:3,type:'mill5',progress:0}
+  ],selectedBay:1,gameMinutes:0,speed:1,paused:false
+})};
+const artwork=boot(artworkStorage);
+assert.equal(artwork.get('bay-1').classList.contains('veltron-bay'),true);
+assert.equal(artwork.get('bay-2').classList.contains('veltron-bay'),false);
+assert.equal(artwork.get('bay-3').classList.contains('veltron-bay'),false);
+assert.match(artwork.get('bay-1').querySelector('.bay-machine').src,/veltron-vx500-hall/);
+assert.match(artwork.get('bay-3').querySelector('.bay-machine').src,/orionis-om650x-hall/);
+artwork.get('sell-machine').click();
+assert.equal(artwork.get('bay-1').classList.contains('veltron-bay'),false);
+assert.equal(artwork.get('bay-3').classList.contains('veltron-bay'),false);

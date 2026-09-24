@@ -452,6 +452,7 @@
       const milling=!!machine&&catalog[machine.type].kind==='Fräsen';
       const turning=!!machine&&catalog[machine.type].kind==='Drehen';
       b.classList.toggle('milling-bay',milling);
+      b.classList.toggle('veltron-bay',!!machine&&machine.type==='mill3');
       b.classList.toggle('turning-bay',turning);
 
       let machineArt=b.querySelector('.bay-machine');
