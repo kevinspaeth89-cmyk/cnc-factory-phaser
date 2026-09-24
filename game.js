@@ -174,7 +174,7 @@
   const readyToRun=m=>!!job(m)&&!state.paused&&!!shiftAt(state.gameMinutes)&&
     !!m['operator'+shiftAt(state.gameMinutes)]&&m.tool>=1&&m.maintenance>=8;
   const operating=m=>readyToRun(m)&&breakdownSystem.canContinueProduction(state,m.bay);
-  let visual=null, currentPanel=null, messageTimer, zoomTimer, phaserGame=null;
+  let visual=null, currentPanel=null, messageTimer, zoomTimer, phaserGame=null, hallPreviewBay=null;
   function say(message){
     $('message').textContent=message;
     clearTimeout(messageTimer);
@@ -225,11 +225,36 @@
     state.selectedBay=bay;
     save();renderOrders();renderBusiness();render();
   }
+  function renderHallPreview(){
+    const machine=machineAt(hallPreviewBay),panel=$('hall-preview');
+    panel.hidden=!machine;
+    if(!machine)return;
+    const order=job(machine);
+    $('hall-preview-title').textContent=`${catalog[machine.type].name} · Platz ${machine.bay}`;
+    $('hall-preview-meta').textContent=`${catalog[machine.type].kind} · Level ${machine.level} · ${statusFor(machine)}`;
+    $('hall-preview-job').textContent=order?`${order.part} · ${Math.floor(machine.progress)} %`:'Kein laufender Auftrag';
+    $('hall-preview-condition').textContent=`Werkzeug ${Math.round(machine.tool)} % · Wartung ${Math.round(machine.maintenance)} %`;
+  }
+  function tapHallBay(bay){
+    if(!machineAt(bay)){
+      hallPreviewBay=null;renderHallPreview();
+      tab('business');say(`Platz ${bay} ist frei. Wähle eine Maschine im Betrieb.`);
+      return;
+    }
+    if(hallPreviewBay===bay&&!$('hall-preview').hidden){
+      showMachine(bay);
+      return;
+    }
+    hallPreviewBay=bay;
+    selectBay(bay);
+    renderHallPreview();
+  }
   function showMachine(bay=state.selectedBay){
     if(!machineAt(bay))return;
     selectBay(bay);
     if(typeof Phaser==='undefined'){say('Maschinenansicht konnte nicht geladen werden. Bitte neu laden.');return;}
     if(!$('detail-view').hidden)return;
+    hallPreviewBay=null;renderHallPreview();
     $('hall-map').classList.add('zooming');
     clearTimeout(zoomTimer);
     zoomTimer=setTimeout(()=>{
@@ -244,6 +269,7 @@
     $('detail-view').hidden=true;
     $('hall-view').hidden=false;
     $('hall-map').classList.remove('zooming');
+    hallPreviewBay=null;renderHallPreview();
   }
   function renderOrders(){
     const machineOptions=state.machines.map(m=>{
@@ -454,6 +480,7 @@
       b.setAttribute('aria-label',machine?`${catalog[machine.type].name}, Platz ${bay} ansehen`:`Freier Stellplatz ${bay}, Maschinen kaufen`);
       b.title=machine?statusFor(machine):'Maschine kaufen';
     }
+    renderHallPreview();
     if(visual){
       visual.running=!!m&&operating(m);
       visual.condition=!m?'idle':(m.maintenance<8||m.tool<1)?'fault':operating(m)?'running':o?'waiting':'idle';
@@ -500,6 +527,7 @@
     const name=catalog[m.type].name,value=resaleValue(m),oldBay=m.bay;
     if(!book('machine_sale',value,`${name} verkauft`,{type:m.type,bay:oldBay}).ok)return;
     expansionSystem.uninstallMachine(state,oldBay);
+    if(hallPreviewBay===oldBay)hallPreviewBay=null;
     breakdownSystem.init(state);
     const nearest=state.machines.slice().sort((a,b)=>Math.abs(a.bay-oldBay)-Math.abs(b.bay-oldBay)||a.bay-b.bay)[0];
     state.selectedBay=nearest?nearest.bay:null;
@@ -513,6 +541,7 @@
       localStorage.removeItem('cnc_factory_save_v2');
     }catch(_){}
     state=defaults();
+    hallPreviewBay=null;
     ensureEconomyState();
     clearTimeout(zoomTimer);
     closeDrawer();
@@ -646,9 +675,10 @@
   }
   for(let bay=1;bay<=8;bay++)$('bay-'+bay).addEventListener('click',()=>{
     if(bay>expansionSystem.getUnlockedBays(state))return;
-    if(machineAt(bay))showMachine(bay);
-    else{tab('business');say(`Platz ${bay} ist frei. Wähle eine Maschine im Betrieb.`);}
+    tapHallBay(bay);
   });
+  $('hall-preview-open').addEventListener('click',()=>{if(hallPreviewBay!==null)showMachine(hallPreviewBay);});
+  $('hall-preview-close').addEventListener('click',()=>{hallPreviewBay=null;renderHallPreview();});
   $('back-to-hall').addEventListener('click',showHall);
   $('hud-job-button').addEventListener('click',()=>state.machines.length?tab('orders'):tab('business'));
   $('hud-service-button').addEventListener('click',()=>tab('machine'));

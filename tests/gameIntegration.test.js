@@ -1,7 +1,7 @@
 const fs=require('fs'),vm=require('vm'),assert=require('assert/strict');
 const dir=require('node:path').resolve(__dirname,'..');
 const html=fs.readFileSync(dir+'/index.html','utf8'), ids=[...html.matchAll(/id="([^"]+)"/g)].map(x=>x[1]);
-function boot(storage){
+function boot(storage,options={}){
   const elements=new Map();
   class El {
     constructor(id=''){this.id=id;this.children=[];this.style={};this.attrs={};this.dataset={};this.events={};this.hidden=false;this.classList={add(){},remove(){},toggle(){}};this.textContent='';}
@@ -16,10 +16,12 @@ function boot(storage){
   }
   const get=id=>{if(!elements.has(id))elements.set(id,new El(id));return elements.get(id)};
   for(const id of ids)get(id);get('material-type').value='c45';get('material-quantity').value='25';
+  get('detail-view').hidden=true;get('hall-preview').hidden=true;
   for(let bay=1;bay<=4;bay++){const span=new El();span.tagName='span';get('bay-'+bay).append(span)}
   const document={getElementById:get,createElement:()=>new El(),querySelectorAll:()=>[],addEventListener(){}};
   let nextFrame=()=>{};
-  const context={document,console,Date,Math,JSON,performance:{now:()=>0},requestAnimationFrame:fn=>nextFrame=fn,setTimeout:()=>1,clearTimeout(){},setInterval(){},window:{matchMedia:()=>({matches:true}),confirm:()=>true},localStorage:{getItem:k=>storage[k]||null,setItem:(k,v)=>storage[k]=v,removeItem:k=>delete storage[k]},CNCModules:{economy:require(dir+'/systems/economy.js').economy,inventory:require(dir+'/systems/economy.js').inventory,orderMarket:require(dir+'/systems/orderMarket.js'),breakdowns:require(dir+'/systems/breakdowns.js'),factoryExpansion:require(dir+'/factory-expansion.js'),materials:require(dir+'/systems/materials.js')}};
+  const context={document,console,Date,Math,JSON,performance:{now:()=>0},requestAnimationFrame:fn=>nextFrame=fn,setTimeout:(fn,ms)=>{if(options.phaser&&ms===0)fn();return 1},clearTimeout(){},setInterval(){},window:{matchMedia:()=>({matches:true}),confirm:()=>true},localStorage:{getItem:k=>storage[k]||null,setItem:(k,v)=>storage[k]=v,removeItem:k=>delete storage[k]},CNCModules:{economy:require(dir+'/systems/economy.js').economy,inventory:require(dir+'/systems/economy.js').inventory,orderMarket:require(dir+'/systems/orderMarket.js'),breakdowns:require(dir+'/systems/breakdowns.js'),factoryExpansion:require(dir+'/factory-expansion.js'),materials:require(dir+'/systems/materials.js')}};
+  if(options.phaser)context.Phaser={Scene:class{},Game:class{},AUTO:0,Scale:{FIT:0,CENTER_BOTH:0}};
   context.globalThis=context;context.window.cncFactory=null;
   vm.runInNewContext(fs.readFileSync(dir+'/game.js','utf8'),context,{filename:'game.js'});
   return {get,frame:t=>nextFrame(t),state:()=>JSON.parse(storage.cnc_factory_save_v3)};
@@ -30,6 +32,7 @@ app.get('repair-now').click();st=app.state();assert.equal(st.breakdowns.machines
 app=boot(storage);st=app.state();assert.equal(st.money,13390);assert.equal(st.breakdowns.machines['2'].status,'repairing');assert.equal(st.finance.transactions.filter(x=>x.category==='repairs').length,1);assert.equal(st.machines[0].activeId,'A12');
 app.frame(1000);st=app.state();assert.equal(st.breakdowns.machines['2'].status,'repairing');assert.equal(st.finance.transactions.filter(x=>x.category==='repairs').length,1);
 const empty=boot({});assert.equal(empty.state().machines.length,0);assert.equal(empty.state().material,0);assert.deepEqual(Object.keys(empty.state().breakdowns.machines),[]);
+empty.get('bay-1').click();assert.equal(empty.get('hall-preview').hidden,true);
 empty.get('buy-material').click();assert.equal(empty.state().money,13550);assert.equal(empty.state().inventory.rawMaterial.c45,25);
 assert.equal(empty.state().finance.transactions.filter(x=>x.category==='material').length,1);
 const emptyReload=boot({cnc_factory_save_v3:JSON.stringify(empty.state())});assert.equal(emptyReload.state().inventory.rawMaterial.c45,25);
@@ -76,3 +79,31 @@ assert.equal(accepted.machines[0].activeId,'MATERIAL-TEST');assert.equal(accepte
 assert.equal(accepted.inventory.rawMaterial.aluminium6082,100);
 typed=boot(typedStorage);assert.equal(typed.state().machines[0].activeId,'MATERIAL-TEST');assert.equal(typed.state().inventory.rawMaterial.c45,20);
 console.log('Game integration: material purchase, jobs, repair decisions, expansion and reload OK');
+
+const hallStorage={cnc_factory_save_v3:JSON.stringify({
+  money:14000,material:0,capacity:300,staff:{shift1:0,shift2:0},
+  machines:[{bay:1,type:'standard',progress:0},{bay:3,type:'mill3',progress:0}],
+  selectedBay:1,gameMinutes:0,speed:1,paused:false
+})};
+let hall=boot(hallStorage,{phaser:true});
+hall.get('bay-1').click();
+assert.equal(hall.get('hall-preview').hidden,false);
+assert.match(hall.get('hall-preview-title').textContent,/Platz 1/);
+assert.equal(hall.get('detail-view').hidden,true);
+hall.get('bay-3').click();
+assert.match(hall.get('hall-preview-title').textContent,/Platz 3/);
+assert.equal(hall.get('detail-view').hidden,true);
+hall.get('hall-preview-close').click();
+assert.equal(hall.get('hall-preview').hidden,true);
+hall.get('bay-3').click();
+assert.equal(hall.get('detail-view').hidden,true);
+hall.get('bay-3').click();
+assert.equal(hall.get('detail-view').hidden,false);
+hall.get('back-to-hall').click();
+assert.equal(hall.get('hall-preview').hidden,true);
+hall=boot(hallStorage,{phaser:true});
+hall.get('bay-3').click();
+assert.equal(hall.get('detail-view').hidden,true);
+hall.get('hall-preview-open').click();
+assert.equal(hall.get('detail-view').hidden,false);
+console.log('Hall preview: first tap previews, switching changes preview, second tap opens, back and reload reset');
