@@ -21,16 +21,53 @@
   const active = () => orders.find(o => o.id === state.activeId) || null;
   let visual = null;
   let messageTimer;
+  let currentPanel = null;
+  let zoomTimer;
   function say(message) {
     $('message').textContent = message;
     clearTimeout(messageTimer);
     messageTimer = setTimeout(() => { if ($('message').textContent === message) $('message').textContent = ''; },5000);
   }
   function tab(name) {
+    currentPanel = name;
+    $('drawer').hidden = false;
+    $('scrim').hidden = false;
+    $('drawer-title').textContent = name === 'orders' ? 'Aufträge' : 'Maschine';
     $('orders-panel').hidden = name !== 'orders';
     $('machine-panel').hidden = name !== 'machine';
     $('orders-tab').classList.toggle('active',name === 'orders');
     $('machine-tab').classList.toggle('active',name === 'machine');
+    $('orders-tab').setAttribute('aria-expanded',name === 'orders');
+    $('machine-tab').setAttribute('aria-expanded',name === 'machine');
+    $('speed-menu').hidden = true;
+    $('speed-toggle').setAttribute('aria-expanded','false');
+  }
+  function closeDrawer() {
+    currentPanel = null;
+    $('drawer').hidden = true;
+    $('scrim').hidden = true;
+    for(const id of ['orders-tab','machine-tab']) {
+      $(id).classList.remove('active');
+      $(id).setAttribute('aria-expanded','false');
+    }
+  }
+  function showMachine() {
+    if(typeof Phaser==='undefined') {say('Maschinenansicht konnte nicht geladen werden. Bitte die Seite neu laden.');return;}
+    if(!$('detail-view').hidden)return;
+    $('hall-map').classList.add('zooming');
+    clearTimeout(zoomTimer);
+    zoomTimer=setTimeout(()=>{
+      $('hall-view').hidden=true;
+      $('detail-view').hidden=false;
+      ensureGame();
+      visual?.scale.refresh();
+    },window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 300);
+  }
+  function showHall() {
+    clearTimeout(zoomTimer);
+    $('detail-view').hidden=true;
+    $('hall-view').hidden=false;
+    $('hall-map').classList.remove('zooming');
   }
   function renderOrders() {
     $('orders').replaceChildren(...orders.map(o => {
@@ -68,6 +105,7 @@
     $('pause').classList.toggle('active',state.paused);
     $('pause').disabled=!o;
     document.querySelectorAll('[data-speed]').forEach(b=>b.classList.toggle('active',Number(b.dataset.speed)===state.speed));
+    $('speed-value').textContent=state.speed+'×';
     $('machine-meta').textContent=`Level ${state.machineLevel} · ${Math.round((state.machineLevel-1)*13)} % schneller · ${state.completed} Aufträge abgeschlossen`;
     $('upgrade-cost').textContent=euro(9000*state.machineLevel)+' · +13 % Tempo';
     $('tool-label').textContent=Math.round(state.tool)+' %';
@@ -91,7 +129,7 @@
     state.selected=id;
     state.deadlineAt=state.gameMinutes+o.deadlineHours*60;
     state.progress=0;state.produced=0;state.paused=false;
-    save();renderOrders();render();tab('machine');say(`${o.part} gestartet. Produktion läuft.`);
+    save();renderOrders();render();closeDrawer();showMachine();say(`${o.part} gestartet. Produktion läuft.`);
   }
   function tick(dt) {
     if(state.paused)return;
@@ -109,21 +147,33 @@
       const payout=late?Math.round(o.reward*.8):o.reward;
       state.money+=payout;state.completed++;state.activeId=null;state.progress=0;state.produced=0;
       state.deadlineAt=null;state.speed=1;state.paused=false;
-      save();renderOrders();render();tab('orders');say(`${o.part} abgeschlossen · ${euro(payout)}${late?' (20 % Verspätungsabzug)':''}`);
+      save();renderOrders();render();say(`${o.part} abgeschlossen · ${euro(payout)}${late?' (20 % Verspätungsabzug)':''}`);
       return;
     }
     render();
   }
-  $('orders-tab').addEventListener('click',()=>tab('orders'));
-  $('machine-tab').addEventListener('click',()=>tab('machine'));
+  $('orders-tab').addEventListener('click',()=>currentPanel==='orders'?closeDrawer():tab('orders'));
+  $('machine-tab').addEventListener('click',()=>currentPanel==='machine'?closeDrawer():tab('machine'));
+  $('close-drawer').addEventListener('click',closeDrawer);
+  $('scrim').addEventListener('click',closeDrawer);
+  $('machine-bay').addEventListener('click',showMachine);
+  $('back-to-hall').addEventListener('click',showHall);
+  document.querySelectorAll('[data-empty-bay]').forEach(b=>b.addEventListener('click',()=>say(`Stellplatz ${b.dataset.emptyBay} ist frei für eine künftige Maschine.`)));
+  $('speed-toggle').addEventListener('click',()=>{
+    const opening=$('speed-menu').hidden;
+    $('speed-menu').hidden=!opening;
+    $('speed-toggle').setAttribute('aria-expanded',opening);
+    if(opening)closeDrawer();
+  });
+  document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeDrawer();$('speed-menu').hidden=true;$('speed-toggle').setAttribute('aria-expanded','false');}});
   $('buy-material').addEventListener('click',()=>{if(state.money<2200)return;state.money-=2200;state.material+=100;save();render();say('100 kg Rohmaterial eingelagert.');});
   $('change-tool').addEventListener('click',()=>{if(active()||state.money<650||state.tool>=99)return;state.money-=650;state.tool=100;save();render();say('Werkzeug gewechselt.');});
   $('maintenance').addEventListener('click',()=>{if(active()||state.money<1200||state.maintenance>=99)return;state.money-=1200;state.maintenance=100;save();render();say('Wartung abgeschlossen.');});
   $('upgrade').addEventListener('click',()=>{const cost=9000*state.machineLevel;if(state.money<cost)return;state.money-=cost;state.machineLevel++;save();render();say('Nexora NX-350 verbessert.');});
   $('pause').addEventListener('click',()=>{if(!active())return;state.paused=!state.paused;save();render();say(state.paused?'Produktion pausiert.':'Produktion fortgesetzt.');});
-  document.querySelectorAll('[data-speed]').forEach(b=>b.addEventListener('click',()=>{state.speed=Number(b.dataset.speed);save();render();}));
+  document.querySelectorAll('[data-speed]').forEach(b=>b.addEventListener('click',()=>{state.speed=Number(b.dataset.speed);save();render();$('speed-menu').hidden=true;$('speed-toggle').setAttribute('aria-expanded','false');}));
   document.addEventListener('visibilitychange',()=>{if(document.hidden)save();});
-  renderOrders();render();tab(active()?'machine':'orders');
+  renderOrders();render();
   if(typeof Phaser==='undefined') {say('Spiel konnte nicht geladen werden. Bitte die Seite neu laden.');return;}
   class FactoryScene extends Phaser.Scene {
     constructor(){super('factory');this.running=false;this.elapsed=0;}
@@ -159,7 +209,10 @@
       this.tower.setAlpha(on ? .18+.45*(.5+.5*Math.sin(this.elapsed*8)) : .09);
     }
   }
-  new Phaser.Game({type:Phaser.AUTO,parent:'game',width:1000,height:800,backgroundColor:'#152a35',scale:{mode:Phaser.Scale.ENVELOP,autoCenter:Phaser.Scale.CENTER_BOTH},render:{antialias:true,pixelArt:false},scene:[FactoryScene]});
+  let phaserGame = null;
+  function ensureGame() {
+    if(!phaserGame) phaserGame = new Phaser.Game({type:Phaser.AUTO,parent:'game',width:1000,height:800,backgroundColor:'#152a35',scale:{mode:Phaser.Scale.ENVELOP,autoCenter:Phaser.Scale.CENTER_BOTH},render:{antialias:true,pixelArt:false},scene:[FactoryScene]});
+  }
   let previous=performance.now(),accumulator=0;
   function frame(now){
     accumulator+=Math.min((now-previous)/1000,.25);previous=now;
