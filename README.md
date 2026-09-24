@@ -10,4 +10,4 @@ Die Schichten laufen Montag bis Freitag von 06:00–14:00 und 14:00–22:00. Au�
 
 ## Entwicklung
 
-`index.html` enthält die adaptive Bedienoberfläche. `game.js` enthält Spielstand, Ökonomie und Phaser-Szene. `hall-four-bays.jpg` zeigt die Hallenübersicht, `cell-nexora.jpg` die Maschinenzelle in der Nahansicht. Gekaufte Maschinen verwenden vorerst dieselbe Nahansicht mit ihrem eigenen Namen und Status; in der Halle kennzeichnet ein Maschinensymbol belegte Plätze. Eine lokale Vorschau lässt sich mit `python3 -m http.server` starten.
+`index.html` enthält die adaptive Bedienoberfläche. `game.js` enthält Spielstand, Ökonomie und Phaser-Szene. `hall-four-bays.jpg` zeigt die Hallenübersicht, `cell-nexora.jpg` die Maschinenzelle in der Nahansicht. Gekaufte Maschinen verwenden vorerst dieselbe Nahansicht mit ihrem eigenen Namen und Status; in der Halle erscheinen sie als stilisierte Maschinen. Eine lokale Vorschau lässt sich mit `python3 -m http.server` starten.
