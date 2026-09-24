@@ -23,6 +23,10 @@
     3:'hall-three-machines.webp?v=1',
     4:'hall-four-machines.webp?v=1'
   };
+  const hallMachineArtwork = {
+    mill3:'assets/veltron-vx500-hall.webp?v=1',
+    mill5:'assets/orionis-om650x-hall.webp?v=1'
+  };
   const orders = [
     {id:'A12',kind:'Drehen',customer:'Veltraxis Mobility',part:'Wellenflansch A12',material:'1.4301 Edelstahl',kg:72,qty:50,reward:8400,duration:48,deadlineHours:7},
     {id:'B07',kind:'Drehen',customer:'Orionis Fluidics',part:'Ventilgehäuse B07',material:'1.4404 Edelstahl',kg:96,qty:40,reward:11200,duration:62,deadlineHours:9},
@@ -297,6 +301,22 @@
       b.classList.toggle('working-bay',!!machine&&operating(machine));
       b.classList.toggle('warning-bay',!!machine&&(machine.maintenance<8||machine.tool<1));
       b.classList.toggle('waiting-bay',!!machine&&!!job(machine)&&!operating(machine)&&machine.maintenance>=8&&machine.tool>=1);
+      const milling=!!machine&&catalog[machine.type].kind==='Fräsen';
+      b.classList.toggle('milling-bay',milling);
+      let machineArt=b.querySelector('.bay-machine');
+      if(milling){
+        if(!machineArt){
+          machineArt=document.createElement('img');
+          machineArt.className='bay-machine';
+          machineArt.alt='';
+          b.prepend(machineArt);
+        }
+        const src=hallMachineArtwork[machine.type];
+        if(machineArt.getAttribute('src')!==src)machineArt.src=src;
+        machineArt.hidden=false;
+      }else if(machineArt){
+        machineArt.hidden=true;
+      }
       b.querySelector('span').textContent=machine?catalog[machine.type].name:`+ Platz ${bay}`;
       b.setAttribute('aria-label',machine?`${catalog[machine.type].name}, Platz ${bay} ansehen`:`Freier Stellplatz ${bay}, Maschinen kaufen`);
       b.title=machine?statusFor(machine):'Maschine kaufen';
@@ -472,6 +492,8 @@
       this.load.image('machine-standard','cell-nexora.jpg?v=c523bfea');
       this.load.image('machine-rapid','cell-nexora-nx420.webp?v=1');
       this.load.image('machine-premium','cell-aurex-at600.webp?v=1');
+      this.load.image('machine-mill3','assets/veltron-vx500-detail.webp?v=1');
+      this.load.image('machine-mill5','assets/orionis-om650x-detail.webp?v=1');
     }
     create(){
       visual=this;
@@ -486,6 +508,16 @@
       this.towerRed=this.add.circle(199,29,8,0xff5b62,.08).setBlendMode(Phaser.BlendModes.ADD);
       this.towerAmber=this.add.circle(199,45,8,0xffc15b,.08).setBlendMode(Phaser.BlendModes.ADD);
       this.towerGreen=this.add.circle(199,61,8,0x6cff98,.08).setBlendMode(Phaser.BlendModes.ADD);
+      this.isMilling=false;
+      this.millWorkX=500;this.millWorkY=405;
+      this.millPhotoGlow=this.add.circle(500,405,34,0x8cefff,0).setBlendMode(Phaser.BlendModes.ADD);
+      this.millPhotoRed=this.add.circle(820,120,8,0xff5b62,0).setBlendMode(Phaser.BlendModes.ADD);
+      this.millPhotoAmber=this.add.circle(820,138,8,0xffc15b,0).setBlendMode(Phaser.BlendModes.ADD);
+      this.millPhotoGreen=this.add.circle(820,156,8,0x6cff98,0).setBlendMode(Phaser.BlendModes.ADD);
+      this.millPhotoSparks=Array.from({length:14},()=>{
+        const p=this.add.circle(500,410,Phaser.Math.FloatBetween(.8,2.1),0xb5f3ff,0).setBlendMode(Phaser.BlendModes.ADD);
+        return {sprite:p,phase:Math.random()*Math.PI*2,radius:10+Math.random()*38,speed:1+Math.random()*2.1};
+      });
 
       this.millGroup=this.add.container(0,0).setVisible(false);
       const millBody=this.add.graphics();
@@ -520,11 +552,23 @@
     }
     setMachineType(type){
       const milling=catalog[type].kind==='Fräsen';
-      this.machineImage.setVisible(!milling);
-      this.millGroup.setVisible(milling);
-      if(!milling){
-        const key='machine-'+type;
-        if(this.machineImage.texture.key!==key)this.machineImage.setTexture(key);
+      this.isMilling=milling;
+      this.millGroup.setVisible(false);
+      this.machineImage.setVisible(true);
+      const key='machine-'+type;
+      if(this.machineImage.texture.key!==key)this.machineImage.setTexture(key);
+      if(milling){
+        this.machineImage.setDisplaySize(1000,750).setPosition(500,400);
+        const cfg=type==='mill5'
+          ?{work:[535,407],tower:[826,120]}
+          :{work:[505,415],tower:[812,118]};
+        this.millWorkX=cfg.work[0];this.millWorkY=cfg.work[1];
+        this.millPhotoGlow.setPosition(this.millWorkX,this.millWorkY);
+        this.millPhotoRed.setPosition(cfg.tower[0],cfg.tower[1]);
+        this.millPhotoAmber.setPosition(cfg.tower[0],cfg.tower[1]+18);
+        this.millPhotoGreen.setPosition(cfg.tower[0],cfg.tower[1]+36);
+      }else{
+        this.machineImage.setDisplaySize(1000,836).setPosition(500,400);
       }
     }
     update(_time,delta){
@@ -537,32 +581,27 @@
       this.sparks.forEach(p=>{
         const t=this.elapsed*p.speed*4+p.phase;
         p.sprite.setPosition(445+Math.cos(t)*p.radius,390+Math.sin(t*.8)*p.radius*.46);
-        p.sprite.setAlpha(!this.millGroup.visible&&on?.14+.6*Math.max(0,Math.sin(t*2)):0);
+        p.sprite.setAlpha(!this.isMilling&&on?.14+.6*Math.max(0,Math.sin(t*2)):0);
       });
       const pulse=.45+.45*(.5+.5*Math.sin(this.elapsed*7));
       const red=this.condition==='fault',amber=this.condition==='waiting'||this.condition==='idle',green=this.condition==='running';
-      this.towerRed.setAlpha(!this.millGroup.visible?(red?pulse:.07):0);
-      this.towerAmber.setAlpha(!this.millGroup.visible?(amber?pulse:.07):0);
-      this.towerGreen.setAlpha(!this.millGroup.visible?(green?pulse:.07):0);
-      if(this.millGroup.visible){
-        const travel=on?Math.sin(this.elapsed*1.35)*92:0;
-        const headTravel=on?Math.sin(this.elapsed*.72)*26:0;
-        this.millTable.x=470+travel;
-        this.millWorkpiece.x=470+travel;
-        this.millHead.x=470+headTravel;
-        this.millSpindle.x=470+headTravel;
-        this.millTool.x=470+headTravel;
-        this.millGlow.x=470+headTravel+travel;
-        this.millGlow.setAlpha(on?.16+.32*(.5+.5*Math.sin(this.elapsed*18)):.05);
-        this.millSparks.forEach(p=>{
+      this.towerRed.setAlpha(!this.isMilling?(red?pulse:.07):0);
+      this.towerAmber.setAlpha(!this.isMilling?(amber?pulse:.07):0);
+      this.towerGreen.setAlpha(!this.isMilling?(green?pulse:.07):0);
+      if(this.isMilling){
+        this.millPhotoGlow.setAlpha(on?.12+.24*(.5+.5*Math.sin(this.elapsed*15)):.025);
+        this.millPhotoSparks.forEach(p=>{
           const t=this.elapsed*p.speed*5+p.phase;
-          p.sprite.setPosition(this.millGlow.x+Math.cos(t)*p.radius,448+Math.sin(t*.9)*p.radius*.42);
-          p.sprite.setAlpha(on?.12+.7*Math.max(0,Math.sin(t*1.7)):0);
+          p.sprite.setPosition(this.millWorkX+Math.cos(t)*p.radius,this.millWorkY+Math.sin(t*.9)*p.radius*.38);
+          p.sprite.setAlpha(on?.08+.48*Math.max(0,Math.sin(t*1.8)):0);
         });
-        this.millScreen.setFillStyle(on?0x39a8c2:this.condition==='fault'?0x7b2b31:this.condition==='waiting'?0x6f5428:0x2a7188,1);
-        this.millTowerRed.setAlpha(red?pulse:.07);
-        this.millTowerAmber.setAlpha(amber?pulse:.07);
-        this.millTowerGreen.setAlpha(green?pulse:.07);
+        this.millPhotoRed.setAlpha(red?pulse:.05);
+        this.millPhotoAmber.setAlpha(amber?pulse:.05);
+        this.millPhotoGreen.setAlpha(green?pulse:.05);
+      }else{
+        this.millPhotoGlow.setAlpha(0);
+        this.millPhotoRed.setAlpha(0);this.millPhotoAmber.setAlpha(0);this.millPhotoGreen.setAlpha(0);
+        this.millPhotoSparks.forEach(p=>p.sprite.setAlpha(0));
       }
     }
   }
