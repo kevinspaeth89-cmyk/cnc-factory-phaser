@@ -44,14 +44,14 @@
   ];
 
   const parts = [
-    { key: 'turn-flange', name: 'Wellenflansch', kind: 'Drehen', material: '1.4301 Edelstahl', kgPerPart: 1.45 },
-    { key: 'turn-valve', name: 'Ventilbuchse', kind: 'Drehen', material: '1.4404 Edelstahl', kgPerPart: 2.1 },
-    { key: 'turn-spacer', name: 'Distanzring', kind: 'Drehen', material: 'C45 Stahl', kgPerPart: 0.65 },
-    { key: 'turn-sleeve', name: 'Spindelhülse', kind: 'Drehen', material: '42CrMo4 Stahl', kgPerPart: 1.8 },
-    { key: 'mill-plate', name: 'Grundplatte', kind: 'Fräsen', material: 'EN AW-6082 Aluminium', kgPerPart: 1.6 },
-    { key: 'mill-prism', name: 'Spannprisma', kind: 'Fräsen', material: '42CrMo4 Stahl', kgPerPart: 2.45 },
-    { key: 'mill-pump', name: 'Pumpengehäuse', kind: 'Fräsen', material: 'EN-GJS-400', kgPerPart: 3.3 },
-    { key: 'mill-bracket', name: 'Sensorhalter', kind: 'Fräsen', material: 'EN AW-6082 Aluminium', kgPerPart: 0.85 }
+    { key: 'turn-flange', name: 'Wellenflansch', kind: 'Drehen', material: '1.4301 Edelstahl', materialType: 'stainless14301', kgPerPart: 1.45 },
+    { key: 'turn-valve', name: 'Ventilbuchse', kind: 'Drehen', material: '1.4404 Edelstahl', materialType: 'stainless14404', kgPerPart: 2.1 },
+    { key: 'turn-spacer', name: 'Distanzring', kind: 'Drehen', material: 'C45 Stahl', materialType: 'c45', kgPerPart: 0.65 },
+    { key: 'turn-sleeve', name: 'Spindelhülse', kind: 'Drehen', material: '42CrMo4 Stahl', materialType: 'steel42crmo4', kgPerPart: 1.8 },
+    { key: 'mill-plate', name: 'Grundplatte', kind: 'Fräsen', material: 'EN AW-6082 Aluminium', materialType: 'aluminium6082', kgPerPart: 1.6 },
+    { key: 'mill-prism', name: 'Spannprisma', kind: 'Fräsen', material: '42CrMo4 Stahl', materialType: 'steel42crmo4', kgPerPart: 2.45 },
+    { key: 'mill-pump', name: 'Pumpengehäuse', kind: 'Fräsen', material: 'EN-GJS-400', materialType: 'castiron400', kgPerPart: 3.3 },
+    { key: 'mill-bracket', name: 'Sensorhalter', kind: 'Fräsen', material: 'EN AW-6082 Aluminium', materialType: 'aluminium6082', kgPerPart: 0.85 }
   ];
 
   function finite(value, fallback) {
@@ -270,6 +270,7 @@
       qty,
       duration,
       material: part.material,
+      materialType: part.materialType,
       kg: Math.max(1, Math.round(qty * part.kgPerPart)),
       reward,
       deadlineHours,
@@ -431,4 +432,3 @@
     limits: Object.freeze({ minOffers: MIN_OFFERS, startOffers: START_OFFERS, maxOffers: MAX_OFFERS })
   });
 });
-

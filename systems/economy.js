@@ -11,7 +11,7 @@
   'use strict';
 
   const DEFAULT_CAPACITIES = Object.freeze({ raw: 500, finished: 300, tools: 50 });
-  const DEFAULT_MATERIALS = Object.freeze({ steel: 0, stainless: 0, aluminium: 0 });
+  const DEFAULT_MATERIALS = Object.freeze({ steel: 0, stainless: 0, aluminium: 0, castiron: 0 });
   const DEFAULT_TOOLS = Object.freeze({ turningInsert: 0, millingInsert: 0 });
   const CATEGORIES = Object.freeze([
     'income', 'material', 'wages', 'energy', 'tools', 'maintenance', 'repairs',

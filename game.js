@@ -7,7 +7,6 @@
   const HIRING_FEE = 150;
   const STORAGE_RATE = .08; // euros per kg and game day
   const STORAGE_UPGRADE = 4000;
-  const MATERIAL_PRICE = 2200;
   const SELL_BASE_RATE = .60;
   const SELL_UPGRADE_RATE = .35;
   const economySystem = globalThis.CNCModules && globalThis.CNCModules.economy;
@@ -15,7 +14,8 @@
   const orderMarketSystem = globalThis.CNCModules && globalThis.CNCModules.orderMarket;
   const breakdownSystem = globalThis.CNCModules && globalThis.CNCModules.breakdowns;
   const expansionSystem = globalThis.CNCModules && globalThis.CNCModules.factoryExpansion;
-  if (!economySystem || !inventorySystem || !orderMarketSystem || !breakdownSystem || !expansionSystem) throw new Error('CNC Factory game systems failed to load.');
+  const materialSystem = globalThis.CNCModules && globalThis.CNCModules.materials;
+  if (!economySystem || !inventorySystem || !orderMarketSystem || !breakdownSystem || !expansionSystem || !materialSystem) throw new Error('CNC Factory game systems failed to load.');
   const catalog = {
     standard: {name:'Nexora NX-350',kind:'Drehen',price:6500,rate:1},
     rapid: {name:'Nexora NX-420',kind:'Drehen',price:9000,rate:1.25},
@@ -41,7 +41,7 @@
     activeId:null,activeOrder:null,activeOrderSource:null,progress:0,produced:0,deadlineAt:null
   });
   const defaults = () => ({
-    money:14000,material:120,capacity:300,staff:{shift1:0,shift2:0},
+    money:14000,material:0,capacity:300,staff:{shift1:0,shift2:0},
     machines:[],selectedBay:null,speed:1,paused:false,gameMinutes:0,completed:0,
     payrollDue:0,wagesPaid:0,storagePaid:0,energyPaid:0,selected:null
   });
@@ -134,32 +134,9 @@
     return economySystem.book(state,category,amount,description,meta,aggregateKey);
   }
   function consumeOrderMaterial(order){
-    const amount=Number.isFinite(order.materialAmountKg)?order.materialAmountKg:order.kg;
-    if(!Number.isFinite(amount)||amount<=0)return {ok:false,code:'invalid_amount'};
-    if(typeof order.materialType==='string'){
-      const result=inventorySystem.removeMaterial(state,order.materialType,amount);
-      if(result.ok)syncMaterialMirror();
-      return result.ok?{...result,consumed:{[order.materialType]:amount}}:result;
-    }
-    const usage=inventorySystem.getUsage(state);
-    if(!usage.ok||usage.usage.raw+1e-9<amount)return {ok:false,code:'insufficient_stock'};
-    const stockBefore={...state.inventory.rawMaterial};
-    let remaining=amount;
-    const consumed={};
-    const types=['legacy',...Object.keys(state.inventory.rawMaterial).filter(type=>type!=='legacy').sort()];
-    for(const type of types){
-      const available=state.inventory.rawMaterial[type]||0;
-      const take=Math.min(available,remaining);
-      if(take<=0)continue;
-      const result=inventorySystem.removeMaterial(state,type,take);
-      if(!result.ok){state.inventory.rawMaterial=stockBefore;return result;}
-      consumed[type]=take;
-      remaining=Math.max(0,remaining-take);
-      if(remaining<=1e-9)break;
-    }
-    if(remaining>1e-9){state.inventory.rawMaterial=stockBefore;return {ok:false,code:'insufficient_stock'};}
-    syncMaterialMirror();
-    return {ok:true,code:'ok',consumed};
+    const result=materialSystem.reserve(state,inventorySystem,order);
+    if(result.ok)syncMaterialMirror();
+    return result;
   }
   function restoreOrderMaterial(consumed){
     for(const [type,amount] of Object.entries(consumed||{})){
@@ -294,8 +271,9 @@
       if(running){const p=document.createElement('p');p.textContent=`Läuft auf Platz ${running.bay} · ${running.produced}/${o.qty} Teile`;card.append(p);}
       const button=document.createElement('button');
       button.type='button';
-      button.textContent=running?'Produktion läuft':!m?'Zuerst Maschine kaufen':fits?`Auf Platz ${m.bay} annehmen`:`Benötigt ${o.kind}`;
-      button.disabled=!m||!!running||!!job(m)||!fits;
+      const shortage=Math.max(0,materialSystem.requiredKg(o)-materialSystem.available(state,o));
+      button.textContent=running?'Produktion läuft':!m?'Zuerst Maschine kaufen':!fits?`Benötigt ${o.kind}`:shortage>1e-9?`Fehlen ${Math.ceil(shortage)} kg ${o.material}`:`Auf Platz ${m.bay} annehmen`;
+      button.disabled=!m||!!running||!!job(m)||!fits||shortage>1e-9;
       button.addEventListener('click',event=>{event.stopPropagation();startOrder(o.id);});
       card.append(button);
       card.addEventListener('click',()=>{state.selected=o.id;save();renderOrders();});
@@ -355,6 +333,12 @@
     $('energy-paid').textContent=euro(state.energyPaid);
     $('storage-paid').textContent=euro(state.storagePaid);
     $('storage-info').textContent=`${Math.floor(state.material)} / ${state.capacity} kg · ${euro(state.material*STORAGE_RATE)} pro Spieltag`;
+    const stocks=Object.entries(materialSystem.catalog).map(([type,item])=>`${item.label}: ${Math.floor(state.inventory.rawMaterial[type]||0)} kg`);
+    for(const category of new Set(Object.values(materialSystem.catalog).map(item=>item.oldCategory))){
+      if(state.inventory.rawMaterial[category])stocks.push(`Altbestand ${category}: ${Math.floor(state.inventory.rawMaterial[category])} kg`);
+    }
+    if(state.inventory.rawMaterial.legacy)stocks.push(`Altbestand (für alle Aufträge): ${Math.floor(state.inventory.rawMaterial.legacy)} kg`);
+    $('storage-stock').textContent=stocks.join(' · ');
   }
   function render(){
     const m=selectedMachine(),o=job(m),pct=m?Math.max(0,Math.min(100,m.progress)):0;
@@ -408,7 +392,10 @@
     $('hud-operators').textContent=m?('S1 '+(m.operator1?'✓':'–')+' · S2 '+(m.operator2?'✓':'–')):'—';
     $('hud-job-button').textContent=o?'Aufträge ansehen':m?'Auftrag wählen':'Maschine kaufen';
 
-    $('buy-material').disabled=state.money<MATERIAL_PRICE||state.material+100>state.capacity;
+    const materialType=$('material-type').value,materialQuantity=Number($('material-quantity').value);
+    const materialPrice=materialSystem.quote(materialType,materialQuantity);
+    $('material-price').textContent=materialPrice===null?'—':`+${materialQuantity} kg · ${euro(materialPrice)}`;
+    $('buy-material').disabled=materialPrice===null||state.money<materialPrice||state.material+materialQuantity>state.capacity;
     $('change-tool').disabled=!m||!!o||state.money<650||m.tool>=99;
     $('maintenance').disabled=!m||!!o||state.money<1200||m.maintenance>=99;
     $('upgrade').disabled=!m||state.money<9000*m.level;
@@ -478,8 +465,10 @@
     const o=orderMarketSystem.getAvailable(state).find(order=>order.id===id),m=selectedMachine();
     if(!o||!m||job(m)||state.machines.some(x=>x.activeId===id)){say('Dieses Angebot ist nicht mehr verfügbar oder die Maschine ist belegt.');return;}
     if(!compatible(m,o)){say(`${o.part} benötigt ${o.kind}. ${catalog[m.type].name} ist für ${catalog[m.type].kind} ausgelegt.`);return;}
-    const requiredMaterial=Number.isFinite(o.materialAmountKg)?o.materialAmountKg:o.kg;
-    if(state.material+1e-9<requiredMaterial){say(`Es fehlen ${requiredMaterial-state.material} kg Material.`);tab('machine');return;}
+    const requiredMaterial=materialSystem.requiredKg(o),availableMaterial=materialSystem.available(state,o);
+    if(availableMaterial+1e-9<requiredMaterial){
+      say(`Es fehlen ${Math.ceil(requiredMaterial-availableMaterial)} kg ${o.material}.`);tab('machine');return;
+    }
     if(m.maintenance<8||m.tool<1){say('Vorher Werkzeug oder Wartung erneuern.');tab('machine');return;}
     const materialResult=consumeOrderMaterial(o);
     if(!materialResult.ok){say(`Materialbestand konnte nicht reserviert werden (${materialResult.code}).`);return;}
@@ -664,6 +653,11 @@
   $('hud-job-button').addEventListener('click',()=>state.machines.length?tab('orders'):tab('business'));
   $('hud-service-button').addEventListener('click',()=>tab('machine'));
   $('hud-staff-button').addEventListener('click',()=>tab('business'));
+  $('hud-toggle').addEventListener('click',()=>{
+    const open=$('machine-hud').classList.toggle('mobile-open');
+    $('hud-toggle').setAttribute('aria-expanded',String(open));
+    $('hud-toggle').textContent=open?'Weniger':'Details';
+  });
   $('order-machine').addEventListener('change',event=>selectBay(Number(event.target.value)));
   $('speed-toggle').addEventListener('click',()=>{
     const opening=$('speed-menu').hidden;
@@ -673,14 +667,18 @@
   });
   document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeDrawer();$('speed-menu').hidden=true;}});
   $('buy-material').addEventListener('click',()=>{
-    if(state.money<MATERIAL_PRICE||state.material+100>state.capacity)return;
-    const added=inventorySystem.addMaterial(state,'legacy',100);
+    const type=$('material-type').value,quantity=Number($('material-quantity').value);
+    const price=materialSystem.quote(type,quantity);
+    if(price===null||state.money<price||state.material+quantity>state.capacity)return;
+    const added=inventorySystem.addMaterial(state,type,quantity);
     if(!added.ok)return;
-    if(!book('material',-MATERIAL_PRICE,'100 kg Material eingelagert',{quantityKg:100,type:'legacy'}).ok){
-      inventorySystem.removeMaterial(state,'legacy',100);syncMaterialMirror();return;
+    if(!book('material',-price,`${quantity} kg ${materialSystem.catalog[type].label} gekauft`,{quantityKg:quantity,type}).ok){
+      inventorySystem.removeMaterial(state,type,quantity);syncMaterialMirror();return;
     }
-    syncMaterialMirror();save();render();renderBusiness();say('100 kg Material eingelagert.');
+    syncMaterialMirror();save();render();renderBusiness();renderOrders();say(`${quantity} kg ${materialSystem.catalog[type].label} eingelagert.`);
   });
+  $('material-type').addEventListener('change',render);
+  $('material-quantity').addEventListener('change',render);
   $('change-tool').addEventListener('click',()=>{
     const m=selectedMachine();if(!m||job(m)||state.money<650||m.tool>=99)return;
     if(!book('tools',-650,'Werkzeugwechsel',{bay:m.bay,type:m.type}).ok)return;

@@ -105,3 +105,23 @@ Run the inventory and finance tests from the repository root:
 ```sh
 node --test tests/economy.test.js
 ```
+
+## Materialeinkauf nach dem LIVE-Feedback
+
+Neue Spiele beginnen mit 0 kg Rohmaterial. Der Spieler kauft 25 oder 100 kg
+einer bestimmten Sorte; alle Sorten teilen sich die ausbaubare Lagerkapazität.
+Die Preise für 100 kg sind C45 € 1.800, 42CrMo4 € 2.500,
+1.4301 € 3.400, 1.4404 € 4.000, EN AW-6082 € 2.700 und
+EN-GJS-400 € 1.600. Kleinere Mengen kosten anteilig.
+`systems/materials.js` ordnet dynamische und ältere gespeicherte Angebote
+den Sorten zu. Nur die geforderte Sorte wird bei Auftragsannahme entnommen.
+
+Spielstände mit bereits vorhandenem allgemeinem `legacy`-Material behalten
+diesen Vorrat. Er kann für jede Sorte verwendet werden, wird dabei aber nur
+als Restmenge nach passendem spezifischem Material verbraucht. Frühere
+typisierte Sammelbestände (steel, stainless, aluminium, castiron) bleiben
+ebenfalls für die jeweils passende Sorte verwendbar. So geht kein
+vorhandener Lagerbestand beim Update verloren. Alle Einkäufe werden genau
+einmal in `finance` gebucht und fehlgeschlagene Buchungen setzen den Zugang
+zum Lager zurück. Die Modul- und Simulationsprüfungen decken Sorten,
+Preise, Kapazität, Kosten, Reload und fehlende Bestände ab.
