@@ -12,7 +12,8 @@
   const SELL_UPGRADE_RATE = .35;
   const economySystem = globalThis.CNCModules && globalThis.CNCModules.economy;
   const inventorySystem = globalThis.CNCModules && globalThis.CNCModules.inventory;
-  if (!economySystem || !inventorySystem) throw new Error('CNC Factory economy and inventory module failed to load.');
+  const orderMarketSystem = globalThis.CNCModules && globalThis.CNCModules.orderMarket;
+  if (!economySystem || !inventorySystem || !orderMarketSystem) throw new Error('CNC Factory game systems failed to load.');
   const catalog = {
     standard: {name:'Nexora NX-350',kind:'Drehen',price:6500,rate:1},
     rapid: {name:'Nexora NX-420',kind:'Drehen',price:9000,rate:1.25},
@@ -26,7 +27,7 @@
     mill3:'assets/veltron-vx500-hall.webp?v=1',
     mill5:'assets/orionis-om650x-hall.webp?v=1'
   };
-  const orders = [
+  const legacyOrders = [
     {id:'A12',kind:'Drehen',customer:'Veltraxis Mobility',part:'Wellenflansch A12',material:'1.4301 Edelstahl',kg:72,qty:50,reward:8400,duration:48,deadlineHours:7},
     {id:'B07',kind:'Drehen',customer:'Orionis Fluidics',part:'Ventilgehäuse B07',material:'1.4404 Edelstahl',kg:96,qty:40,reward:11200,duration:62,deadlineHours:9},
     {id:'C21',kind:'Drehen',customer:'Kaeldor Components',part:'Distanzring C21',material:'C45 Stahl',kg:48,qty:80,reward:6900,duration:38,deadlineHours:6},
@@ -36,7 +37,7 @@
   ];
   const freshMachine = (bay, type='standard') => ({
     bay,type,level:1,maintenance:90,tool:82,operator1:false,operator2:false,
-    activeId:null,progress:0,produced:0,deadlineAt:null
+    activeId:null,activeOrder:null,activeOrderSource:null,progress:0,produced:0,deadlineAt:null
   });
   const defaults = () => ({
     money:14000,material:120,capacity:300,staff:{shift1:0,shift2:0},
@@ -73,7 +74,7 @@
         m.level=Number(legacy.machineLevel)||1;
         m.maintenance=Number.isFinite(legacy.maintenance)?legacy.maintenance:90;
         m.tool=Number.isFinite(legacy.tool)?legacy.tool:82;
-        if(orders.some(o=>o.id===legacy.activeId)){
+        if(legacyOrders.some(o=>o.id===legacy.activeId)){
           m.activeId=legacy.activeId;
           m.progress=Number(legacy.progress)||0;
           m.produced=Number(legacy.produced)||0;
@@ -82,6 +83,12 @@
       }
     }
   } catch (_) { /* Storage may be unavailable. */ }
+  state.machines.forEach(m=>{
+    if(m.activeId&&!m.activeOrder){
+      const legacyOrder=legacyOrders.find(order=>order.id===m.activeId);
+      if(legacyOrder){m.activeOrder={...legacyOrder};m.activeOrderSource='legacy';}
+    }
+  });
   state.speed=[1,2,5,10].includes(state.speed)?state.speed:1;
   state.capacity=Math.max(300,Number(state.capacity)||300,Math.ceil(state.material));
   state.selectedBay=state.machines.some(m=>m.bay===state.selectedBay)
@@ -104,6 +111,7 @@
     const result=economySystem.ensureState(state);
     if(!result.ok)throw new Error('CNC Factory save state could not be migrated.');
     syncMaterialMirror();
+    orderMarketSystem.init(state);
     economySystem.setTime(state,START+state.gameMinutes*60000);
   }
   ensureEconomyState();
@@ -117,8 +125,8 @@
     const d=dateAt(minutes);
     return `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(d.getUTCDate()).padStart(2,'0')}`;
   }
-  function book(category,amount,description,meta={},aggregateKey=null){
-    economySystem.setTime(state,START+state.gameMinutes*60000);
+  function book(category,amount,description,meta={},aggregateKey=null,timeMinutes=state.gameMinutes){
+    economySystem.setTime(state,START+timeMinutes*60000);
     return economySystem.book(state,category,amount,description,meta,aggregateKey);
   }
   function consumeOrderMaterial(order){
@@ -127,12 +135,13 @@
     if(typeof order.materialType==='string'){
       const result=inventorySystem.removeMaterial(state,order.materialType,amount);
       if(result.ok)syncMaterialMirror();
-      return result;
+      return result.ok?{...result,consumed:{[order.materialType]:amount}}:result;
     }
     const usage=inventorySystem.getUsage(state);
     if(!usage.ok||usage.usage.raw+1e-9<amount)return {ok:false,code:'insufficient_stock'};
     const stockBefore={...state.inventory.rawMaterial};
     let remaining=amount;
+    const consumed={};
     const types=['legacy',...Object.keys(state.inventory.rawMaterial).filter(type=>type!=='legacy').sort()];
     for(const type of types){
       const available=state.inventory.rawMaterial[type]||0;
@@ -140,16 +149,28 @@
       if(take<=0)continue;
       const result=inventorySystem.removeMaterial(state,type,take);
       if(!result.ok){state.inventory.rawMaterial=stockBefore;return result;}
+      consumed[type]=take;
       remaining=Math.max(0,remaining-take);
       if(remaining<=1e-9)break;
     }
     if(remaining>1e-9){state.inventory.rawMaterial=stockBefore;return {ok:false,code:'insufficient_stock'};}
     syncMaterialMirror();
-    return {ok:true,code:'ok'};
+    return {ok:true,code:'ok',consumed};
+  }
+  function restoreOrderMaterial(consumed){
+    for(const [type,amount] of Object.entries(consumed||{})){
+      if(!inventorySystem.addMaterial(state,type,amount).ok)return false;
+    }
+    syncMaterialMirror();
+    return true;
   }
   const selectedMachine=()=>state.machines.find(m=>m.bay===state.selectedBay);
   const machineAt=bay=>state.machines.find(m=>m.bay===bay);
-  const job=m=>m?(orders.find(o=>o.id===m.activeId)||null):null;
+  const job=m=>{
+    if(!m)return null;
+    if(m.activeOrder&&m.activeOrder.id===m.activeId)return m.activeOrder;
+    return legacyOrders.find(order=>order.id===m.activeId)||null;
+  };
   const compatible=(m,o)=>!!m&&!!o&&catalog[m.type].kind===o.kind;
   const upgradeInvestment=m=>m?9000*((m.level-1)*m.level/2):0;
   const resaleValue=m=>m?Math.round(catalog[m.type].price*SELL_BASE_RATE+upgradeInvestment(m)*SELL_UPGRADE_RATE):0;
@@ -251,15 +272,19 @@
     }
     $('order-machine').replaceChildren(...machineOptions);
     $('order-machine').disabled=!state.machines.length;
-    $('orders').replaceChildren(...orders.map(o=>{
+    const offers=orderMarketSystem.getAvailable(state);
+    $('orders').replaceChildren(...offers.map(o=>{
       const m=selectedMachine(),card=document.createElement('article');
       const running=state.machines.find(x=>x.activeId===o.id),fits=compatible(m,o);
       card.className='card'+(state.selected===o.id?' selected':'')+(running?' running':'')+(!fits&&!running?' incompatible':'');
-      card.innerHTML=`<div class="top"><span>${o.customer}</span><span>${o.kind} · #${o.id}</span></div><h3>${o.part}</h3><p>${o.material} · ${o.qty} Teile</p><div class="values"><span>${o.kg} kg · Frist ${o.deadlineHours} h</span><b>${euro(o.reward)}</b></div>`;
+      const customerType=o.customerType?`${o.customerType} · `:'';
+      const difficulty=Number.isFinite(o.difficulty)?` · Schwierigkeit ${o.difficulty}/5`:'';
+      const remaining=Number.isFinite(o.expiresAt)?` · gültig noch ${formatMinutes(o.expiresAt-state.gameMinutes)}`:'';
+      card.innerHTML=`<div class="top"><span>${o.customer}</span><span>${o.kind} · #${o.id}</span></div><h3>${o.part}</h3><p>${customerType}${o.material} · ${o.qty} Teile${difficulty}</p><div class="values"><span>${o.kg} kg · Frist ${o.deadlineHours} h${remaining}</span><b>${euro(o.reward)}</b></div>`;
       if(running){const p=document.createElement('p');p.textContent=`Läuft auf Platz ${running.bay} · ${running.produced}/${o.qty} Teile`;card.append(p);}
       const button=document.createElement('button');
       button.type='button';
-      button.textContent=running?'Produktion läuft':!m?'Zuerst Maschine kaufen':fits?`Auf Platz ${m.bay} starten`:`Benötigt ${o.kind}`;
+      button.textContent=running?'Produktion läuft':!m?'Zuerst Maschine kaufen':fits?`Auf Platz ${m.bay} annehmen`:`Benötigt ${o.kind}`;
       button.disabled=!m||!!running||!!job(m)||!fits;
       button.addEventListener('click',event=>{event.stopPropagation();startOrder(o.id);});
       card.append(button);
@@ -417,18 +442,23 @@
     }
   }
   function startOrder(id){
-    const o=orders.find(x=>x.id===id),m=selectedMachine();
-    if(!o||!m||job(m)||state.machines.some(x=>x.activeId===id)){say('Diese Maschine oder dieser Auftrag ist bereits belegt.');return;}
+    orderMarketSystem.tick(state,state.gameMinutes);
+    const o=orderMarketSystem.getAvailable(state).find(order=>order.id===id),m=selectedMachine();
+    if(!o||!m||job(m)||state.machines.some(x=>x.activeId===id)){say('Dieses Angebot ist nicht mehr verfügbar oder die Maschine ist belegt.');return;}
     if(!compatible(m,o)){say(`${o.part} benötigt ${o.kind}. ${catalog[m.type].name} ist für ${catalog[m.type].kind} ausgelegt.`);return;}
     const requiredMaterial=Number.isFinite(o.materialAmountKg)?o.materialAmountKg:o.kg;
     if(state.material+1e-9<requiredMaterial){say(`Es fehlen ${requiredMaterial-state.material} kg Material.`);tab('machine');return;}
     if(m.maintenance<8||m.tool<1){say('Vorher Werkzeug oder Wartung erneuern.');tab('machine');return;}
     const materialResult=consumeOrderMaterial(o);
     if(!materialResult.ok){say(`Materialbestand konnte nicht reserviert werden (${materialResult.code}).`);return;}
-    m.activeId=id;m.progress=0;m.produced=0;
-    m.deadlineAt=state.gameMinutes+o.deadlineHours*60;
+    const accepted=orderMarketSystem.accept(state,id);
+    if(!accepted){restoreOrderMaterial(materialResult.consumed);say('Das Angebot ist inzwischen abgelaufen.');return;}
+    orderMarketSystem.tick(state,state.gameMinutes);
+    m.activeId=accepted.id;m.activeOrder=accepted;m.activeOrderSource='market';m.progress=0;m.produced=0;
+    m.deadlineAt=state.gameMinutes+accepted.deadlineHours*60;
+    state.selected=null;
     save();renderOrders();renderBusiness();render();closeDrawer();showMachine(m.bay);
-    say(`${o.part} auf Platz ${m.bay} angenommen. ${statusFor(m)}.`);
+    say(`${accepted.part} auf Platz ${m.bay} angenommen. ${statusFor(m)}.`);
   }
   function buyMachine(type){
     const c=catalog[type],bay=[1,2,3,4].find(x=>!machineAt(x));
@@ -502,15 +532,20 @@
         if(m.progress>=100){
           const late=m.deadlineAt!==null&&state.gameMinutes+step>m.deadlineAt;
           const payout=late?Math.round(o.reward*.8):o.reward;
-          book('income',payout,`Auftrag ${o.id} abgeschlossen`,{orderId:o.id,bay:m.bay,late});
+          if(!book('income',payout,`Auftrag ${o.id} abgeschlossen`,{orderId:o.id,bay:m.bay,late},null,state.gameMinutes+step).ok)continue;
+          if(m.activeOrderSource==='market'){
+            orderMarketSystem.tick(state,state.gameMinutes+step);
+            orderMarketSystem.onCompleted(state,o);
+          }
           state.completed++;
-          m.activeId=null;m.progress=0;m.produced=0;m.deadlineAt=null;
+          m.activeId=null;m.activeOrder=null;m.activeOrderSource=null;m.progress=0;m.produced=0;m.deadlineAt=null;
           state.speed=1;
           save();renderOrders();
           say(`${catalog[m.type].name}: ${o.part} fertig · ${euro(payout)}${late?' (20 % Fristabzug)':''}`);
         }
       }
       state.gameMinutes+=step;left-=step;
+      orderMarketSystem.tick(state,state.gameMinutes);
       const after=dateAt(state.gameMinutes);
       if(after.getUTCMonth()!==before.getUTCMonth()||after.getUTCFullYear()!==before.getUTCFullYear()){
         if(state.payrollDue){
@@ -522,6 +557,7 @@
       }
     }
     render();
+    if(currentPanel==='orders')renderOrders();
     if(currentPanel==='business')renderCosts();
   }
   for(const name of ['orders','machine','business'])
@@ -731,5 +767,8 @@
   }
   requestAnimationFrame(frame);
   setInterval(save,5000);
-  window.cncFactory={getState:()=>JSON.parse(JSON.stringify(state)),orders:orders.map(o=>({...o}))};
+  window.cncFactory={
+    getState:()=>JSON.parse(JSON.stringify(state)),
+    get orders(){return orderMarketSystem.getAvailable(state).map(order=>({...order}));}
+  };
 })();
