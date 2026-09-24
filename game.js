@@ -56,8 +56,8 @@
     if(stored && Number.isFinite(stored.money) && Array.isArray(stored.machines)) {
       state={...defaults(),...stored};
       state.machines=stored.machines.filter(validMachine).map(m=>({...freshMachine(m.bay,m.type),...m}));
-      if(!state.machines.some(m=>m.bay===1))state.machines.unshift(defaults().machines[0]);
       state.machines=state.machines.filter((m,i,a)=>a.findIndex(x=>x.bay===m.bay)===i);
+      if(!state.machines.length)state.machines=[defaults().machines[0]];
       state.staff={shift1:Math.max(0,Number(stored.staff?.shift1)||0),shift2:Math.max(0,Number(stored.staff?.shift2)||0)};
     } else {
       const legacy=JSON.parse(localStorage.getItem('cnc_factory_save_v2') || 'null');
@@ -84,8 +84,10 @@
   } catch (_) { /* Storage may be unavailable. */ }
   state.speed=[1,2,5,10].includes(state.speed)?state.speed:1;
   state.capacity=Math.max(300,Number(state.capacity)||300,Math.ceil(state.material));
-  state.selectedBay=state.machines.some(m=>m.bay===state.selectedBay)?state.selectedBay:1;
-  // Restored assignments may be malformed. Preserve the starter's operator.
+  state.selectedBay=state.machines.some(m=>m.bay===state.selectedBay)
+    ?state.selectedBay
+    :state.machines.slice().sort((a,b)=>a.bay-b.bay)[0].bay;
+  // Restored assignments may be malformed.
   for(const shift of [1,2]){
     const key='operator'+shift,staffKey='shift'+shift;
     let assigned=0;
@@ -256,9 +258,10 @@
   }
   function render(){
     const m=selectedMachine(),o=job(m),pct=Math.max(0,Math.min(100,m.progress));
-    const hallImage=$('hall-image'),hallCount=String(state.machines.length);
+    const hallStage=Math.max(...state.machines.map(x=>x.bay),1);
+    const hallImage=$('hall-image'),hallCount=String(hallStage);
     if(hallImage.dataset.hallCount!==hallCount){
-      hallImage.src=hallArtwork[state.machines.length];
+      hallImage.src=hallArtwork[hallStage];
       hallImage.dataset.hallCount=hallCount;
     }
     $('money').textContent=euro(state.money);
@@ -314,7 +317,8 @@
       b.classList.toggle('milling-bay',milling);
       let machineArt=b.querySelector('.bay-machine');
       let bayPatch=b.querySelector('.bay-patch');
-      if(milling){
+      const needsPatch=!machine||milling;
+      if(needsPatch){
         if(!bayPatch){
           bayPatch=document.createElement('img');
           bayPatch.className='bay-patch';
@@ -322,6 +326,11 @@
           bayPatch.src='hall-four-bays.jpg?v=2';
           b.prepend(bayPatch);
         }
+        bayPatch.hidden=false;
+      }else if(bayPatch){
+        bayPatch.hidden=true;
+      }
+      if(milling){
         if(!machineArt){
           machineArt=document.createElement('img');
           machineArt.className='bay-machine';
@@ -330,11 +339,9 @@
         }
         const src=hallMachineArtwork[machine.type];
         if(machineArt.getAttribute('src')!==src)machineArt.src=src;
-        bayPatch.hidden=false;
         machineArt.hidden=false;
-      }else{
-        if(bayPatch)bayPatch.hidden=true;
-        if(machineArt)machineArt.hidden=true;
+      }else if(machineArt){
+        machineArt.hidden=true;
       }
       b.querySelector('span').textContent=machine?catalog[machine.type].name:`+ Platz ${bay}`;
       b.setAttribute('aria-label',machine?`${catalog[machine.type].name}, Platz ${bay} ansehen`:`Freier Stellplatz ${bay}, Maschinen kaufen`);
@@ -359,7 +366,7 @@
     say(`${o.part} auf Platz ${m.bay} angenommen. ${statusFor(m)}.`);
   }
   function buyMachine(type){
-    const c=catalog[type],bay=[2,3,4].find(x=>!machineAt(x));
+    const c=catalog[type],bay=[1,2,3,4].find(x=>!machineAt(x));
     if(!c||!bay||state.money<c.price)return;
     state.money-=c.price;
     state.machines.push(freshMachine(bay,type));
@@ -372,9 +379,9 @@
     if(state.machines.length<=1){say('Die letzte Maschine kann nicht verkauft werden.');return;}
     if(job(m)){say('Laufenden Auftrag zuerst abschließen.');return;}
     const name=catalog[m.type].name,value=resaleValue(m),oldBay=m.bay;
-    state.machines=state.machines.filter(x=>x!==m).sort((a,b)=>a.bay-b.bay);
-    state.machines.forEach((machine,index)=>{machine.bay=index+1;});
-    state.selectedBay=Math.min(oldBay,state.machines.length);
+    state.machines=state.machines.filter(x=>x!==m);
+    const nearest=state.machines.slice().sort((a,b)=>Math.abs(a.bay-oldBay)-Math.abs(b.bay-oldBay)||a.bay-b.bay)[0];
+    state.selectedBay=nearest.bay;
     state.money+=value;
     showHall();save();renderOrders();renderBusiness();render();
     say(`${name} verkauft · +${euro(value)}.`);
