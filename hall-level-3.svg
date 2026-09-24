@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1200" viewBox="0 0 1920 1200" role="img" aria-label="Leere Produktionshalle">
+<defs>
+ <linearGradient id="floor" x2="0" y2="1"><stop stop-color="#486574"/><stop offset=".56" stop-color="#304957"/><stop offset="1" stop-color="#172e3b"/></linearGradient>
+ <linearGradient id="bay" x2="0" y2="1"><stop stop-color="#5e7b88" stop-opacity=".37"/><stop offset="1" stop-color="#698390" stop-opacity=".12"/></linearGradient>
+ <pattern id="grid" width="80" height="80" patternUnits="userSpaceOnUse"><path d="M80 0H0V80" fill="none" stroke="#aac7cf" stroke-opacity=".10" stroke-width="2"/></pattern>
+</defs>
+<rect width="1920" height="1200" fill="#132731"/>
+<path d="M0 0H1920V140H0z" fill="#203c49"/>
+<path d="M0 125H1920V1200H0z" fill="url(#floor)"/>
+<path d="M0 125H1920V1200H0z" fill="url(#grid)"/>
+<path d="M0 136H1920M0 1050H1920" fill="none" stroke="#7799a4" stroke-opacity=".7" stroke-width="14"/>
+<path d="M12 600H1908" fill="none" stroke="#d5b16a" stroke-opacity=".5" stroke-width="7" stroke-dasharray="35 24"/>
+<path d="M0 90H1920" fill="none" stroke="#64818a" stroke-width="10"/>
+
+<rect x="67" y="177" width="402" height="378" rx="18" fill="url(#bay)" stroke="#a5c5c9" stroke-opacity=".45" stroke-width="7" stroke-dasharray="28 18"/>
+<path d="M92 521h352" stroke="#d4b775" stroke-opacity=".38" stroke-width="6"/>
+<rect x="528" y="177" width="402" height="378" rx="18" fill="url(#bay)" stroke="#a5c5c9" stroke-opacity=".45" stroke-width="7" stroke-dasharray="28 18"/>
+<path d="M553 521h352" stroke="#d4b775" stroke-opacity=".38" stroke-width="6"/>
+<rect x="989" y="177" width="402" height="378" rx="18" fill="url(#bay)" stroke="#a5c5c9" stroke-opacity=".45" stroke-width="7" stroke-dasharray="28 18"/>
+<path d="M1014 521h352" stroke="#d4b775" stroke-opacity=".38" stroke-width="6"/>
+<rect x="1450" y="177" width="402" height="378" rx="18" fill="url(#bay)" stroke="#a5c5c9" stroke-opacity=".45" stroke-width="7" stroke-dasharray="28 18"/>
+<path d="M1475 521h352" stroke="#d4b775" stroke-opacity=".38" stroke-width="6"/>
+<rect x="67" y="657" width="402" height="378" rx="18" fill="url(#bay)" stroke="#a5c5c9" stroke-opacity=".45" stroke-width="7" stroke-dasharray="28 18"/>
+<path d="M92 1001h352" stroke="#d4b775" stroke-opacity=".38" stroke-width="6"/>
+<rect x="528" y="657" width="402" height="378" rx="18" fill="url(#bay)" stroke="#a5c5c9" stroke-opacity=".45" stroke-width="7" stroke-dasharray="28 18"/>
+<path d="M553 1001h352" stroke="#d4b775" stroke-opacity=".38" stroke-width="6"/>
+<rect x="989" y="657" width="402" height="378" rx="18" fill="url(#bay)" stroke="#a5c5c9" stroke-opacity=".45" stroke-width="7" stroke-dasharray="28 18"/>
+<path d="M1014 1001h352" stroke="#d4b775" stroke-opacity=".38" stroke-width="6"/>
+<rect x="1450" y="657" width="402" height="378" rx="18" fill="url(#bay)" stroke="#a5c5c9" stroke-opacity=".45" stroke-width="7" stroke-dasharray="28 18"/>
+<path d="M1475 1001h352" stroke="#d4b775" stroke-opacity=".38" stroke-width="6"/>
+<path d="M32 143V1037M1888 143V1037" stroke="#223d4a" stroke-width="34"/><rect x="0" y="1065" width="1920" height="135" fill="#112b39"/></svg>
