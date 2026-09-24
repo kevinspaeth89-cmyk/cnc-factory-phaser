@@ -35,13 +35,11 @@
     bay,type,level:1,maintenance:90,tool:82,operator1:false,operator2:false,
     activeId:null,progress:0,produced:0,deadlineAt:null
   });
-  const defaults = () => {
-    const first=freshMachine(1);
-    first.operator1=true;
-    return {money:14000,material:120,capacity:300,staff:{shift1:1,shift2:0},
-      machines:[first],selectedBay:1,speed:1,paused:false,gameMinutes:0,completed:0,
-      payrollDue:0,wagesPaid:0,storagePaid:0,energyPaid:0,selected:null};
-  };
+  const defaults = () => ({
+    money:14000,material:120,capacity:300,staff:{shift1:0,shift2:0},
+    machines:[],selectedBay:null,speed:1,paused:false,gameMinutes:0,completed:0,
+    payrollDue:0,wagesPaid:0,storagePaid:0,energyPaid:0,selected:null
+  });
   let state=defaults();
   function validMachine(m) {
     return m && Number.isInteger(m.bay) && m.bay>=1 && m.bay<=4 &&
@@ -53,7 +51,6 @@
       state={...defaults(),...stored};
       state.machines=stored.machines.filter(validMachine).map(m=>({...freshMachine(m.bay,m.type),...m}));
       state.machines=state.machines.filter((m,i,a)=>a.findIndex(x=>x.bay===m.bay)===i);
-      if(!state.machines.length)state.machines=[defaults().machines[0]];
       state.staff={shift1:Math.max(0,Number(stored.staff?.shift1)||0),shift2:Math.max(0,Number(stored.staff?.shift2)||0)};
     } else {
       const legacy=JSON.parse(localStorage.getItem('cnc_factory_save_v2') || 'null');
@@ -65,7 +62,11 @@
         state.speed=[1,2,5,10].includes(legacy.speed)?legacy.speed:1;
         state.paused=!!legacy.paused;
         state.selected=legacy.selected;
-        const m=state.machines[0];
+        const m=freshMachine(1);
+        m.operator1=true;
+        state.machines=[m];
+        state.staff.shift1=Math.max(1,state.staff.shift1);
+        state.selectedBay=1;
         m.level=Number(legacy.machineLevel)||1;
         m.maintenance=Number.isFinite(legacy.maintenance)?legacy.maintenance:90;
         m.tool=Number.isFinite(legacy.tool)?legacy.tool:82;
@@ -82,7 +83,7 @@
   state.capacity=Math.max(300,Number(state.capacity)||300,Math.ceil(state.material));
   state.selectedBay=state.machines.some(m=>m.bay===state.selectedBay)
     ?state.selectedBay
-    :state.machines.slice().sort((a,b)=>a.bay-b.bay)[0].bay;
+    :(state.machines.length?state.machines.slice().sort((a,b)=>a.bay-b.bay)[0].bay:null);
   // Restored assignments may be malformed.
   for(const shift of [1,2]){
     const key='operator'+shift,staffKey='shift'+shift;
@@ -92,10 +93,10 @@
   const save = () => {try{localStorage.setItem(SAVE_KEY,JSON.stringify(state));}catch(_){}};
   const selectedMachine=()=>state.machines.find(m=>m.bay===state.selectedBay);
   const machineAt=bay=>state.machines.find(m=>m.bay===bay);
-  const job=m=>orders.find(o=>o.id===m.activeId)||null;
+  const job=m=>m?(orders.find(o=>o.id===m.activeId)||null):null;
   const compatible=(m,o)=>!!m&&!!o&&catalog[m.type].kind===o.kind;
-  const upgradeInvestment=m=>9000*((m.level-1)*m.level/2);
-  const resaleValue=m=>Math.round(catalog[m.type].price*SELL_BASE_RATE+upgradeInvestment(m)*SELL_UPGRADE_RATE);
+  const upgradeInvestment=m=>m?9000*((m.level-1)*m.level/2):0;
+  const resaleValue=m=>m?Math.round(catalog[m.type].price*SELL_BASE_RATE+upgradeInvestment(m)*SELL_UPGRADE_RATE):0;
   const productionFactor=m=>catalog[m.type].rate*(1+(m.level-1)*.13)*Math.max(.65,m.maintenance/100*.75+.25);
   const remainingMinutes=(m,o)=>o?Math.max(0,(100-m.progress)*o.duration*6/(100*productionFactor(m))):0;
   const formatMinutes=min=>{
@@ -181,12 +182,19 @@
     $('hall-map').classList.remove('zooming');
   }
   function renderOrders(){
-    $('order-machine').replaceChildren(...state.machines.map(m=>{
+    const machineOptions=state.machines.map(m=>{
       const opt=document.createElement('option');
       opt.value=m.bay;opt.textContent=`Platz ${m.bay} · ${catalog[m.type].name} · ${catalog[m.type].kind}`;
       opt.selected=m.bay===state.selectedBay;
       return opt;
-    }));
+    });
+    if(!machineOptions.length){
+      const opt=document.createElement('option');
+      opt.value='';opt.textContent='Keine Maschine vorhanden';opt.selected=true;
+      machineOptions.push(opt);
+    }
+    $('order-machine').replaceChildren(...machineOptions);
+    $('order-machine').disabled=!state.machines.length;
     $('orders').replaceChildren(...orders.map(o=>{
       const m=selectedMachine(),card=document.createElement('article');
       const running=state.machines.find(x=>x.activeId===o.id),fits=compatible(m,o);
@@ -195,8 +203,8 @@
       if(running){const p=document.createElement('p');p.textContent=`Läuft auf Platz ${running.bay} · ${running.produced}/${o.qty} Teile`;card.append(p);}
       const button=document.createElement('button');
       button.type='button';
-      button.textContent=running?'Produktion läuft':fits?`Auf Platz ${m.bay} starten`:`Benötigt ${o.kind}`;
-      button.disabled=!!running||!!job(m)||!fits;
+      button.textContent=running?'Produktion läuft':!m?'Zuerst Maschine kaufen':fits?`Auf Platz ${m.bay} starten`:`Benötigt ${o.kind}`;
+      button.disabled=!m||!!running||!!job(m)||!fits;
       button.addEventListener('click',event=>{event.stopPropagation();startOrder(o.id);});
       card.append(button);
       card.addEventListener('click',()=>{state.selected=o.id;save();renderOrders();});
@@ -236,13 +244,13 @@
       card.append(head,title,bar,foot);
       return card;
     }));
-    $('operator-1').textContent=m.operator1?'S1 abziehen':'S1 zuweisen';
-    $('operator-2').textContent=m.operator2?'S2 abziehen':'S2 zuweisen';
-    $('sell-machine-value').textContent=euro(resaleValue(m));
-    $('sell-machine').disabled=state.machines.length<=1||!!job(m);
+    $('operator-1').textContent=m?(m.operator1?'S1 abziehen':'S1 zuweisen'):'Keine Maschine';
+    $('operator-2').textContent=m?(m.operator2?'S2 abziehen':'S2 zuweisen'):'Keine Maschine';
+    $('sell-machine-value').textContent=m?euro(resaleValue(m)):'—';
+    $('sell-machine').disabled=!m||!!job(m);
     for(const shift of [1,2]){
       const assigned=state.machines.filter(x=>x['operator'+shift]).length;
-      $('operator-'+shift).disabled=!m['operator'+shift]&&assigned>=state.staff['shift'+shift];
+      $('operator-'+shift).disabled=!m||(!m['operator'+shift]&&assigned>=state.staff['shift'+shift]);
     }
   }
   function renderCosts(){
@@ -253,15 +261,15 @@
     $('storage-info').textContent=`${Math.floor(state.material)} / ${state.capacity} kg · ${euro(state.material*STORAGE_RATE)} pro Spieltag`;
   }
   function render(){
-    const m=selectedMachine(),o=job(m),pct=Math.max(0,Math.min(100,m.progress));
+    const m=selectedMachine(),o=job(m),pct=m?Math.max(0,Math.min(100,m.progress)):0;
     const hallImage=$('hall-image');
     if(hallImage.getAttribute('src')!==hallBaseArtwork)hallImage.src=hallBaseArtwork;
     $('money').textContent=euro(state.money);
     $('material').textContent=Math.floor(state.material)+' kg';
     $('parts').textContent=`${state.machines.length} / 4`;
-    $('part-name').textContent=o?o.part:'Auftrag auswählen';
+    $('part-name').textContent=o?o.part:m?'Auftrag auswählen':'Erste Maschine kaufen';
     $('progress').style.width=pct+'%';
-    $('progress-label').textContent=o?`${Math.floor(pct)} % · ${m.produced} / ${o.qty} · ${statusFor(m)}`:statusFor(m);
+    $('progress-label').textContent=o?`${Math.floor(pct)} % · ${m.produced} / ${o.qty} · ${statusFor(m)}`:m?statusFor(m):'Öffne Betrieb und wähle deine erste Maschine.';
     $('clock').textContent=clock();
     $('status').textContent='● '+statusFor(m);
     $('status').classList.toggle('paused',state.paused);
@@ -269,39 +277,39 @@
     $('pause').classList.toggle('active',state.paused);
     document.querySelectorAll('[data-speed]').forEach(b=>b.classList.toggle('active',Number(b.dataset.speed)===state.speed));
     $('speed-value').textContent=state.speed+'×';
-    $('machine-heading').textContent=catalog[m.type].name;
-    $('machine-readout').textContent=`${catalog[m.type].name.toUpperCase()} · PLATZ ${m.bay}`;
-    $('machine-meta').textContent=`Platz ${m.bay} · ${catalog[m.type].kind} · Level ${m.level} · ${statusFor(m)}`;
-    $('upgrade-cost').textContent=euro(9000*m.level)+' · +13 % Tempo';
-    $('tool-label').textContent=Math.round(m.tool)+' %';
-    $('tool-meter').style.width=Math.max(0,m.tool)+'%';
-    $('maintenance-label').textContent=Math.round(m.maintenance)+' %';
-    $('maintenance-meter').style.width=Math.max(0,m.maintenance)+'%';
+    $('machine-heading').textContent=m?catalog[m.type].name:'Keine Maschine';
+    $('machine-readout').textContent=m?`${catalog[m.type].name.toUpperCase()} · PLATZ ${m.bay}`:'KEINE MASCHINE';
+    $('machine-meta').textContent=m?`Platz ${m.bay} · ${catalog[m.type].kind} · Level ${m.level} · ${statusFor(m)}`:'Kaufe im Betrieb eine Maschine für einen freien Stellplatz.';
+    $('upgrade-cost').textContent=m?euro(9000*m.level)+' · +13 % Tempo':'—';
+    $('tool-label').textContent=m?Math.round(m.tool)+' %':'—';
+    $('tool-meter').style.width=m?Math.max(0,m.tool)+'%':'0%';
+    $('maintenance-label').textContent=m?Math.round(m.maintenance)+' %':'—';
+    $('maintenance-meter').style.width=m?Math.max(0,m.maintenance)+'%':'0%';
 
     const hudOrder=o?(o.part+' · #'+o.id):'Kein Auftrag';
-    const deadlineLeft=o&&m.deadlineAt!==null?m.deadlineAt-state.gameMinutes:null;
-    $('hud-machine').textContent=catalog[m.type].name+' · Platz '+m.bay+' · Level '+m.level;
+    const deadlineLeft=o&&m&&m.deadlineAt!==null?m.deadlineAt-state.gameMinutes:null;
+    $('hud-machine').textContent=m?(catalog[m.type].name+' · Platz '+m.bay+' · Level '+m.level):'Keine Maschine';
     $('hud-state').textContent=statusFor(m);
-    $('hud-state').className='hud-state '+(operating(m)?'ok':o?'wait':'idle');
+    $('hud-state').className='hud-state '+(m&&operating(m)?'ok':o?'wait':'idle');
     $('hud-order').textContent=hudOrder;
     $('hud-parts').textContent=o?(m.produced+' / '+o.qty):'—';
     $('hud-time').textContent=o?formatMinutes(remainingMinutes(m,o)):'—';
     $('hud-deadline').textContent=deadlineLeft===null?'—':deadlineLeft<0?(formatMinutes(-deadlineLeft)+' überfällig'):formatMinutes(deadlineLeft);
-    $('hud-tool').textContent=Math.round(m.tool)+' %';
-    $('hud-maintenance').textContent=Math.round(m.maintenance)+' %';
-    $('hud-operators').textContent='S1 '+(m.operator1?'✓':'–')+' · S2 '+(m.operator2?'✓':'–');
-    $('hud-job-button').textContent=o?'Aufträge ansehen':'Auftrag wählen';
+    $('hud-tool').textContent=m?Math.round(m.tool)+' %':'—';
+    $('hud-maintenance').textContent=m?Math.round(m.maintenance)+' %':'—';
+    $('hud-operators').textContent=m?('S1 '+(m.operator1?'✓':'–')+' · S2 '+(m.operator2?'✓':'–')):'—';
+    $('hud-job-button').textContent=o?'Aufträge ansehen':m?'Auftrag wählen':'Maschine kaufen';
 
     $('buy-material').disabled=state.money<MATERIAL_PRICE||state.material+100>state.capacity;
-    $('change-tool').disabled=!!o||state.money<650||m.tool>=99;
-    $('maintenance').disabled=!!o||state.money<1200||m.maintenance>=99;
-    $('upgrade').disabled=state.money<9000*m.level;
-    $('sell-machine-value').textContent=euro(resaleValue(m));
-    $('sell-machine').disabled=state.machines.length<=1||!!o;
+    $('change-tool').disabled=!m||!!o||state.money<650||m.tool>=99;
+    $('maintenance').disabled=!m||!!o||state.money<1200||m.maintenance>=99;
+    $('upgrade').disabled=!m||state.money<9000*m.level;
+    $('sell-machine-value').textContent=m?euro(resaleValue(m)):'—';
+    $('sell-machine').disabled=!m||!!o;
     for(let bay=1;bay<=4;bay++){
       const b=$('bay-'+bay),machine=machineAt(bay);
       b.classList.toggle('installed',!!machine);
-      b.classList.toggle('selected-bay',bay===m.bay);
+      b.classList.toggle('selected-bay',!!m&&bay===m.bay);
       b.classList.toggle('working-bay',!!machine&&operating(machine));
       b.classList.toggle('warning-bay',!!machine&&(machine.maintenance<8||machine.tool<1));
       b.classList.toggle('waiting-bay',!!machine&&!!job(machine)&&!operating(machine)&&machine.maintenance>=8&&machine.tool>=1);
@@ -347,9 +355,9 @@
       b.title=machine?statusFor(machine):'Maschine kaufen';
     }
     if(visual){
-      visual.running=operating(m);
-      visual.condition=(m.maintenance<8||m.tool<1)?'fault':operating(m)?'running':o?'waiting':'idle';
-      visual.setMachineType(m.type);
+      visual.running=!!m&&operating(m);
+      visual.condition=!m?'idle':(m.maintenance<8||m.tool<1)?'fault':operating(m)?'running':o?'waiting':'idle';
+      if(m)visual.setMachineType(m.type);
     }
   }
   function startOrder(id){
@@ -375,12 +383,11 @@
   function sellMachine(){
     const m=selectedMachine();
     if(!m)return;
-    if(state.machines.length<=1){say('Die letzte Maschine kann nicht verkauft werden.');return;}
     if(job(m)){say('Laufenden Auftrag zuerst abschließen.');return;}
     const name=catalog[m.type].name,value=resaleValue(m),oldBay=m.bay;
     state.machines=state.machines.filter(x=>x!==m);
     const nearest=state.machines.slice().sort((a,b)=>Math.abs(a.bay-oldBay)-Math.abs(b.bay-oldBay)||a.bay-b.bay)[0];
-    state.selectedBay=nearest.bay;
+    state.selectedBay=nearest?nearest.bay:null;
     state.money+=value;
     showHall();save();renderOrders();renderBusiness();render();
     say(`${name} verkauft · +${euro(value)}.`);
@@ -400,6 +407,7 @@
   }
   function toggleOperator(shift){
     const m=selectedMachine(),key='operator'+shift;
+    if(!m)return;
     if(!m[key]&&state.machines.filter(x=>x[key]).length>=state.staff['shift'+shift])return;
     m[key]=!m[key];
     renderBusiness();render();save();
@@ -458,7 +466,7 @@
     else{tab('business');say(`Platz ${bay} ist frei. Wähle eine Maschine im Betrieb.`);}
   });
   $('back-to-hall').addEventListener('click',showHall);
-  $('hud-job-button').addEventListener('click',()=>tab('orders'));
+  $('hud-job-button').addEventListener('click',()=>state.machines.length?tab('orders'):tab('business'));
   $('hud-service-button').addEventListener('click',()=>tab('machine'));
   $('hud-staff-button').addEventListener('click',()=>tab('business'));
   $('order-machine').addEventListener('change',event=>selectBay(Number(event.target.value)));
@@ -474,15 +482,15 @@
     state.money-=MATERIAL_PRICE;state.material+=100;save();render();renderBusiness();say('100 kg Material eingelagert.');
   });
   $('change-tool').addEventListener('click',()=>{
-    const m=selectedMachine();if(job(m)||state.money<650||m.tool>=99)return;
+    const m=selectedMachine();if(!m||job(m)||state.money<650||m.tool>=99)return;
     state.money-=650;m.tool=100;save();render();say('Werkzeug gewechselt.');
   });
   $('maintenance').addEventListener('click',()=>{
-    const m=selectedMachine();if(job(m)||state.money<1200||m.maintenance>=99)return;
+    const m=selectedMachine();if(!m||job(m)||state.money<1200||m.maintenance>=99)return;
     state.money-=1200;m.maintenance=100;save();render();say('Wartung abgeschlossen.');
   });
   $('upgrade').addEventListener('click',()=>{
-    const m=selectedMachine(),cost=9000*m.level;if(state.money<cost)return;
+    const m=selectedMachine();if(!m)return;const cost=9000*m.level;if(state.money<cost)return;
     state.money-=cost;m.level++;save();render();say(`${catalog[m.type].name} verbessert.`);
   });
   $('sell-machine').addEventListener('click',sellMachine);
