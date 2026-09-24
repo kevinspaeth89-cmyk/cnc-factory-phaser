@@ -11,7 +11,9 @@
   const catalog = {
     standard: {name:'Nexora NX-350',kind:'Drehen',price:6500,rate:1},
     rapid: {name:'Nexora NX-420',kind:'Drehen',price:9000,rate:1.25},
-    premium: {name:'Aurex AT-600',kind:'Drehen',price:12500,rate:1.55}
+    premium: {name:'Aurex AT-600',kind:'Drehen',price:12500,rate:1.55},
+    mill3: {name:'Veltron VX-500',kind:'Fräsen',price:10500,rate:1.12},
+    mill5: {name:'Orionis OM-650X',kind:'Fräsen',price:14800,rate:1.38}
   };
   const hallArtwork = {
     1:'hall-four-bays.jpg?v=2',
@@ -20,9 +22,12 @@
     4:'hall-four-machines.webp?v=1'
   };
   const orders = [
-    {id:'A12',customer:'Veltraxis Mobility',part:'Wellenflansch A12',material:'1.4301 Edelstahl',kg:72,qty:50,reward:8400,duration:48,deadlineHours:7},
-    {id:'B07',customer:'Orionis Fluidics',part:'Ventilgehäuse B07',material:'1.4404 Edelstahl',kg:96,qty:40,reward:11200,duration:62,deadlineHours:9},
-    {id:'C21',customer:'Kaeldor Components',part:'Distanzring C21',material:'C45 Stahl',kg:48,qty:80,reward:6900,duration:38,deadlineHours:6}
+    {id:'A12',kind:'Drehen',customer:'Veltraxis Mobility',part:'Wellenflansch A12',material:'1.4301 Edelstahl',kg:72,qty:50,reward:8400,duration:48,deadlineHours:7},
+    {id:'B07',kind:'Drehen',customer:'Orionis Fluidics',part:'Ventilgehäuse B07',material:'1.4404 Edelstahl',kg:96,qty:40,reward:11200,duration:62,deadlineHours:9},
+    {id:'C21',kind:'Drehen',customer:'Kaeldor Components',part:'Distanzring C21',material:'C45 Stahl',kg:48,qty:80,reward:6900,duration:38,deadlineHours:6},
+    {id:'M14',kind:'Fräsen',customer:'Asteron Robotics',part:'Grundplatte M14',material:'EN AW-6082 Aluminium',kg:58,qty:36,reward:9800,duration:54,deadlineHours:8},
+    {id:'F32',kind:'Fräsen',customer:'Kaeldor Systems',part:'Spannprisma F32',material:'42CrMo4 Stahl',kg:74,qty:30,reward:12600,duration:68,deadlineHours:10},
+    {id:'P09',kind:'Fräsen',customer:'Orionis Fluidics',part:'Pumpengehäuse P09',material:'EN-GJS-400',kg:88,qty:24,reward:13900,duration:78,deadlineHours:11}
   ];
   const freshMachine = (bay, type='standard') => ({
     bay,type,level:1,maintenance:90,tool:82,operator1:false,operator2:false,
@@ -84,6 +89,7 @@
   const selectedMachine=()=>state.machines.find(m=>m.bay===state.selectedBay);
   const machineAt=bay=>state.machines.find(m=>m.bay===bay);
   const job=m=>orders.find(o=>o.id===m.activeId)||null;
+  const compatible=(m,o)=>!!m&&!!o&&catalog[m.type].kind===o.kind;
   const dateAt=min=>new Date(START+Math.floor(min)*60000);
   const shiftAt=min=>{
     const d=dateAt(min),day=d.getUTCDay(),hour=d.getUTCHours();
@@ -164,20 +170,20 @@
   function renderOrders(){
     $('order-machine').replaceChildren(...state.machines.map(m=>{
       const opt=document.createElement('option');
-      opt.value=m.bay;opt.textContent=`Platz ${m.bay} · ${catalog[m.type].name}`;
+      opt.value=m.bay;opt.textContent=`Platz ${m.bay} · ${catalog[m.type].name} · ${catalog[m.type].kind}`;
       opt.selected=m.bay===state.selectedBay;
       return opt;
     }));
     $('orders').replaceChildren(...orders.map(o=>{
       const m=selectedMachine(),card=document.createElement('article');
-      const running=state.machines.find(x=>x.activeId===o.id);
-      card.className='card'+(state.selected===o.id?' selected':'')+(running?' running':'');
-      card.innerHTML=`<div class="top"><span>${o.customer}</span><span>#${o.id}</span></div><h3>${o.part}</h3><p>${o.material} · ${o.qty} Teile</p><div class="values"><span>${o.kg} kg · Frist ${o.deadlineHours} h</span><b>${euro(o.reward)}</b></div>`;
+      const running=state.machines.find(x=>x.activeId===o.id),fits=compatible(m,o);
+      card.className='card'+(state.selected===o.id?' selected':'')+(running?' running':'')+(!fits&&!running?' incompatible':'');
+      card.innerHTML=`<div class="top"><span>${o.customer}</span><span>${o.kind} · #${o.id}</span></div><h3>${o.part}</h3><p>${o.material} · ${o.qty} Teile</p><div class="values"><span>${o.kg} kg · Frist ${o.deadlineHours} h</span><b>${euro(o.reward)}</b></div>`;
       if(running){const p=document.createElement('p');p.textContent=`Läuft auf Platz ${running.bay} · ${running.produced}/${o.qty} Teile`;card.append(p);}
       const button=document.createElement('button');
       button.type='button';
-      button.textContent=running?'Produktion läuft':`Auf Platz ${m.bay} starten`;
-      button.disabled=!!running||!!job(m);
+      button.textContent=running?'Produktion läuft':fits?`Auf Platz ${m.bay} starten`:`Benötigt ${o.kind}`;
+      button.disabled=!!running||!!job(m)||!fits;
       button.addEventListener('click',event=>{event.stopPropagation();startOrder(o.id);});
       card.append(button);
       card.addEventListener('click',()=>{state.selected=o.id;save();renderOrders();});
@@ -199,7 +205,7 @@
     $('machine-shop').replaceChildren(...Object.entries(catalog).map(([type,c])=>{
       const div=document.createElement('div');div.className='shop-item';
       const label=document.createElement('span');
-      label.textContent=`${c.name} · ${Math.round(c.rate*100)} % Tempo`;
+      label.textContent=`${c.name} · ${c.kind} · ${Math.round(c.rate*100)} % Tempo`;
       const button=document.createElement('button');
       button.type='button';button.className='action';
       button.textContent=euro(c.price);
@@ -244,7 +250,7 @@
     $('speed-value').textContent=state.speed+'×';
     $('machine-heading').textContent=catalog[m.type].name;
     $('machine-readout').textContent=`${catalog[m.type].name.toUpperCase()} · PLATZ ${m.bay}`;
-    $('machine-meta').textContent=`Platz ${m.bay} · Level ${m.level} · ${statusFor(m)}`;
+    $('machine-meta').textContent=`Platz ${m.bay} · ${catalog[m.type].kind} · Level ${m.level} · ${statusFor(m)}`;
     $('upgrade-cost').textContent=euro(9000*m.level)+' · +13 % Tempo';
     $('tool-label').textContent=Math.round(m.tool)+' %';
     $('tool-meter').style.width=Math.max(0,m.tool)+'%';
@@ -271,6 +277,7 @@
   function startOrder(id){
     const o=orders.find(x=>x.id===id),m=selectedMachine();
     if(!o||!m||job(m)||state.machines.some(x=>x.activeId===id)){say('Diese Maschine oder dieser Auftrag ist bereits belegt.');return;}
+    if(!compatible(m,o)){say(`${o.part} benötigt ${o.kind}. ${catalog[m.type].name} ist für ${catalog[m.type].kind} ausgelegt.`);return;}
     if(state.material<o.kg){say(`Es fehlen ${o.kg-state.material} kg Material.`);tab('machine');return;}
     if(m.maintenance<8||m.tool<1){say('Vorher Werkzeug oder Wartung erneuern.');tab('machine');return;}
     state.material-=o.kg;
@@ -413,11 +420,43 @@
         return {sprite:p,phase:Math.random()*Math.PI*2,radius:12+Math.random()*57,speed:1+Math.random()*2};
       });
       this.tower=this.add.circle(199,45,8,0x6cff98,.12).setBlendMode(Phaser.BlendModes.ADD);
+
+      this.millGroup=this.add.container(0,0).setVisible(false);
+      const millBody=this.add.graphics();
+      millBody.fillStyle(0x53646b,1).fillRoundedRect(160,105,680,565,28);
+      millBody.fillStyle(0x263840,1).fillRoundedRect(205,150,470,405,18);
+      millBody.fillStyle(0x0e1c23,1).fillRoundedRect(235,182,405,330,13);
+      millBody.lineStyle(5,0x8da8b3,.85).strokeRoundedRect(235,182,405,330,13);
+      millBody.fillStyle(0x18272e,1).fillRoundedRect(690,165,112,360,14);
+      millBody.lineStyle(3,0x88a2ac,.7).strokeRoundedRect(690,165,112,360,14);
+      millBody.fillStyle(0x7a8b91,1).fillRoundedRect(180,590,640,65,16);
+      millBody.fillStyle(0x10222b,1).fillRect(225,525,430,42);
+      this.millGroup.add(millBody);
+
+      this.millHead=this.add.rectangle(470,265,130,118,0x687a81).setStrokeStyle(4,0xaec1c8,.85);
+      this.millSpindle=this.add.rectangle(470,352,34,116,0xc7d5da).setStrokeStyle(3,0x52636a,1);
+      this.millTool=this.add.rectangle(470,424,10,54,0xe7eef0);
+      this.millTable=this.add.rectangle(470,500,350,54,0x526b75).setStrokeStyle(3,0x9cb0b8,.7);
+      this.millWorkpiece=this.add.rectangle(470,466,165,55,0xb68d55).setStrokeStyle(3,0xe0bd81,.85);
+      this.millGlow=this.add.circle(470,446,28,0x7feaff,.15).setBlendMode(Phaser.BlendModes.ADD);
+      this.millPanel=this.add.rectangle(746,300,72,205,0x15262e).setStrokeStyle(2,0x78939e,.8);
+      this.millScreen=this.add.rectangle(746,250,52,70,0x2a7188).setStrokeStyle(2,0x8bd8e8,.7);
+      this.millGroup.add([this.millHead,this.millSpindle,this.millTool,this.millTable,this.millWorkpiece,this.millGlow,this.millPanel,this.millScreen]);
+      this.millSparks=Array.from({length:18},()=>{
+        const p=this.add.circle(470,448,Phaser.Math.FloatBetween(1,2.6),0xaeefff,0).setBlendMode(Phaser.BlendModes.ADD);
+        this.millGroup.add(p);
+        return {sprite:p,phase:Math.random()*Math.PI*2,radius:10+Math.random()*48,speed:1+Math.random()*2.5};
+      });
       render();
     }
     setMachineType(type){
-      const key='machine-'+type;
-      if(this.machineImage.texture.key!==key)this.machineImage.setTexture(key);
+      const milling=catalog[type].kind==='Fräsen';
+      this.machineImage.setVisible(!milling);
+      this.millGroup.setVisible(milling);
+      if(!milling){
+        const key='machine-'+type;
+        if(this.machineImage.texture.key!==key)this.machineImage.setTexture(key);
+      }
     }
     update(_time,delta){
       const dt=Math.min(delta/1000,.2);this.elapsed+=dt;this.spindle.clear();
@@ -429,9 +468,25 @@
       this.sparks.forEach(p=>{
         const t=this.elapsed*p.speed*4+p.phase;
         p.sprite.setPosition(445+Math.cos(t)*p.radius,390+Math.sin(t*.8)*p.radius*.46);
-        p.sprite.setAlpha(on?.14+.6*Math.max(0,Math.sin(t*2)):0);
+        p.sprite.setAlpha(!this.millGroup.visible&&on?.14+.6*Math.max(0,Math.sin(t*2)):0);
       });
-      this.tower.setAlpha(on?.18+.45*(.5+.5*Math.sin(this.elapsed*8)):.09);
+      this.tower.setAlpha(!this.millGroup.visible&&on?.18+.45*(.5+.5*Math.sin(this.elapsed*8)):.09);
+      if(this.millGroup.visible){
+        const travel=on?Math.sin(this.elapsed*1.35)*92:0;
+        this.millTable.x=travel;
+        this.millWorkpiece.x=travel;
+        this.millHead.x=on?Math.sin(this.elapsed*.72)*26:0;
+        this.millSpindle.x=this.millHead.x;
+        this.millTool.x=this.millHead.x;
+        this.millGlow.x=this.millHead.x+travel;
+        this.millGlow.setAlpha(on?.16+.32*(.5+.5*Math.sin(this.elapsed*18)):.05);
+        this.millSparks.forEach(p=>{
+          const t=this.elapsed*p.speed*5+p.phase;
+          p.sprite.setPosition(470+this.millHead.x+travel+Math.cos(t)*p.radius,448+Math.sin(t*.9)*p.radius*.42);
+          p.sprite.setAlpha(on?.12+.7*Math.max(0,Math.sin(t*1.7)):0);
+        });
+        this.millScreen.setFillStyle(on?0x39a8c2:0x2a7188,1);
+      }
     }
   }
   function ensureGame(){
