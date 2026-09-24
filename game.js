@@ -304,18 +304,28 @@
       const milling=!!machine&&catalog[machine.type].kind==='Fräsen';
       b.classList.toggle('milling-bay',milling);
       let machineArt=b.querySelector('.bay-machine');
+      let bayPatch=b.querySelector('.bay-patch');
       if(milling){
+        if(!bayPatch){
+          bayPatch=document.createElement('img');
+          bayPatch.className='bay-patch';
+          bayPatch.alt='';
+          bayPatch.src='hall-four-bays.jpg?v=2';
+          b.prepend(bayPatch);
+        }
         if(!machineArt){
           machineArt=document.createElement('img');
           machineArt.className='bay-machine';
           machineArt.alt='';
-          b.prepend(machineArt);
+          b.append(machineArt);
         }
         const src=hallMachineArtwork[machine.type];
         if(machineArt.getAttribute('src')!==src)machineArt.src=src;
+        bayPatch.hidden=false;
         machineArt.hidden=false;
-      }else if(machineArt){
-        machineArt.hidden=true;
+      }else{
+        if(bayPatch)bayPatch.hidden=true;
+        if(machineArt)machineArt.hidden=true;
       }
       b.querySelector('span').textContent=machine?catalog[machine.type].name:`+ Platz ${bay}`;
       b.setAttribute('aria-label',machine?`${catalog[machine.type].name}, Platz ${bay} ansehen`:`Freier Stellplatz ${bay}, Maschinen kaufen`);
