@@ -13,6 +13,12 @@
     rapid: {name:'Nexora NX-420',kind:'Drehen',price:9000,rate:1.25},
     premium: {name:'Aurex AT-600',kind:'Drehen',price:12500,rate:1.55}
   };
+  const hallArtwork = {
+    1:'hall-four-bays.jpg?v=2',
+    2:'hall-two-machines.webp?v=1',
+    3:'hall-three-machines.webp?v=1',
+    4:'hall-four-machines.webp?v=1'
+  };
   const orders = [
     {id:'A12',customer:'Veltraxis Mobility',part:'Wellenflansch A12',material:'1.4301 Edelstahl',kg:72,qty:50,reward:8400,duration:48,deadlineHours:7},
     {id:'B07',customer:'Orionis Fluidics',part:'Ventilgehäuse B07',material:'1.4404 Edelstahl',kg:96,qty:40,reward:11200,duration:62,deadlineHours:9},
@@ -218,6 +224,11 @@
   }
   function render(){
     const m=selectedMachine(),o=job(m),pct=Math.max(0,Math.min(100,m.progress));
+    const hallImage=$('hall-image'),hallCount=String(state.machines.length);
+    if(hallImage.dataset.hallCount!==hallCount){
+      hallImage.src=hallArtwork[state.machines.length];
+      hallImage.dataset.hallCount=hallCount;
+    }
     $('money').textContent=euro(state.money);
     $('material').textContent=Math.floor(state.material)+' kg';
     $('parts').textContent=`${state.machines.length} / 4`;
@@ -252,7 +263,10 @@
       b.setAttribute('aria-label',machine?`${catalog[machine.type].name}, Platz ${bay} ansehen`:`Freier Stellplatz ${bay}, Maschinen kaufen`);
       b.title=machine?statusFor(machine):'Maschine kaufen';
     }
-    if(visual)visual.running=operating(m);
+    if(visual){
+      visual.running=operating(m);
+      visual.setMachineType(m.type);
+    }
   }
   function startOrder(id){
     const o=orders.find(x=>x.id===id),m=selectedMachine();
@@ -383,12 +397,16 @@
   renderOrders();renderBusiness();render();
   class FactoryScene extends (typeof Phaser==='undefined'?class{}:Phaser.Scene) {
     constructor(){super('factory');this.running=false;this.elapsed=0;}
-    preload(){this.load.image('nexora','cell-nexora.jpg?v=c523bfea');}
+    preload(){
+      this.load.image('machine-standard','cell-nexora.jpg?v=c523bfea');
+      this.load.image('machine-rapid','cell-nexora-nx420.webp?v=1');
+      this.load.image('machine-premium','cell-aurex-at600.webp?v=1');
+    }
     create(){
       visual=this;
       const base=this.add.graphics();
       base.fillGradientStyle(0x253943,0x253943,0x101e29,0x101e29).fillRect(0,0,1000,800);
-      this.add.image(500,400,'nexora').setDisplaySize(1000,836);
+      this.machineImage=this.add.image(500,400,'machine-standard').setDisplaySize(1000,836);
       this.spindle=this.add.graphics().setBlendMode(Phaser.BlendModes.ADD);
       this.sparks=Array.from({length:20},()=>{
         const p=this.add.circle(440,385,Phaser.Math.FloatBetween(.8,2.3),0x9cefff,0).setBlendMode(Phaser.BlendModes.ADD);
@@ -396,6 +414,10 @@
       });
       this.tower=this.add.circle(199,45,8,0x6cff98,.12).setBlendMode(Phaser.BlendModes.ADD);
       render();
+    }
+    setMachineType(type){
+      const key='machine-'+type;
+      if(this.machineImage.texture.key!==key)this.machineImage.setTexture(key);
     }
     update(_time,delta){
       const dt=Math.min(delta/1000,.2);this.elapsed+=dt;this.spindle.clear();
