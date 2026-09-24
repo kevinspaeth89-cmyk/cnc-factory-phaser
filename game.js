@@ -234,6 +234,16 @@
     $('hall-preview-meta').textContent=`${catalog[machine.type].kind} · Level ${machine.level} · ${statusFor(machine)}`;
     $('hall-preview-job').textContent=order?`${order.part} · ${Math.floor(machine.progress)} %`:'Kein laufender Auftrag';
     $('hall-preview-condition').textContent=`Werkzeug ${Math.round(machine.tool)} % · Wartung ${Math.round(machine.maintenance)} %`;
+    const slot=expansionSystem.getBayLayout(state).find(item=>item.bay===machine.bay);
+    const hall=$('hall-map'),width=hall.clientWidth,height=hall.clientHeight;
+    if(!slot||!width||!height)return;
+    const panelWidth=panel.offsetWidth,panelHeight=panel.offsetHeight;
+    const center=(slot.x+slot.width/2)*width/100;
+    const left=Math.max(6,Math.min(center-panelWidth/2,width-panelWidth-6));
+    const above=slot.y*height/100-panelHeight-8;
+    const top=Math.max(6,Math.min(above,height-panelHeight-6));
+    panel.style.left=Math.round(left)+'px';
+    panel.style.top=Math.round(top)+'px';
   }
   function tapHallBay(bay){
     if(!machineAt(bay)){
@@ -679,6 +689,7 @@
   });
   $('hall-preview-open').addEventListener('click',()=>{if(hallPreviewBay!==null)showMachine(hallPreviewBay);});
   $('hall-preview-close').addEventListener('click',()=>{hallPreviewBay=null;renderHallPreview();});
+  window.addEventListener('resize',renderHallPreview);
   $('back-to-hall').addEventListener('click',showHall);
   $('hud-job-button').addEventListener('click',()=>state.machines.length?tab('orders'):tab('business'));
   $('hud-service-button').addEventListener('click',()=>tab('machine'));
