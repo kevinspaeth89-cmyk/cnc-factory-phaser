@@ -1,25 +1,11 @@
-# CNC Factory – Phaser/Web
+# CNC Factory
 
-Dieser Repository-Zweig enthält ausschließlich die Browser-/Handy-Version von **CNC Factory** auf Basis von Phaser 3.
+Spielbare Browser- und Android-Version mit einer Nexora NX-350 Maschinenzelle. Das eigenständige Godot-Projekt liegt in einem anderen Repository.
 
-## Trennung der Projekte
+## Spielen
 
-- `cnc-factory-phaser`: Phaser/Web
-- `cnc-factory-godot`: Godot/PC
+Die [GitHub-Pages-Version](https://kevinspaeth89-cmyk.github.io/cnc-factory-phaser/) im Browser öffnen. Einen Auftrag in der Auftragsbörse starten; die Maschine produziert automatisch. Im Reiter **Maschine** lassen sich Rohmaterial kaufen, Werkzeug wechseln, Wartung durchführen und Upgrades erwerben. Unten stehen Pause sowie 1×/2×/5×/10× zur Verfügung. Der Spielstand wird lokal im Browser gespeichert.
 
-Die beiden Projekte werden getrennt weiterentwickelt. Inhalte werden nur bewusst zwischen den Zweigen übernommen.
+## Entwicklung
 
-## Aktueller Stand
-
-- Single-Machine-Vertical-Slice
-- hochwertige CNC-Maschinenzelle als Sprite
-- Auftragsauswahl
-- Materialverbrauch
-- Produktionsfortschritt
-- Geld / Auszahlung
-- Werkzeug- und Wartungsverschleiß
-- Maschinenupgrade
-- 1× / 2× / 5× / 10× Geschwindigkeit
-- lokaler Spielstand im Browser
-
-Startdatei: `index.html`
+`index.html` enthält die adaptive Bedienoberfläche. `game.js` enthält Spielstand, Ökonomie und Phaser-Szene. `cell-nexora.jpg` zeigt die fiktionale Maschinenzelle. Eine lokale Vorschau lässt sich mit `python3 -m http.server` starten.
