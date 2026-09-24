@@ -13,7 +13,8 @@
   const economySystem = globalThis.CNCModules && globalThis.CNCModules.economy;
   const inventorySystem = globalThis.CNCModules && globalThis.CNCModules.inventory;
   const orderMarketSystem = globalThis.CNCModules && globalThis.CNCModules.orderMarket;
-  if (!economySystem || !inventorySystem || !orderMarketSystem) throw new Error('CNC Factory game systems failed to load.');
+  const breakdownSystem = globalThis.CNCModules && globalThis.CNCModules.breakdowns;
+  if (!economySystem || !inventorySystem || !orderMarketSystem || !breakdownSystem) throw new Error('CNC Factory game systems failed to load.');
   const catalog = {
     standard: {name:'Nexora NX-350',kind:'Drehen',price:6500,rate:1},
     rapid: {name:'Nexora NX-420',kind:'Drehen',price:9000,rate:1.25},
@@ -112,6 +113,7 @@
     if(!result.ok)throw new Error('CNC Factory save state could not be migrated.');
     syncMaterialMirror();
     orderMarketSystem.init(state);
+    breakdownSystem.init(state);
     economySystem.setTime(state,START+state.gameMinutes*60000);
   }
   ensureEconomyState();
@@ -190,8 +192,9 @@
     const d=dateAt(state.gameMinutes),day=['So','Mo','Di','Mi','Do','Fr','Sa'][d.getUTCDay()];
     return `${day} ${String(d.getUTCHours()).padStart(2,'0')}:${String(d.getUTCMinutes()).padStart(2,'0')}`;
   };
-  const operating=m=>!!job(m)&&!state.paused&&!!shiftAt(state.gameMinutes)&&
+  const readyToRun=m=>!!job(m)&&!state.paused&&!!shiftAt(state.gameMinutes)&&
     !!m['operator'+shiftAt(state.gameMinutes)]&&m.tool>=1&&m.maintenance>=8;
+  const operating=m=>readyToRun(m)&&breakdownSystem.canContinueProduction(state,m.bay);
   let visual=null, currentPanel=null, messageTimer, zoomTimer, phaserGame=null;
   function say(message){
     $('message').textContent=message;
@@ -201,6 +204,11 @@
   function statusFor(m){
     if(!m)return 'Freier Stellplatz';
     if(state.paused)return 'Pausiert';
+    const fault=breakdownSystem.getRecord(state,m.bay);
+    if(fault?.status==='major_failure')return 'Schwerer Maschinenschaden';
+    if(fault?.status==='repairing')return `Reparatur · ${formatMinutes(fault.repairRemainingMinutes)}`;
+    if(fault?.status==='warning'&&!fault.riskyContinue&&!fault.scheduledRepair)return 'Störung · Entscheidung nötig';
+    if(fault?.status==='warning')return fault.scheduledRepair?'Reparatur vorgemerkt':'Riskanter Betrieb';
     if(m.maintenance<8)return 'Wartung fällig';
     if(m.tool<1)return 'Werkzeug verschlissen';
     if(!job(m))return 'Bereit';
@@ -343,6 +351,13 @@
   }
   function render(){
     const m=selectedMachine(),o=job(m),pct=m?Math.max(0,Math.min(100,m.progress)):0;
+    const fault=m?breakdownSystem.getRecord(state,m.bay):null;
+    const faultInfo=fault?.fault?breakdownSystem.getFaultInfo(fault.fault):null;
+    $('breakdown-panel').hidden=!fault||!['warning','major_failure','repairing'].includes(fault.status);
+    $('breakdown-info').textContent=!faultInfo?'':`${faultInfo.label} · ${statusFor(m)}. ${fault.status==='major_failure'?'Produktion gestoppt.':fault.status==='warning'?'Reparieren, riskant weiterproduzieren oder Wartung nach dem Auftrag einplanen.':''}`;
+    $('repair-now').disabled=!faultInfo||!['warning','major_failure'].includes(fault.status);
+    $('continue-risky').disabled=fault?.status!=='warning'||fault.riskyContinue||fault.scheduledRepair;
+    $('schedule-repair').disabled=!faultInfo||!['warning','major_failure'].includes(fault.status)||fault.scheduledRepair;
     const hallImage=$('hall-image');
     if(hallImage.getAttribute('src')!==hallBaseArtwork)hallImage.src=hallBaseArtwork;
     $('money').textContent=euro(state.money);
@@ -392,7 +407,7 @@
       b.classList.toggle('installed',!!machine);
       b.classList.toggle('selected-bay',!!m&&bay===m.bay);
       b.classList.toggle('working-bay',!!machine&&operating(machine));
-      b.classList.toggle('warning-bay',!!machine&&(machine.maintenance<8||machine.tool<1));
+      b.classList.toggle('warning-bay',!!machine&&(machine.maintenance<8||machine.tool<1||breakdownSystem.getStatus(state,bay)!=='ok'));
       b.classList.toggle('waiting-bay',!!machine&&!!job(machine)&&!operating(machine)&&machine.maintenance>=8&&machine.tool>=1);
       const milling=!!machine&&catalog[machine.type].kind==='Fräsen';
       const turning=!!machine&&catalog[machine.type].kind==='Drehen';
@@ -465,6 +480,7 @@
     if(!c||!bay||state.money<c.price)return;
     if(!book('machine_purchase',-c.price,`${c.name} gekauft`,{type,bay}).ok)return;
     state.machines.push(freshMachine(bay,type));
+    breakdownSystem.init(state);
     selectBay(bay);renderBusiness();save();
     say(`${c.name} auf Platz ${bay} gekauft. Bediener zuweisen.`);
   }
@@ -475,6 +491,7 @@
     const name=catalog[m.type].name,value=resaleValue(m),oldBay=m.bay;
     if(!book('machine_sale',value,`${name} verkauft`,{type:m.type,bay:oldBay}).ok)return;
     state.machines=state.machines.filter(x=>x!==m);
+    breakdownSystem.init(state);
     const nearest=state.machines.slice().sort((a,b)=>Math.abs(a.bay-oldBay)-Math.abs(b.bay-oldBay)||a.bay-b.bay)[0];
     state.selectedBay=nearest?nearest.bay:null;
     showHall();save();renderOrders();renderBusiness();render();
@@ -516,6 +533,8 @@
         book('storage',-storageCharge,'Lagerkosten',{gameDate:dateKey},`daily:storage:${dateKey}`);
         state.storagePaid+=storageCharge;
       }
+      const faultEvents=breakdownSystem.tick(state,step,{operatingBays:state.machines.filter(readyToRun).map(m=>m.bay)});
+      for(const event of faultEvents)handleBreakdownEvent(event);
       for(const m of state.machines){
         const o=job(m);
         if(!o||!operating(m))continue;
@@ -559,6 +578,41 @@
     render();
     if(currentPanel==='orders')renderOrders();
     if(currentPanel==='business')renderCosts();
+  }
+  function handleBreakdownEvent(event){
+    if(!event)return;
+    if(event.cost>0&&['repair','repair_scheduled','major_failure'].includes(event.event)){
+      book('repairs',-event.cost,`Platz ${event.bay}: ${breakdownSystem.getFaultInfo(event.fault)?.label||'Reparatur'}`,{bay:event.bay,fault:event.fault,event:event.event});
+    }
+    if(event.event==='major_failure'&&event.scrapParts>0){
+      const machine=machineAt(event.bay),order=job(machine);
+      if(machine&&order){
+        // The raw stock was already reserved at acceptance. Scrap consumes some
+        // of that reserved material and requires one replacement part.
+        machine.progress=Math.max(0,machine.progress-100*event.scrapParts/order.qty);
+        machine.produced=Math.min(machine.produced,Math.floor(order.qty*machine.progress/100));
+      }
+    }
+    if(event.event==='warning'||event.event==='major_failure'){
+      say(`Platz ${event.bay}: ${breakdownSystem.getFaultInfo(event.fault)?.label||'Maschinenstörung'}. Im Maschinenmenü entscheiden.`);
+    }else if(event.event==='repair_complete')say(`Platz ${event.bay}: Reparatur abgeschlossen.`);
+    save();
+  }
+  function chooseBreakdown(action){
+    const m=selectedMachine();if(!m)return;
+    const before=breakdownSystem.getRecord(state,m.bay);
+    const event=breakdownSystem[action](state,m.bay);
+    if(!event)return;
+    if(event.cost>0&&state.money<event.cost){
+      state.breakdowns.machines[String(m.bay)]=before;
+      say(`Für diese Reparatur fehlen ${euro(event.cost-state.money)}.`);
+      return;
+    }
+    handleBreakdownEvent(event);
+    render();renderBusiness();
+    if(event.event==='repair')say(`Platz ${m.bay}: Sofortreparatur beauftragt · ${euro(event.cost)}.`);
+    if(event.event==='repair_scheduled')say(`Platz ${m.bay}: Reparatur eingeplant · ${euro(event.cost)}.`);
+    if(event.event==='continue_risky')say(`Platz ${m.bay}: Produktion läuft mit erhöhtem Risiko weiter.`);
   }
   for(const name of ['orders','machine','business'])
     $(name+'-tab').addEventListener('click',()=>currentPanel===name?closeDrawer():tab(name));
@@ -605,6 +659,9 @@
     m.level++;save();render();say(`${catalog[m.type].name} verbessert.`);
   });
   $('sell-machine').addEventListener('click',sellMachine);
+  $('repair-now').addEventListener('click',()=>chooseBreakdown('repairNow'));
+  $('continue-risky').addEventListener('click',()=>chooseBreakdown('continueRisky'));
+  $('schedule-repair').addEventListener('click',()=>chooseBreakdown('scheduleRepair'));
   $('new-game').addEventListener('click',newGame);
   for(const shift of [1,2]){
     $('operator-'+shift).addEventListener('click',()=>toggleOperator(shift));
