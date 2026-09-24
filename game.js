@@ -127,7 +127,7 @@
   if(typeof Phaser==='undefined') {say('Spiel konnte nicht geladen werden. Bitte die Seite neu laden.');return;}
   class FactoryScene extends Phaser.Scene {
     constructor(){super('factory');this.running=false;this.elapsed=0;}
-    preload(){this.load.image('nexora','cell-nexora.jpg');}
+    preload(){this.load.image('nexora','cell-nexora.jpg?v=c523bfea');}
     create(){
       visual=this;
       const base=this.add.graphics();
