@@ -295,12 +295,15 @@
       b.classList.toggle('installed',!!machine);
       b.classList.toggle('selected-bay',bay===m.bay);
       b.classList.toggle('working-bay',!!machine&&operating(machine));
+      b.classList.toggle('warning-bay',!!machine&&(machine.maintenance<8||machine.tool<1));
+      b.classList.toggle('waiting-bay',!!machine&&!!job(machine)&&!operating(machine)&&machine.maintenance>=8&&machine.tool>=1);
       b.querySelector('span').textContent=machine?catalog[machine.type].name:`+ Platz ${bay}`;
       b.setAttribute('aria-label',machine?`${catalog[machine.type].name}, Platz ${bay} ansehen`:`Freier Stellplatz ${bay}, Maschinen kaufen`);
       b.title=machine?statusFor(machine):'Maschine kaufen';
     }
     if(visual){
       visual.running=operating(m);
+      visual.condition=(m.maintenance<8||m.tool<1)?'fault':operating(m)?'running':o?'waiting':'idle';
       visual.setMachineType(m.type);
     }
   }
@@ -464,7 +467,7 @@
   document.addEventListener('visibilitychange',()=>{if(document.hidden)save();});
   renderOrders();renderBusiness();render();
   class FactoryScene extends (typeof Phaser==='undefined'?class{}:Phaser.Scene) {
-    constructor(){super('factory');this.running=false;this.elapsed=0;}
+    constructor(){super('factory');this.running=false;this.condition='idle';this.elapsed=0;}
     preload(){
       this.load.image('machine-standard','cell-nexora.jpg?v=c523bfea');
       this.load.image('machine-rapid','cell-nexora-nx420.webp?v=1');
@@ -480,7 +483,9 @@
         const p=this.add.circle(440,385,Phaser.Math.FloatBetween(.8,2.3),0x9cefff,0).setBlendMode(Phaser.BlendModes.ADD);
         return {sprite:p,phase:Math.random()*Math.PI*2,radius:12+Math.random()*57,speed:1+Math.random()*2};
       });
-      this.tower=this.add.circle(199,45,8,0x6cff98,.12).setBlendMode(Phaser.BlendModes.ADD);
+      this.towerRed=this.add.circle(199,29,8,0xff5b62,.08).setBlendMode(Phaser.BlendModes.ADD);
+      this.towerAmber=this.add.circle(199,45,8,0xffc15b,.08).setBlendMode(Phaser.BlendModes.ADD);
+      this.towerGreen=this.add.circle(199,61,8,0x6cff98,.08).setBlendMode(Phaser.BlendModes.ADD);
 
       this.millGroup=this.add.container(0,0).setVisible(false);
       const millBody=this.add.graphics();
@@ -502,7 +507,10 @@
       this.millGlow=this.add.circle(470,446,28,0x7feaff,.15).setBlendMode(Phaser.BlendModes.ADD);
       this.millPanel=this.add.rectangle(746,300,72,205,0x15262e).setStrokeStyle(2,0x78939e,.8);
       this.millScreen=this.add.rectangle(746,250,52,70,0x2a7188).setStrokeStyle(2,0x8bd8e8,.7);
-      this.millGroup.add([this.millHead,this.millSpindle,this.millTool,this.millTable,this.millWorkpiece,this.millGlow,this.millPanel,this.millScreen]);
+      this.millTowerRed=this.add.circle(784,127,8,0xff5b62,.08).setBlendMode(Phaser.BlendModes.ADD);
+      this.millTowerAmber=this.add.circle(784,145,8,0xffc15b,.08).setBlendMode(Phaser.BlendModes.ADD);
+      this.millTowerGreen=this.add.circle(784,163,8,0x6cff98,.08).setBlendMode(Phaser.BlendModes.ADD);
+      this.millGroup.add([this.millHead,this.millSpindle,this.millTool,this.millTable,this.millWorkpiece,this.millGlow,this.millPanel,this.millScreen,this.millTowerRed,this.millTowerAmber,this.millTowerGreen]);
       this.millSparks=Array.from({length:18},()=>{
         const p=this.add.circle(470,448,Phaser.Math.FloatBetween(1,2.6),0xaeefff,0).setBlendMode(Phaser.BlendModes.ADD);
         this.millGroup.add(p);
@@ -531,7 +539,11 @@
         p.sprite.setPosition(445+Math.cos(t)*p.radius,390+Math.sin(t*.8)*p.radius*.46);
         p.sprite.setAlpha(!this.millGroup.visible&&on?.14+.6*Math.max(0,Math.sin(t*2)):0);
       });
-      this.tower.setAlpha(!this.millGroup.visible&&on?.18+.45*(.5+.5*Math.sin(this.elapsed*8)):.09);
+      const pulse=.45+.45*(.5+.5*Math.sin(this.elapsed*7));
+      const red=this.condition==='fault',amber=this.condition==='waiting'||this.condition==='idle',green=this.condition==='running';
+      this.towerRed.setAlpha(!this.millGroup.visible?(red?pulse:.07):0);
+      this.towerAmber.setAlpha(!this.millGroup.visible?(amber?pulse:.07):0);
+      this.towerGreen.setAlpha(!this.millGroup.visible?(green?pulse:.07):0);
       if(this.millGroup.visible){
         const travel=on?Math.sin(this.elapsed*1.35)*92:0;
         const headTravel=on?Math.sin(this.elapsed*.72)*26:0;
@@ -547,7 +559,10 @@
           p.sprite.setPosition(this.millGlow.x+Math.cos(t)*p.radius,448+Math.sin(t*.9)*p.radius*.42);
           p.sprite.setAlpha(on?.12+.7*Math.max(0,Math.sin(t*1.7)):0);
         });
-        this.millScreen.setFillStyle(on?0x39a8c2:0x2a7188,1);
+        this.millScreen.setFillStyle(on?0x39a8c2:this.condition==='fault'?0x7b2b31:this.condition==='waiting'?0x6f5428:0x2a7188,1);
+        this.millTowerRed.setAlpha(red?pulse:.07);
+        this.millTowerAmber.setAlpha(amber?pulse:.07);
+        this.millTowerGreen.setAlpha(green?pulse:.07);
       }
     }
   }
