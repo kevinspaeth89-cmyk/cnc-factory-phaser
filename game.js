@@ -94,6 +94,13 @@
   const compatible=(m,o)=>!!m&&!!o&&catalog[m.type].kind===o.kind;
   const upgradeInvestment=m=>9000*((m.level-1)*m.level/2);
   const resaleValue=m=>Math.round(catalog[m.type].price*SELL_BASE_RATE+upgradeInvestment(m)*SELL_UPGRADE_RATE);
+  const productionFactor=m=>catalog[m.type].rate*(1+(m.level-1)*.13)*Math.max(.65,m.maintenance/100*.75+.25);
+  const remainingMinutes=(m,o)=>o?Math.max(0,(100-m.progress)*o.duration*6/(100*productionFactor(m))):0;
+  const formatMinutes=min=>{
+    min=Math.max(0,Math.ceil(min));
+    const hours=Math.floor(min/60),mins=min%60;
+    return hours?(hours+' h '+mins+' min'):(mins+' min');
+  };
   const dateAt=min=>new Date(START+Math.floor(min)*60000);
   const shiftAt=min=>{
     const d=dateAt(min),day=d.getUTCDay(),hour=d.getUTCHours();
@@ -262,6 +269,21 @@
     $('tool-meter').style.width=Math.max(0,m.tool)+'%';
     $('maintenance-label').textContent=Math.round(m.maintenance)+' %';
     $('maintenance-meter').style.width=Math.max(0,m.maintenance)+'%';
+
+    const hudOrder=o?(o.part+' · #'+o.id):'Kein Auftrag';
+    const deadlineLeft=o&&m.deadlineAt!==null?m.deadlineAt-state.gameMinutes:null;
+    $('hud-machine').textContent=catalog[m.type].name+' · Platz '+m.bay+' · Level '+m.level;
+    $('hud-state').textContent=statusFor(m);
+    $('hud-state').className='hud-state '+(operating(m)?'ok':o?'wait':'idle');
+    $('hud-order').textContent=hudOrder;
+    $('hud-parts').textContent=o?(m.produced+' / '+o.qty):'—';
+    $('hud-time').textContent=o?formatMinutes(remainingMinutes(m,o)):'—';
+    $('hud-deadline').textContent=deadlineLeft===null?'—':deadlineLeft<0?(formatMinutes(-deadlineLeft)+' überfällig'):formatMinutes(deadlineLeft);
+    $('hud-tool').textContent=Math.round(m.tool)+' %';
+    $('hud-maintenance').textContent=Math.round(m.maintenance)+' %';
+    $('hud-operators').textContent='S1 '+(m.operator1?'✓':'–')+' · S2 '+(m.operator2?'✓':'–');
+    $('hud-job-button').textContent=o?'Aufträge ansehen':'Auftrag wählen';
+
     $('buy-material').disabled=state.money<MATERIAL_PRICE||state.material+100>state.capacity;
     $('change-tool').disabled=!!o||state.money<650||m.tool>=99;
     $('maintenance').disabled=!!o||state.money<1200||m.maintenance>=99;
@@ -350,7 +372,7 @@
         if(!o||!operating(m))continue;
         const power=14*.28*step/60;
         state.money-=power;state.energyPaid+=power;
-        const factor=catalog[m.type].rate*(1+(m.level-1)*.13)*Math.max(.65,m.maintenance/100*.75+.25);
+        const factor=productionFactor(m);
         const gain=100/o.duration*(step/6)*factor;
         m.progress=Math.min(100,m.progress+gain);
         m.produced=Math.min(o.qty,Math.floor(o.qty*m.progress/100));
@@ -388,6 +410,9 @@
     else{tab('business');say(`Platz ${bay} ist frei. Wähle eine Maschine im Betrieb.`);}
   });
   $('back-to-hall').addEventListener('click',showHall);
+  $('hud-job-button').addEventListener('click',()=>tab('orders'));
+  $('hud-service-button').addEventListener('click',()=>tab('machine'));
+  $('hud-staff-button').addEventListener('click',()=>tab('business'));
   $('order-machine').addEventListener('change',event=>selectBay(Number(event.target.value)));
   $('speed-toggle').addEventListener('click',()=>{
     const opening=$('speed-menu').hidden;
