@@ -131,15 +131,15 @@
     create(){
       visual=this;
       const base=this.add.graphics();
-      base.fillGradientStyle(0x253943,0x253943,0x101e29,0x101e29).fillRect(0,0,1000,650);
-      this.add.image(500,325,'nexora').setDisplaySize(1000,836);
+      base.fillGradientStyle(0x253943,0x253943,0x101e29,0x101e29).fillRect(0,0,1000,800);
+      this.add.image(500,400,'nexora').setDisplaySize(1000,836);
       // Rotating spindle glint and flying chips are anchored inside the real machine window.
       this.spindle=this.add.graphics().setBlendMode(Phaser.BlendModes.ADD);
       this.sparks=Array.from({length:20},()=>{
-        const p=this.add.circle(440,310,Phaser.Math.FloatBetween(.8,2.3),0x9cefff,0).setBlendMode(Phaser.BlendModes.ADD);
+        const p=this.add.circle(440,385,Phaser.Math.FloatBetween(.8,2.3),0x9cefff,0).setBlendMode(Phaser.BlendModes.ADD);
         return {sprite:p,phase:Math.random()*Math.PI*2,radius:12+Math.random()*57,speed:1+Math.random()*2};
       });
-      this.tower=this.add.circle(199,101,8,0x6cff98,.12).setBlendMode(Phaser.BlendModes.ADD);
+      this.tower=this.add.circle(199,45,8,0x6cff98,.12).setBlendMode(Phaser.BlendModes.ADD);
       render();
     }
     update(_time,delta){
@@ -148,18 +148,18 @@
       this.spindle.clear();
       const on=this.running;
       if(on){
-        this.spindle.lineStyle(3,0x97e6ff,.55).beginPath().arc(445,302,31,this.elapsed*9,this.elapsed*9+1.7).strokePath();
-        this.spindle.lineStyle(2,0xffffff,.32).beginPath().arc(445,302,22,-this.elapsed*13,-this.elapsed*13+1.25).strokePath();
+        this.spindle.lineStyle(3,0x97e6ff,.55).beginPath().arc(445,377,31,this.elapsed*9,this.elapsed*9+1.7).strokePath();
+        this.spindle.lineStyle(2,0xffffff,.32).beginPath().arc(445,377,22,-this.elapsed*13,-this.elapsed*13+1.25).strokePath();
       }
       this.sparks.forEach(p=>{
         const t=this.elapsed*p.speed*4+p.phase;
-        p.sprite.setPosition(445+Math.cos(t)*p.radius,315+Math.sin(t*.8)*p.radius*.46);
+        p.sprite.setPosition(445+Math.cos(t)*p.radius,390+Math.sin(t*.8)*p.radius*.46);
         p.sprite.setAlpha(on ? .14+.6*Math.max(0,Math.sin(t*2)) : 0);
       });
       this.tower.setAlpha(on ? .18+.45*(.5+.5*Math.sin(this.elapsed*8)) : .09);
     }
   }
-  new Phaser.Game({type:Phaser.AUTO,parent:'game',width:1000,height:650,backgroundColor:'#152a35',scale:{mode:Phaser.Scale.FIT,autoCenter:Phaser.Scale.CENTER_BOTH},render:{antialias:true,pixelArt:false},scene:[FactoryScene]});
+  new Phaser.Game({type:Phaser.AUTO,parent:'game',width:1000,height:800,backgroundColor:'#152a35',scale:{mode:Phaser.Scale.ENVELOP,autoCenter:Phaser.Scale.CENTER_BOTH},render:{antialias:true,pixelArt:false},scene:[FactoryScene]});
   let previous=performance.now(),accumulator=0;
   function frame(now){
     accumulator+=Math.min((now-previous)/1000,.25);previous=now;
