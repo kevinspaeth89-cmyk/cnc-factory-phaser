@@ -7,6 +7,10 @@ assert.ok(html.indexOf('id="storage-stock"')<html.indexOf('id="buy-material"'));
 assert.ok(html.indexOf('id="warehouse-panel"')>html.indexOf('id="machine-shop"'));
 assert.ok(html.indexOf('id="buy-material"')<html.indexOf('id="storage-upgrade"'));
 assert.equal(ids.includes('material-type'),false);
+assert.ok(ids.includes('recruitment-panel'));
+assert.ok(ids.includes('applicant-list'));
+assert.equal(ids.includes('hire-1'),false);
+assert.equal(ids.includes('hire-2'),false);
 function boot(storage,options={}){
   const elements=new Map();
   class El {
@@ -43,7 +47,7 @@ function boot(storage,options={}){
   const document={getElementById:get,createElement:()=>new El(),querySelectorAll:()=>[],addEventListener(){}};
   let nextFrame=()=>{},saveInterval=()=>{};
   const windowEvents={};
-  const context={document,console,Date,Math,JSON,performance:{now:()=>0},requestAnimationFrame:fn=>nextFrame=fn,setTimeout:(fn,ms)=>{if(options.phaser&&ms===0)fn();return 1},clearTimeout(){},setInterval:fn=>saveInterval=fn,window:{matchMedia:()=>({matches:true}),confirm:()=>true,addEventListener:(type,fn)=>windowEvents[type]=fn},localStorage:{getItem:k=>storage[k]||null,setItem:(k,v)=>storage[k]=v,removeItem:k=>delete storage[k]},CNCModules:{economy:require(dir+'/systems/economy.js').economy,inventory:require(dir+'/systems/economy.js').inventory,orderMarket:require(dir+'/systems/orderMarket.js'),breakdowns:require(dir+'/systems/breakdowns.js'),factoryExpansion:require(dir+'/factory-expansion.js'),materials:require(dir+'/systems/materials.js')}};
+  const context={document,console,Date,Math,JSON,performance:{now:()=>0},requestAnimationFrame:fn=>nextFrame=fn,setTimeout:(fn,ms)=>{if(options.phaser&&ms===0)fn();return 1},clearTimeout(){},setInterval:fn=>saveInterval=fn,window:{matchMedia:()=>({matches:true}),confirm:()=>true,addEventListener:(type,fn)=>windowEvents[type]=fn},localStorage:{getItem:k=>storage[k]||null,setItem:(k,v)=>storage[k]=v,removeItem:k=>delete storage[k]},CNCModules:{economy:require(dir+'/systems/economy.js').economy,inventory:require(dir+'/systems/economy.js').inventory,orderMarket:require(dir+'/systems/orderMarket.js'),breakdowns:require(dir+'/systems/breakdowns.js'),factoryExpansion:require(dir+'/factory-expansion.js'),materials:require(dir+'/systems/materials.js'),recruitment:require(dir+'/systems/recruitment.js')}};
   if(options.phaser)context.Phaser={Scene:class{},Game:class{},AUTO:0,Scale:{FIT:0,CENTER_BOTH:0}};
   context.globalThis=context;context.window.cncFactory=null;
   vm.runInNewContext(fs.readFileSync(dir+'/game.js','utf8'),context,{filename:'game.js'});
@@ -427,3 +431,60 @@ assert.match(artwork.get('bay-3').querySelector('.bay-machine').src,/orionis-om6
 artwork.get('sell-machine').click();
 assert.equal(artwork.get('bay-1').classList.contains('veltron-bay'),false);
 assert.equal(artwork.get('bay-3').classList.contains('veltron-bay'),false);
+
+const recruitStorage={};
+let recruiting=boot(recruitStorage);
+assert.equal(recruiting.state().staffRoster.shift1.length,0);
+assert.equal(recruiting.state().recruitment.applicants.length,3);
+recruiting.get('business-tab').click();
+recruiting.get('open-recruitment').click();
+assert.equal(recruiting.get('recruitment-panel').hidden,false);
+assert.equal(recruiting.get('business-panel').hidden,true);
+assert.equal(recruiting.get('drawer-title').textContent,'Bewerberbörse');
+assert.equal(recruiting.get('applicant-list').children.length,3);
+assert.match(recruiting.get('applicant-list').children[0].children[0].children[1].children[0].textContent,/[A-Z][a-z]+ [A-Z][a-z]+/);
+assert.equal(recruiting.get('applicant-list').children[0].children[2].children.length,4);
+const firstApplicant=recruiting.state().recruitment.applicants[0];
+const firstHireButton=recruiting.get('applicant-list').children[0].children[3].children[0];
+firstHireButton.click();
+firstHireButton.click();
+let recruited=recruiting.state();
+assert.equal(recruited.money,13850);
+assert.equal(recruited.staff.shift1,1);
+assert.equal(recruited.staffRoster.shift1[0].name,firstApplicant.name);
+assert.equal(recruited.staffRoster.shift1[0].profileVersion,1);
+assert.equal(recruited.staffRoster.shift1[0].assignedBay,null);
+assert.equal(recruited.recruitment.applicants.length,3);
+assert.equal(recruited.recruitment.applicants.some(candidate=>candidate.id===firstApplicant.id),false);
+assert.equal(recruited.finance.transactions.filter(entry=>entry.meta?.setupFee).length,1);
+assert.equal(recruited.finance.transactions.filter(entry=>entry.meta?.setupFee)[0].amount,-150);
+assert.equal(recruiting.get('applicant-list').children[0].children[3].children[1].title,'Schicht 2: 26 € pro Stunde');
+recruiting.get('recruitment-back').click();
+assert.equal(recruiting.get('business-panel').hidden,false);
+assert.match(recruiting.get('staff-development').children[0].children[0].textContent,new RegExp(firstApplicant.name));
+const secondApplicant=recruited.recruitment.applicants[0];
+recruiting.get('open-recruitment').click();
+recruiting.get('applicant-list').children[0].children[3].children[1].click();
+recruited=recruiting.state();
+assert.equal(recruited.money,13700);
+assert.equal(recruited.staff.shift2,1);
+assert.equal(recruited.staffRoster.shift2[0].name,secondApplicant.name);
+assert.equal(recruited.finance.transactions.filter(entry=>entry.meta?.setupFee).length,2);
+recruiting=boot({cnc_factory_save_v3:JSON.stringify(recruited)});
+assert.equal(recruiting.state().staffRoster.shift1[0].name,firstApplicant.name);
+assert.equal(recruiting.state().staffRoster.shift1[0].profileVersion,1);
+assert.deepEqual(recruiting.state().recruitment.applicants,recruited.recruitment.applicants);
+
+const oldRoster=boot({cnc_factory_save_v3:JSON.stringify({
+  money:5000,material:0,capacity:300,staff:{shift1:1,shift2:0},staffRoster:{nextId:2,shift1:[{id:1,xp:640,trained:1,assignedBay:null}],shift2:[]},
+  machines:[],selectedBay:null,gameMinutes:0,speed:1,paused:false
+})});
+const migratedEmployee=oldRoster.state().staffRoster.shift1[0];
+assert.equal(migratedEmployee.profileVersion,0);
+assert.ok(migratedEmployee.name);
+assert.equal(migratedEmployee.xp,640);
+assert.equal(migratedEmployee.trained,1);
+const oldRosterReload=boot({cnc_factory_save_v3:JSON.stringify(oldRoster.state())});
+assert.equal(oldRosterReload.state().staffRoster.shift1[0].name,migratedEmployee.name);
+assert.equal(oldRosterReload.state().staffRoster.shift1[0].trained,1);
+console.log('Recruitment: profiles, shift hiring, finance booking, refills and old-save migration OK');

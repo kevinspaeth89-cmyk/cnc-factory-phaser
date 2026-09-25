@@ -19,7 +19,8 @@
   const breakdownSystem = globalThis.CNCModules && globalThis.CNCModules.breakdowns;
   const expansionSystem = globalThis.CNCModules && globalThis.CNCModules.factoryExpansion;
   const materialSystem = globalThis.CNCModules && globalThis.CNCModules.materials;
-  if (!economySystem || !inventorySystem || !orderMarketSystem || !breakdownSystem || !expansionSystem || !materialSystem) throw new Error('CNC Factory game systems failed to load.');
+  const recruitmentSystem = globalThis.CNCModules && globalThis.CNCModules.recruitment;
+  if (!economySystem || !inventorySystem || !orderMarketSystem || !breakdownSystem || !expansionSystem || !materialSystem || !recruitmentSystem) throw new Error('CNC Factory game systems failed to load.');
   const catalog = {
     standard: {name:'Nexora NX-350',kind:'Drehen',price:6500,rate:1},
     rapid: {name:'Nexora NX-420',kind:'Drehen',price:9000,rate:1.25},
@@ -48,7 +49,8 @@
   const defaults = () => ({
     money:14000,material:0,capacity:300,staff:{shift1:0,shift2:0},
     machines:[],selectedBay:null,speed:1,paused:false,gameMinutes:0,completed:0,
-    payrollDue:0,wagesPaid:0,storagePaid:0,energyPaid:0,selected:null,selectedMaterialType:'c45'
+    payrollDue:0,wagesPaid:0,storagePaid:0,energyPaid:0,selected:null,selectedMaterialType:'c45',
+    recruitment:{applicants:[],nextId:1}
   });
   let state=defaults();
   function validMachine(m) {
@@ -136,14 +138,12 @@
         if(roster[key].length>=count)break;
         if(!Number.isInteger(entry?.id)||entry.id<1||used.has(entry.id))continue;
         used.add(entry.id);
-        roster[key].push({id:entry.id,xp:Number.isFinite(entry.xp)?Math.max(0,entry.xp):0,
-          trained:Number.isInteger(entry.trained)?Math.max(0,Math.min(3,entry.trained)):0,
-          assignedBay:Number.isInteger(entry.assignedBay)?entry.assignedBay:null});
+        roster[key].push(recruitmentSystem.normalizeEmployee(entry,entry.id));
       }
       for(let i=roster[key].length;i<count;i++){
         while(used.has(roster.nextId))roster.nextId++;
         used.add(roster.nextId);
-        roster[key].push({id:roster.nextId++,xp:0,trained:0,assignedBay:null});
+        roster[key].push(recruitmentSystem.normalizeEmployee(null,roster.nextId++));
       }
       for(const employee of roster[key]){
         if(!state.machines.some(m=>m.bay===employee.assignedBay&&m['operator'+shift]))employee.assignedBay=null;
@@ -172,6 +172,7 @@
     breakdownSystem.init(state);
     expansionSystem.init(state);
     ensureStaffRoster();
+    recruitmentSystem.ensureState(state);
     economySystem.setTime(state,START+state.gameMinutes*60000);
   }
   ensureEconomyState();
@@ -214,8 +215,11 @@
   const resaleValue=m=>m?Math.round(catalog[m.type].price*SELL_BASE_RATE+upgradeInvestment(m)*SELL_UPGRADE_RATE+(m.loadingRobot?LOADING_ROBOT_COST*.4:0)):0;
   const skillLevel=employee=>employee?Math.min(3,Math.max(employee.trained,employee.xp>=1500?3:employee.xp>=600?2:employee.xp>=180?1:0)):0;
   const assignedEmployee=(m,shift)=>state.staffRoster['shift'+shift].find(employee=>employee.assignedBay===m.bay);
-  const productionFactor=m=>catalog[m.type].rate*(1+(m.level-1)*.13)*Math.max(.65,m.maintenance/100*.75+.25)*
-    (1+.05*skillLevel(assignedEmployee(m,shiftAt(state.gameMinutes)||1)));
+  const productionFactor=m=>{
+    const employee=assignedEmployee(m,shiftAt(state.gameMinutes)||1);
+    return catalog[m.type].rate*(1+(m.level-1)*.13)*Math.max(.65,m.maintenance/100*.75+.25)*
+      (1+.05*skillLevel(employee))*recruitmentSystem.productionMultiplier(employee,catalog[m.type].kind);
+  };
   const remainingMinutes=(m,o)=>o?Math.max(0,(100-m.progress)*o.duration*6/(100*productionFactor(m))):0;
   const formatMinutes=min=>{
     min=Math.max(0,Math.ceil(min));
@@ -263,8 +267,9 @@
     currentPanel=name;
     $('drawer').hidden=false;
     $('scrim').hidden=false;
-    $('drawer-title').textContent={orders:'Aufträge',machine:'Maschine',business:'Betrieb',warehouse:'Materiallager'}[name];
+    $('drawer-title').textContent={orders:'Aufträge',machine:'Maschine',business:'Betrieb',recruitment:'Bewerberbörse',warehouse:'Materiallager'}[name];
     $('warehouse-panel').hidden=name!=='warehouse';
+    $('recruitment-panel').hidden=name!=='recruitment';
     $('warehouse-door').setAttribute('aria-expanded',String(name==='warehouse'));
     for(const panel of ['orders','machine','business']){
       $(panel+'-panel').hidden=name!==panel;
@@ -273,7 +278,7 @@
     }
     $('speed-menu').hidden=true;
     $('speed-toggle').setAttribute('aria-expanded','false');
-    renderOrders();
+    renderOrders();renderRecruitment();
     renderBusiness();
   }
   function closeDrawer(){
@@ -460,12 +465,52 @@
       const row=document.createElement('div'),label=document.createElement('span'),button=document.createElement('button');
       const level=skillLevel(employee),cost=TRAINING_BASE_COST*(level+1);
       row.className='staff-development-row';
-      label.textContent=`S${shift} · Bediener #${employee.id} · ${employee.assignedBay?'Platz '+employee.assignedBay:'frei'} · Können ${level}/3 · ${Math.floor(employee.xp)} min Erfahrung`;
+      const profile=employee.profileVersion===1?employee.specialty:'Altbestand';
+      label.textContent=`S${shift} · ${employee.name} · ${profile} · ${employee.assignedBay?'Platz '+employee.assignedBay:'frei'} · Können ${level}/3`;
+      label.title=employee.about||`${Math.floor(employee.xp)} min Erfahrung`;
       button.type='button';button.textContent=level===3?'Maximal':`Schulen ${euro(cost)}`;
       button.disabled=level===3||state.money<cost;
       button.addEventListener('click',()=>trainEmployee(shift,employee.id));
       row.append(label,button);return row;
     })));
+  }
+  function renderRecruitment(){
+    const offers=state.recruitment?.applicants||[];
+    const limit=expansionSystem.getUnlockedBays(state);
+    $('applicant-list').replaceChildren(...offers.map(candidate=>{
+      const card=document.createElement('article');card.className='applicant-card';
+      const head=document.createElement('div');head.className='applicant-head';
+      const avatar=document.createElement('span');avatar.className='applicant-avatar';
+      avatar.setAttribute('aria-hidden','true');
+      avatar.textContent=candidate.name.split(/\s+/).map(part=>part[0]||'').join('').slice(0,2).toUpperCase();
+      const identity=document.createElement('div');identity.className='applicant-identity';
+      const name=document.createElement('strong');name.textContent=candidate.name;
+      const specialty=document.createElement('span');specialty.className='applicant-specialty';specialty.textContent=candidate.specialty;
+      identity.append(name,specialty);head.append(avatar,identity);
+      const about=document.createElement('p');about.className='applicant-about';about.textContent=`${candidate.trait} · ${candidate.about}`;
+      const stats=document.createElement('div');stats.className='applicant-stats';
+      for(const [key,label] of [['turning','Drehen'],['milling','Fräsen'],['precision','Präzision'],['learning','Lerntempo']]){
+        const stat=document.createElement('div');stat.className='applicant-stat';
+        const top=document.createElement('div');top.className='applicant-stat-head';
+        const statName=document.createElement('span');statName.textContent=label;
+        const value=document.createElement('b');value.textContent=`${candidate.skills[key]}/5`;
+        const track=document.createElement('div');track.className='applicant-track';
+        const fill=document.createElement('span');fill.style.width=`${candidate.skills[key]*20}%`;track.append(fill);
+        top.append(statName,value);stat.append(top,track);stats.append(stat);
+      }
+      const actions=document.createElement('div');actions.className='applicant-actions';
+      for(const shift of [1,2]){
+        const button=document.createElement('button');button.type='button';button.className='action';
+        const wage=shift===1?24:26;
+        button.textContent=`S${shift} einstellen · ${euro(HIRING_FEE)}`;
+        button.title=`Schicht ${shift}: ${wage} € pro Stunde`;
+        button.disabled=state.money<HIRING_FEE||state.staff[`shift${shift}`]>=limit;
+        button.addEventListener('click',()=>hireCandidate(candidate.id,shift));
+        actions.append(button);
+      }
+      card.append(head,about,stats,actions);return card;
+    }));
+    $('applicant-count').textContent=`${offers.length} Profile verfügbar · Einstellungsprämie ${euro(HIRING_FEE)} · Lohn je nach Schicht`;
   }
   function renderBusiness(){
     const m=selectedMachine();
@@ -476,8 +521,7 @@
     $('expand-factory').disabled=nextCost===null||state.money<nextCost;
     if(nextCost!==null)$('expand-factory').textContent=`Halle auf ${limit+2} Plätze erweitern · ${euro(nextCost)}`;
     renderCosts();
-    $('hire-1').disabled=state.money<HIRING_FEE||state.staff.shift1>=limit;
-    $('hire-2').disabled=state.money<HIRING_FEE||state.staff.shift2>=limit;
+    $('open-recruitment').textContent=`Bewerber ansehen · ${state.recruitment.applicants.length}`;
     for(const shift of [1,2]){
       const assigned=state.machines.filter(x=>x['operator'+shift]).length;
       $('fire-'+shift).disabled=state.staff['shift'+shift]<=assigned;
@@ -784,6 +828,23 @@
     renderBusiness();render();save();
     say(`Schicht ${shift}: Bediener ${m[key]?'zugewiesen':'abgezogen'}.`);
   }
+  function hireCandidate(applicantId,shift){
+    if(![1,2].includes(shift))return;
+    const candidate=state.recruitment.applicants.find(person=>person.id===applicantId);
+    const shiftKey=`shift${shift}`,limit=expansionSystem.getUnlockedBays(state);
+    if(!candidate||state.money<HIRING_FEE||state.staff[shiftKey]>=limit)return;
+    const employee=recruitmentSystem.createEmployee(candidate,state.staffRoster.nextId);
+    if(!employee||!book('other',-HIRING_FEE,`Bediener ${candidate.name} für Schicht ${shift} eingestellt`,{
+      employeeId:employee.id,applicantId,employeeName:candidate.name,shift,setupFee:true,skills:{...candidate.skills}
+    }).ok)return;
+    const hired=recruitmentSystem.takeApplicant(state,applicantId);
+    if(!hired)return;
+    state.staffRoster.nextId+=1;
+    state.staffRoster[shiftKey].push(employee);
+    state.staff[shiftKey]+=1;
+    save();renderBusiness();renderRecruitment();render();
+    say(`${candidate.name} beginnt in Schicht ${shift}.`);
+  }
   function buyRobot(){
     const m=selectedMachine();
     if(!m||m.loadingRobot||state.money<LOADING_ROBOT_COST)return;
@@ -798,9 +859,9 @@
     if(!employee)return;
     const level=skillLevel(employee),cost=TRAINING_BASE_COST*(level+1);
     if(level>=3||state.money<cost)return;
-    if(!book('other',-cost,`Schulung Bediener #${id}`,{employeeId:id,shift,skillLevel:level+1}).ok)return;
+    if(!book('other',-cost,`Schulung ${employee.name}`,{employeeId:id,employeeName:employee.name,shift,skillLevel:level+1}).ok)return;
     employee.trained=level+1;
-    save();renderBusiness();render();say(`Bediener #${id} erreicht Können ${skillLevel(employee)}/3.`);
+    save();renderBusiness();render();say(`${employee.name} erreicht Können ${skillLevel(employee)}/3.`);
   }
   function tick(dt){
     if(state.paused)return;
@@ -825,14 +886,14 @@
         const dateKey=gameDateKey();
         book('energy',-power,'Stromkosten laufende Maschinen',{gameDate:dateKey},`daily:energy:${dateKey}`);
         state.energyPaid+=power;
+        const employee=assignedEmployee(m,shift);
         const factor=productionFactor(m);
         const gain=100/o.duration*(step/6)*factor;
         m.progress=Math.min(100,m.progress+gain);
-        const employee=assignedEmployee(m,shift);
-        if(employee)employee.xp=Math.round((employee.xp+step)*1000)/1000;
+        if(employee)employee.xp=Math.round((employee.xp+step*recruitmentSystem.learningMultiplier(employee))*1000)/1000;
         m.produced=Math.min(o.qty,Math.floor(o.qty*m.progress/100));
         m.maintenance=Math.max(0,m.maintenance-gain*.12);
-        m.tool=Math.max(0,m.tool-gain*.18);
+        m.tool=Math.max(0,m.tool-gain*.18*recruitmentSystem.toolWearMultiplier(employee));
         if(m.progress>=100){
           const late=m.deadlineAt!==null&&state.gameMinutes+step>m.deadlineAt;
           const payout=late?Math.round(o.reward*.8):o.reward;
@@ -907,6 +968,8 @@
   }
   for(const name of ['orders','machine','business'])
     $(name+'-tab').addEventListener('click',()=>currentPanel===name?closeDrawer():tab(name));
+  $('open-recruitment').addEventListener('click',()=>tab('recruitment'));
+  $('recruitment-back').addEventListener('click',()=>tab('business'));
   $('close-drawer').addEventListener('click',closeDrawer);
   $('scrim').addEventListener('click',closeDrawer);
   for(let bay=5;bay<=8;bay++){
@@ -978,14 +1041,6 @@
   $('new-game').addEventListener('click',newGame);
   for(const shift of [1,2]){
     $('operator-'+shift).addEventListener('click',()=>toggleOperator(shift));
-    $('hire-'+shift).addEventListener('click',()=>{
-      if(state.money<HIRING_FEE||state.staff['shift'+shift]>=expansionSystem.getUnlockedBays(state))return;
-      if(!book('other',-HIRING_FEE,`Bediener Schicht ${shift} eingestellt`,{shift,setupFee:true}).ok)return;
-      state.staff['shift'+shift]++;
-      const roster=state.staffRoster;
-      roster['shift'+shift].push({id:roster.nextId++,xp:0,trained:0,assignedBay:null});
-      save();renderBusiness();render();say(`Bediener Schicht ${shift} eingestellt.`);
-    });
     $('fire-'+shift).addEventListener('click',()=>{
       if(state.staff['shift'+shift]<=state.machines.filter(m=>m['operator'+shift]).length)return;
       const roster=state.staffRoster['shift'+shift];
@@ -993,7 +1048,7 @@
       const index=roster.indexOf(free);
       if(index<0)return;
       roster.splice(index,1);
-      state.staff['shift'+shift]--;save();renderBusiness();render();say(`Freier Bediener Schicht ${shift} entlassen.`);
+      state.staff['shift'+shift]--;save();renderBusiness();render();say(`${free.name} aus Schicht ${shift} entlassen.`);
     });
   }
   $('storage-upgrade').addEventListener('click',()=>{
