@@ -459,6 +459,8 @@ assert.equal(recruited.recruitment.applicants.some(candidate=>candidate.id===fir
 assert.equal(recruited.finance.transactions.filter(entry=>entry.meta?.setupFee).length,1);
 assert.equal(recruited.finance.transactions.filter(entry=>entry.meta?.setupFee)[0].amount,-150);
 assert.equal(recruiting.get('applicant-list').children[0].children[3].children[1].title,'Schicht 2: 26 € pro Stunde');
+assert.equal(recruiting.get('applicant-list').children[0].children[3].children[1].children[0].textContent,'S2 einstellen');
+assert.equal(recruiting.get('applicant-list').children[0].children[3].children[1].children[1].textContent,'€ 150 einmalig · 26 €/h');
 recruiting.get('recruitment-back').click();
 assert.equal(recruiting.get('business-panel').hidden,false);
 assert.match(recruiting.get('staff-development').children[0].children[0].textContent,new RegExp(firstApplicant.name));

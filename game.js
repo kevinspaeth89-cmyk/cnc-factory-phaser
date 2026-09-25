@@ -502,7 +502,9 @@
       for(const shift of [1,2]){
         const button=document.createElement('button');button.type='button';button.className='action';
         const wage=shift===1?24:26;
-        button.textContent=`S${shift} einstellen · ${euro(HIRING_FEE)}`;
+        const actionLabel=document.createElement('span');actionLabel.textContent=`S${shift} einstellen`;
+        const costLabel=document.createElement('small');costLabel.textContent=`${euro(HIRING_FEE)} einmalig · ${wage} €/h`;
+        button.append(actionLabel,costLabel);
         button.title=`Schicht ${shift}: ${wage} € pro Stunde`;
         button.disabled=state.money<HIRING_FEE||state.staff[`shift${shift}`]>=limit;
         button.addEventListener('click',()=>hireCandidate(candidate.id,shift));
