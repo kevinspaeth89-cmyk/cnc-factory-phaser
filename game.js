@@ -6,6 +6,7 @@
   const SAVE_KEY = 'cnc_factory_save_v3';
   const START = Date.UTC(2026, 0, 5, 6);
   const HIRING_FEE = 150;
+  const TRAINING_BASE_COST = 900;
   const STORAGE_RATE = .08; // euros per kg and game day
   const STORAGE_UPGRADE = 4000;
   const SELL_BASE_RATE = .60;
@@ -39,7 +40,8 @@
   ];
   const freshMachine = (bay, type='standard') => ({
     bay,type,level:1,maintenance:90,tool:82,operator1:false,operator2:false,
-    activeId:null,activeOrder:null,activeOrderSource:null,progress:0,produced:0,deadlineAt:null
+    activeId:null,activeOrder:null,activeOrderSource:null,progress:0,produced:0,deadlineAt:null,
+    queuedOrder:null,queuedMaterial:null,queuedDeadlineAt:null
   });
   const defaults = () => ({
     money:14000,material:0,capacity:300,staff:{shift1:0,shift2:0},
@@ -91,6 +93,15 @@
       const legacyOrder=legacyOrders.find(order=>order.id===m.activeId);
       if(legacyOrder){m.activeOrder={...legacyOrder};m.activeOrderSource='legacy';}
     }
+    if(!m.queuedOrder||typeof m.queuedOrder.id!=='string'||m.queuedOrder.id===m.activeId||
+       m.queuedOrder.kind!==catalog[m.type]?.kind){
+      m.queuedOrder=null;m.queuedMaterial=null;m.queuedDeadlineAt=null;
+    }else if(!m.activeId){
+      m.activeId=m.queuedOrder.id;m.activeOrder=m.queuedOrder;m.activeOrderSource='market';
+      m.progress=0;m.produced=0;
+      m.deadlineAt=Number.isFinite(m.queuedDeadlineAt)?m.queuedDeadlineAt:state.gameMinutes+m.queuedOrder.deadlineHours*60;
+      m.queuedOrder=null;m.queuedMaterial=null;m.queuedDeadlineAt=null;
+    }
   });
   state.speed=[1,2,5,10].includes(state.speed)?state.speed:1;
   state.capacity=Math.max(300,Number(state.capacity)||300,Math.ceil(state.material));
@@ -102,6 +113,37 @@
     const key='operator'+shift,staffKey='shift'+shift;
     let assigned=0;
     state.machines.forEach(m=>{if(m[key]){if(assigned<state.staff[staffKey])assigned++;else m[key]=false;}});
+  }
+  function ensureStaffRoster(){
+    const old=state.staffRoster&&typeof state.staffRoster==='object'?state.staffRoster:{};
+    const roster={shift1:[],shift2:[],nextId:Number.isInteger(old.nextId)&&old.nextId>0?old.nextId:1},used=new Set();
+    for(const shift of [1,2]){
+      const key='shift'+shift,count=state.staff[key];
+      const saved=Array.isArray(old[key])?old[key]:[];
+      for(const entry of saved){
+        if(roster[key].length>=count)break;
+        if(!Number.isInteger(entry?.id)||entry.id<1||used.has(entry.id))continue;
+        used.add(entry.id);
+        roster[key].push({id:entry.id,xp:Number.isFinite(entry.xp)?Math.max(0,entry.xp):0,
+          trained:Number.isInteger(entry.trained)?Math.max(0,Math.min(3,entry.trained)):0,
+          assignedBay:Number.isInteger(entry.assignedBay)?entry.assignedBay:null});
+      }
+      for(let i=roster[key].length;i<count;i++){
+        while(used.has(roster.nextId))roster.nextId++;
+        used.add(roster.nextId);
+        roster[key].push({id:roster.nextId++,xp:0,trained:0,assignedBay:null});
+      }
+      for(const employee of roster[key]){
+        if(!state.machines.some(m=>m.bay===employee.assignedBay&&m['operator'+shift]))employee.assignedBay=null;
+      }
+      for(const m of state.machines.filter(m=>m['operator'+shift])){
+        if(roster[key].some(employee=>employee.assignedBay===m.bay))continue;
+        const free=roster[key].find(employee=>employee.assignedBay===null);
+        if(free)free.assignedBay=m.bay;else m['operator'+shift]=false;
+      }
+    }
+    roster.nextId=Math.max(roster.nextId,...[...used].map(id=>id+1));
+    state.staffRoster=roster;
   }
   function syncMaterialMirror(){
     const usage=inventorySystem.getUsage(state);
@@ -117,6 +159,7 @@
     orderMarketSystem.init(state);
     breakdownSystem.init(state);
     expansionSystem.init(state);
+    ensureStaffRoster();
     economySystem.setTime(state,START+state.gameMinutes*60000);
   }
   ensureEconomyState();
@@ -157,7 +200,10 @@
   const compatible=(m,o)=>!!m&&!!o&&catalog[m.type].kind===o.kind;
   const upgradeInvestment=m=>m?9000*((m.level-1)*m.level/2):0;
   const resaleValue=m=>m?Math.round(catalog[m.type].price*SELL_BASE_RATE+upgradeInvestment(m)*SELL_UPGRADE_RATE):0;
-  const productionFactor=m=>catalog[m.type].rate*(1+(m.level-1)*.13)*Math.max(.65,m.maintenance/100*.75+.25);
+  const skillLevel=employee=>employee?Math.min(3,Math.max(employee.trained,employee.xp>=1500?3:employee.xp>=600?2:employee.xp>=180?1:0)):0;
+  const assignedEmployee=(m,shift)=>state.staffRoster['shift'+shift].find(employee=>employee.assignedBay===m.bay);
+  const productionFactor=m=>catalog[m.type].rate*(1+(m.level-1)*.13)*Math.max(.65,m.maintenance/100*.75+.25)*
+    (1+.05*skillLevel(assignedEmployee(m,shiftAt(state.gameMinutes)||1)));
   const remainingMinutes=(m,o)=>o?Math.max(0,(100-m.progress)*o.duration*6/(100*productionFactor(m))):0;
   const formatMinutes=min=>{
     min=Math.max(0,Math.ceil(min));
@@ -291,6 +337,13 @@
     hallPreviewBay=null;renderHallPreview();
   }
   function renderOrders(){
+    $('customer-reputation').replaceChildren(...Object.entries(orderMarketSystem.getReputation(state)).map(([customer,score])=>{
+      const row=document.createElement('div'),name=document.createElement('span'),status=document.createElement('b');
+      row.className='reputation-row';name.textContent=customer;
+      const bonus=Math.round((score-50)*.3);
+      status.textContent=`Vertrauen ${score}/100 · ${bonus>=0?'+':''}${bonus} % für neue Angebote`;
+      row.append(name,status);return row;
+    }));
     const machineOptions=state.machines.map(m=>{
       const opt=document.createElement('option');
       opt.value=m.bay;opt.textContent=`Platz ${m.bay} · ${catalog[m.type].name} · ${catalog[m.type].kind}`;
@@ -305,6 +358,16 @@
     $('order-machine').replaceChildren(...machineOptions);
     $('order-machine').disabled=!state.machines.length;
     const offers=orderMarketSystem.getAvailable(state);
+    $('queued-orders').replaceChildren(...state.machines.filter(m=>m.queuedOrder).map(m=>{
+      const row=document.createElement('div'),title=document.createElement('span'),cancel=document.createElement('button');
+      row.className='queued-job';
+      title.textContent=`Platz ${m.bay}: Danach ${m.queuedOrder.part} · ${m.queuedOrder.qty} Teile · Frist ${formatMinutes(m.queuedDeadlineAt-state.gameMinutes)}`;
+      cancel.type='button';cancel.textContent='Vormerkung lösen';
+      const held=Object.values(m.queuedMaterial||{}).reduce((sum,amount)=>sum+amount,0);
+      cancel.disabled=state.material+held>state.capacity+1e-9;
+      cancel.addEventListener('click',()=>cancelQueuedOrder(m));
+      row.append(title,cancel);return row;
+    }));
     $('orders').replaceChildren(...offers.map(o=>{
       const m=selectedMachine(),card=document.createElement('article');
       const running=state.machines.find(x=>x.activeId===o.id),fits=compatible(m,o);
@@ -312,13 +375,13 @@
       const customerType=o.customerType?`${o.customerType} · `:'';
       const difficulty=Number.isFinite(o.difficulty)?` · Schwierigkeit ${o.difficulty}/5`:'';
       const remaining=Number.isFinite(o.expiresAt)?` · gültig noch ${formatMinutes(o.expiresAt-state.gameMinutes)}`:'';
-      card.innerHTML=`<div class="top"><span>${o.customer}</span><span>${o.kind} · #${o.id}</span></div><h3>${o.part}</h3><p>${customerType}${o.material} · ${o.qty} Teile${difficulty}</p><div class="values"><span>${o.kg} kg · Frist ${o.deadlineHours} h${remaining}</span><b>${euro(o.reward)}</b></div>`;
+      card.innerHTML=`<div class="top"><span>${o.customer}</span><span>${o.kind} · #${o.id}</span></div><h3>${o.part}</h3><p>${customerType}${o.material} · ${o.qty} Teile${difficulty}</p><div class="values"><span>${o.kg} kg · Frist ${o.deadlineHours} h${remaining}${o.reputationBonusPct?` · Kundenbonus ${o.reputationBonusPct>0?'+':''}${o.reputationBonusPct} %`:''}</span><b>${euro(o.reward)}</b></div>`;
       if(running){const p=document.createElement('p');p.textContent=`Läuft auf Platz ${running.bay} · ${running.produced}/${o.qty} Teile`;card.append(p);}
       const button=document.createElement('button');
       button.type='button';
       const shortage=Math.max(0,materialSystem.requiredKg(o)-materialSystem.available(state,o));
-      button.textContent=running?'Produktion läuft':!m?'Zuerst Maschine kaufen':!fits?`Benötigt ${o.kind}`:shortage>1e-9?`Fehlen ${Math.ceil(shortage)} kg ${o.material}`:`Auf Platz ${m.bay} annehmen`;
-      button.disabled=!m||!!running||!!job(m)||!fits||shortage>1e-9;
+      button.textContent=running?'Produktion läuft':!m?'Zuerst Maschine kaufen':!fits?`Benötigt ${o.kind}`:m.queuedOrder?'Warteschlange belegt':shortage>1e-9?`Fehlen ${Math.ceil(shortage)} kg ${o.material}`:job(m)?`Für Platz ${m.bay} vormerken`:`Auf Platz ${m.bay} annehmen`;
+      button.disabled=!m||!!running||!!m?.queuedOrder||!fits||shortage>1e-9;
       button.addEventListener('click',event=>{event.stopPropagation();startOrder(o.id);});
       card.append(button);
       card.addEventListener('click',()=>{state.selected=o.id;save();renderOrders();});
@@ -349,12 +412,38 @@
         return row;
       });
       $('material-market-board').replaceChildren(...rows);
+      const base=materialSystem.catalog[type].pricePer100Kg/100;
+      const history=[];
+      for(let index=Math.max(0,day-6);index<=day;index++){
+        const unit=materialSystem.pricePerKg(type,index*1440);
+        const row=document.createElement('div'),label=document.createElement('span');
+        const track=document.createElement('div'),fill=document.createElement('div'),value=document.createElement('span');
+        row.className='history-row'+(index===day?' current':'');
+        label.textContent=`Tag ${index+1}`;
+        track.className='history-track';fill.className='history-fill';
+        fill.style.width=Math.max(10,Math.min(100,Math.round((unit/base-.75)*200)))+'%';
+        track.append(fill);value.textContent=euroExact(unit)+'/kg';
+        row.append(label,track,value);history.push(row);
+      }
+      $('material-history').replaceChildren(...history);
       lastMarketBoardKey=boardKey;
     }
     const change=day?Math.round((materialSystem.marketMultiplier(type,state.gameMinutes)-materialSystem.marketMultiplier(type,(day-1)*1440))*100):0;
     $('material-market-info').textContent=unitPrice===null?'':`Gewählt: ${materialSystem.catalog[type].label} · Grundpreis ${euroExact(materialSystem.catalog[type].pricePer100Kg/100)}/kg · ${day?`heute ${change>=0?'+':''}${change} % zu gestern · `:''}neuer Kurs in ${formatMinutes(1440-state.gameMinutes%1440)}. Günstig: ab 8 % unter Grundpreis; teuer: ab 8 % darüber.`;
     $('material-price').textContent=price===null?'—':`+${quantity} kg · ${euroExact(price)}`;
     $('buy-material').disabled=price===null||state.money<price||state.material+quantity>state.capacity;
+  }
+  function renderStaffDevelopment(){
+    $('staff-development').replaceChildren(...[1,2].flatMap(shift=>state.staffRoster['shift'+shift].map(employee=>{
+      const row=document.createElement('div'),label=document.createElement('span'),button=document.createElement('button');
+      const level=skillLevel(employee),cost=TRAINING_BASE_COST*(level+1);
+      row.className='staff-development-row';
+      label.textContent=`S${shift} · Bediener #${employee.id} · ${employee.assignedBay?'Platz '+employee.assignedBay:'frei'} · Können ${level}/3 · ${Math.floor(employee.xp)} min Erfahrung`;
+      button.type='button';button.textContent=level===3?'Maximal':`Schulen ${euro(cost)}`;
+      button.disabled=level===3||state.money<cost;
+      button.addEventListener('click',()=>trainEmployee(shift,employee.id));
+      row.append(label,button);return row;
+    })));
   }
   function renderBusiness(){
     const m=selectedMachine();
@@ -372,6 +461,7 @@
       $('fire-'+shift).disabled=state.staff['shift'+shift]<=assigned;
       $('free-'+shift).textContent=`${state.staff['shift'+shift]-assigned} frei`;
     }
+    renderStaffDevelopment();
     $('storage-upgrade').disabled=state.money<STORAGE_UPGRADE;
     $('machine-shop').replaceChildren(...Object.entries(catalog).map(([type,c])=>{
       const card=document.createElement('article');
@@ -397,7 +487,7 @@
     $('operator-1').textContent=m?(m.operator1?'S1 abziehen':'S1 zuweisen'):'Keine Maschine';
     $('operator-2').textContent=m?(m.operator2?'S2 abziehen':'S2 zuweisen'):'Keine Maschine';
     $('sell-machine-value').textContent=m?euro(resaleValue(m)):'—';
-    $('sell-machine').disabled=!m||!!job(m);
+    $('sell-machine').disabled=!m||!!job(m)||!!m.queuedOrder;
     for(const shift of [1,2]){
       const assigned=state.machines.filter(x=>x['operator'+shift]).length;
       $('operator-'+shift).disabled=!m||(!m['operator'+shift]&&assigned>=state.staff['shift'+shift]);
@@ -416,6 +506,25 @@
     if(state.inventory.rawMaterial.legacy)stocks.push(`Altbestand (für alle Aufträge): ${Math.floor(state.inventory.rawMaterial.legacy)} kg`);
     $('storage-stock').textContent=stocks.join(' · ');
     renderMaterialPrice();
+    if(currentPanel==='business')renderFinance();
+  }
+  function renderFinance(){
+    const period=$('finance-period').value,now=dateAt(state.gameMinutes);
+    let at=now.getTime();
+    if(period==='yesterday')at-=86400000;
+    if(period==='last-month')at=Date.UTC(now.getUTCFullYear(),now.getUTCMonth()-1,15);
+    const summary=period==='month'||period==='last-month'
+      ?economySystem.getMonthlySummary(state,at):economySystem.getDailySummary(state,at);
+    $('finance-profit').textContent=`Gebuchter Gewinn: ${euroExact(summary.profit)}`;
+    const names={income:'Aufträge (Umsatz)',material:'Material',wages:'Bezahlte Löhne',energy:'Energie',tools:'Werkzeug',maintenance:'Wartung',repairs:'Reparaturen',storage:'Lager',machine_purchase:'Maschinenkauf',machine_sale:'Maschinenverkauf',factory_expansion:'Hallenausbau',other:'Sonstiges / Upgrades'};
+    $('finance-totals').replaceChildren(...Object.entries(names).filter(([key])=>
+      ['income','material','wages','energy','tools','maintenance','storage'].includes(key)||Math.abs(summary.categoryTotals[key])>1e-6
+    ).map(([key,label])=>{
+      const row=document.createElement('div'),name=document.createElement('span'),amount=document.createElement('b');
+      row.className='finance-line';name.textContent=label;
+      amount.textContent=euroExact(summary.categoryTotals[key]);row.append(name,amount);
+      return row;
+    }));
   }
   function render(){
     const m=selectedMachine(),o=job(m),pct=m?Math.max(0,Math.min(100,m.progress)):0;
@@ -473,7 +582,7 @@
     $('maintenance').disabled=!m||!!o||state.money<1200||m.maintenance>=99;
     $('upgrade').disabled=!m||state.money<9000*m.level;
     $('sell-machine-value').textContent=m?euro(resaleValue(m)):'—';
-    $('sell-machine').disabled=!m||!!o;
+    $('sell-machine').disabled=!m||!!o||!!m.queuedOrder;
     for(let bay=1;bay<=8;bay++){
       const b=$('bay-'+bay),machine=machineAt(bay);
       const slot=layout.bays.find(entry=>entry.bay===bay);
@@ -538,11 +647,11 @@
   function startOrder(id){
     orderMarketSystem.tick(state,state.gameMinutes);
     const o=orderMarketSystem.getAvailable(state).find(order=>order.id===id),m=selectedMachine();
-    if(!o||!m||job(m)||state.machines.some(x=>x.activeId===id)){say('Dieses Angebot ist nicht mehr verfügbar oder die Maschine ist belegt.');return;}
+    if(!o||!m||m.queuedOrder||state.machines.some(x=>x.activeId===id||x.queuedOrder?.id===id)){say('Dieses Angebot ist nicht mehr verfügbar oder die Warteschlange ist belegt.');return;}
     if(!compatible(m,o)){say(`${o.part} benötigt ${o.kind}. ${catalog[m.type].name} ist für ${catalog[m.type].kind} ausgelegt.`);return;}
     const requiredMaterial=materialSystem.requiredKg(o),availableMaterial=materialSystem.available(state,o);
     if(availableMaterial+1e-9<requiredMaterial){
-      say(`Es fehlen ${Math.ceil(requiredMaterial-availableMaterial)} kg ${o.material}.`);tab('machine');return;
+      say(`Es fehlen ${Math.ceil(requiredMaterial-availableMaterial)} kg ${o.material}.`);tab('warehouse');return;
     }
     if(m.maintenance<8||m.tool<1){say('Vorher Werkzeug oder Wartung erneuern.');tab('machine');return;}
     const materialResult=consumeOrderMaterial(o);
@@ -550,11 +659,27 @@
     const accepted=orderMarketSystem.accept(state,id);
     if(!accepted){restoreOrderMaterial(materialResult.consumed);say('Das Angebot ist inzwischen abgelaufen.');return;}
     orderMarketSystem.tick(state,state.gameMinutes);
+    if(job(m)){
+      m.queuedOrder=accepted;m.queuedMaterial=materialResult.consumed;
+      m.queuedDeadlineAt=state.gameMinutes+accepted.deadlineHours*60;
+      state.selected=null;
+      save();renderOrders();renderBusiness();render();
+      say(`${accepted.part} für Platz ${m.bay} vorgemerkt. Material wurde reserviert.`);
+      return;
+    }
     m.activeId=accepted.id;m.activeOrder=accepted;m.activeOrderSource='market';m.progress=0;m.produced=0;
     m.deadlineAt=state.gameMinutes+accepted.deadlineHours*60;
     state.selected=null;
     save();renderOrders();renderBusiness();render();closeDrawer();showMachine(m.bay);
     say(`${accepted.part} auf Platz ${m.bay} angenommen. ${statusFor(m)}.`);
+  }
+  function cancelQueuedOrder(m){
+    if(!m?.queuedOrder||!m.queuedMaterial)return;
+    const held=Object.values(m.queuedMaterial).reduce((sum,amount)=>sum+amount,0);
+    if(state.material+held>state.capacity+1e-9){say('Zum Zurücklegen des reservierten Materials fehlt Lagerplatz.');return;}
+    if(!restoreOrderMaterial(m.queuedMaterial))return;
+    m.queuedOrder=null;m.queuedMaterial=null;m.queuedDeadlineAt=null;
+    save();renderOrders();renderBusiness();render();say('Vormerkung gelöst. Reserviertes Material ist zurück im Lager.');
   }
   function buyMachine(type){
     const c=catalog[type],bay=expansionSystem.getFirstFreeBay(state);
@@ -571,9 +696,13 @@
   function sellMachine(){
     const m=selectedMachine();
     if(!m)return;
-    if(job(m)){say('Laufenden Auftrag zuerst abschließen.');return;}
+    if(job(m)||m.queuedOrder){say('Laufenden oder vorgemerkten Auftrag zuerst abschließen.');return;}
     const name=catalog[m.type].name,value=resaleValue(m),oldBay=m.bay;
     if(!book('machine_sale',value,`${name} verkauft`,{type:m.type,bay:oldBay}).ok)return;
+    for(const shift of [1,2]){
+      const employee=assignedEmployee(m,shift);
+      if(employee)employee.assignedBay=null;
+    }
     expansionSystem.uninstallMachine(state,oldBay);
     if(hallPreviewBay===oldBay)hallPreviewBay=null;
     breakdownSystem.init(state);
@@ -613,9 +742,22 @@
     const m=selectedMachine(),key='operator'+shift;
     if(!m)return;
     if(!m[key]&&state.machines.filter(x=>x[key]).length>=state.staff['shift'+shift])return;
+    const roster=state.staffRoster['shift'+shift];
+    const employee=m[key]?roster.find(person=>person.assignedBay===m.bay):roster.find(person=>person.assignedBay===null);
+    if(!employee)return;
+    employee.assignedBay=m[key]?null:m.bay;
     m[key]=!m[key];
     renderBusiness();render();save();
     say(`Schicht ${shift}: Bediener ${m[key]?'zugewiesen':'abgezogen'}.`);
+  }
+  function trainEmployee(shift,id){
+    const employee=state.staffRoster['shift'+shift].find(person=>person.id===id);
+    if(!employee)return;
+    const level=skillLevel(employee),cost=TRAINING_BASE_COST*(level+1);
+    if(level>=3||state.money<cost)return;
+    if(!book('other',-cost,`Schulung Bediener #${id}`,{employeeId:id,shift,skillLevel:level+1}).ok)return;
+    employee.trained=level+1;
+    save();renderBusiness();render();say(`Bediener #${id} erreicht Können ${skillLevel(employee)}/3.`);
   }
   function tick(dt){
     if(state.paused)return;
@@ -643,6 +785,8 @@
         const factor=productionFactor(m);
         const gain=100/o.duration*(step/6)*factor;
         m.progress=Math.min(100,m.progress+gain);
+        const employee=assignedEmployee(m,shift);
+        if(employee)employee.xp=Math.round((employee.xp+step)*1000)/1000;
         m.produced=Math.min(o.qty,Math.floor(o.qty*m.progress/100));
         m.maintenance=Math.max(0,m.maintenance-gain*.12);
         m.tool=Math.max(0,m.tool-gain*.18);
@@ -652,13 +796,19 @@
           if(!book('income',payout,`Auftrag ${o.id} abgeschlossen`,{orderId:o.id,bay:m.bay,late},null,state.gameMinutes+step).ok)continue;
           if(m.activeOrderSource==='market'){
             orderMarketSystem.tick(state,state.gameMinutes+step);
-            orderMarketSystem.onCompleted(state,o);
+            orderMarketSystem.onCompleted(state,o,{late});
           }
           state.completed++;
           m.activeId=null;m.activeOrder=null;m.activeOrderSource=null;m.progress=0;m.produced=0;m.deadlineAt=null;
+          const next=m.queuedOrder;
+          if(next){
+            m.activeId=next.id;m.activeOrder=next;m.activeOrderSource='market';
+            m.deadlineAt=m.queuedDeadlineAt;
+            m.queuedOrder=null;m.queuedMaterial=null;m.queuedDeadlineAt=null;
+          }
           state.speed=1;
           save();renderOrders();
-          say(`${catalog[m.type].name}: ${o.part} fertig · ${euro(payout)}${late?' (20 % Fristabzug)':''}`);
+          say(`${catalog[m.type].name}: ${o.part} fertig · ${euro(payout)}${late?' (20 % Fristabzug)':''}${next?' · Nächster Auftrag gestartet':''}`);
         }
       }
       state.gameMinutes+=step;left-=step;
@@ -676,6 +826,7 @@
     render();
     if(currentPanel==='orders')renderOrders();
     if(currentPanel==='business'||currentPanel==='warehouse')renderCosts();
+    if(currentPanel==='business')renderStaffDevelopment();
   }
   function handleBreakdownEvent(event){
     if(!event)return;
@@ -760,6 +911,7 @@
     syncMaterialMirror();save();render();renderBusiness();renderOrders();say(`${quantity} kg ${materialSystem.catalog[type].label} für ${euroExact(price)} eingelagert.`);
   });
   $('material-quantity').addEventListener('change',renderMaterialPrice);
+  $('finance-period').addEventListener('change',renderFinance);
   $('change-tool').addEventListener('click',()=>{
     const m=selectedMachine();if(!m||job(m)||state.money<650||m.tool>=99)return;
     if(!book('tools',-650,'Werkzeugwechsel',{bay:m.bay,type:m.type}).ok)return;
@@ -787,10 +939,17 @@
       if(state.money<HIRING_FEE||state.staff['shift'+shift]>=expansionSystem.getUnlockedBays(state))return;
       if(!book('other',-HIRING_FEE,`Bediener Schicht ${shift} eingestellt`,{shift,setupFee:true}).ok)return;
       state.staff['shift'+shift]++;
+      const roster=state.staffRoster;
+      roster['shift'+shift].push({id:roster.nextId++,xp:0,trained:0,assignedBay:null});
       save();renderBusiness();render();say(`Bediener Schicht ${shift} eingestellt.`);
     });
     $('fire-'+shift).addEventListener('click',()=>{
       if(state.staff['shift'+shift]<=state.machines.filter(m=>m['operator'+shift]).length)return;
+      const roster=state.staffRoster['shift'+shift];
+      const free=roster.filter(employee=>employee.assignedBay===null).sort((a,b)=>skillLevel(a)-skillLevel(b)||a.xp-b.xp)[0];
+      const index=roster.indexOf(free);
+      if(index<0)return;
+      roster.splice(index,1);
       state.staff['shift'+shift]--;save();renderBusiness();render();say(`Freier Bediener Schicht ${shift} entlassen.`);
     });
   }

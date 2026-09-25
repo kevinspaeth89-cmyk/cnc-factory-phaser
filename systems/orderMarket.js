@@ -151,9 +151,20 @@
       throw new TypeError('orderMarket expects a mutable game state object.');
     }
   }
+  function ensureReputation(state) {
+    if (!state.customerReputation || typeof state.customerReputation !== 'object' || Array.isArray(state.customerReputation)) {
+      state.customerReputation = {};
+    }
+    for (const profile of profiles) {
+      const score = state.customerReputation[profile.customer];
+      state.customerReputation[profile.customer] = Number.isFinite(score) ? clamp(Math.round(score), 0, 100) : 50;
+    }
+    return state.customerReputation;
+  }
 
   function init(state, options) {
     assertState(state);
+    ensureReputation(state);
     const opts = options && typeof options === 'object' ? options : {};
     const now = Math.max(0, finite(state.gameMinutes, finite(opts.now, 0)));
     const wasFresh = !state.orderMarket || typeof state.orderMarket !== 'object' || Array.isArray(state.orderMarket);
@@ -253,7 +264,8 @@
     const baseDeadline = range(market, profile.deadline);
     const deadlineHours = Math.max(3, Math.round(baseDeadline - Math.max(0, difficulty - 3) * 0.5));
     const rewardPerPart = range(market, profile.rewardPerPart);
-    const rewardFactor = 1 + (difficulty - 1) * 0.035;
+    const reputationBonusPct = Math.round((ensureReputation(state)[profile.customer] - 50) * 0.3);
+    const rewardFactor = (1 + (difficulty - 1) * 0.035) * (1 + reputationBonusPct / 100);
     const reward = Math.max(100, Math.round((qty * rewardPerPart * rewardFactor) / 100) * 100);
     const lifetime = range(market, profile.lifetime);
     const isFollowUp = !!opts.isFollowUp;
@@ -273,6 +285,7 @@
       materialType: part.materialType,
       kg: Math.max(1, Math.round(qty * part.kgPerPart)),
       reward,
+      reputationBonusPct,
       deadlineHours,
       difficulty,
       createdAt,
@@ -376,7 +389,7 @@
     return { ...order };
   }
 
-  function onCompleted(state, order) {
+  function onCompleted(state, order, options = {}) {
     const market = ensureMarket(state);
     if (!order || typeof order.id !== 'string' || !order.id) {
       return { processed: false, followUpScheduled: false, followUpOrder: null };
@@ -391,10 +404,13 @@
     }
     const customer = typeof order.customer === 'string' && order.customer ? order.customer : 'Unbekannter Kunde';
     market.completedCustomers[customer] = Math.max(0, finite(market.completedCustomers[customer], 0)) + 1;
+    const reputation=ensureReputation(state);
+    if(Object.hasOwn(reputation,customer))reputation[customer]=clamp(reputation[customer]+(options.late?-6:4),0,100);
 
     const profile = profiles.find(item => item.key === order.customerProfile) ||
       profiles.find(item => item.customer === customer);
-    const chance = clamp(finite(order.followUpChance, profile ? profile.followUpChance : 0.18), 0, 1);
+    const chance = clamp(finite(order.followUpChance, profile ? profile.followUpChance : 0.18) +
+      ((reputation[customer] ?? 50) - 50) * .004, 0, 1);
     if (random(market) >= chance) {
       return { processed: true, followUpScheduled: false, followUpOrder: null };
     }
@@ -429,6 +445,7 @@
     getAvailable,
     accept,
     onCompleted,
+    getReputation: state => ({ ...ensureReputation(state) }),
     limits: Object.freeze({ minOffers: MIN_OFFERS, startOffers: START_OFFERS, maxOffers: MAX_OFFERS })
   });
 });

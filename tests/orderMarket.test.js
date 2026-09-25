@@ -78,6 +78,38 @@ test('completion can schedule a same-customer, same-kind follow-up offer', () =>
   const duplicate = orderMarket.onCompleted(restored, accepted);
   assert.equal(duplicate.processed, false);
   assert.equal(restored.orderMarket.completedCustomers[accepted.customer], 1);
+  assert.equal(orderMarket.getReputation(restored)[accepted.customer],54);
+});
+
+test('customer reputation changes only once and affects future offers, not accepted payouts', () => {
+  const fresh=newState('reputation-seed');
+  const better=newState('reputation-seed');
+  const baseOffers=orderMarket.getAvailable(fresh);
+  assert.deepEqual(baseOffers.map(x=>x.id),orderMarket.getAvailable(better).map(x=>x.id));
+  const oldOrder=orderMarket.accept(better,baseOffers[0].id);
+  const oldReward=oldOrder.reward;
+  const customer=oldOrder.customer;
+  orderMarket.onCompleted(better,oldOrder,{late:false});
+  assert.equal(orderMarket.getReputation(better)[customer],54);
+  orderMarket.onCompleted(better,oldOrder,{late:true});
+  assert.equal(orderMarket.getReputation(better)[customer],54);
+  assert.equal(oldOrder.reward,oldReward);
+  const late=newState('late-reputation');
+  const lateOrder=orderMarket.accept(late,orderMarket.getAvailable(late)[0].id);
+  orderMarket.onCompleted(late,lateOrder,{late:true});
+  assert.equal(orderMarket.getReputation(late)[lateOrder.customer],44);
+
+  const premium=newState('premium-seed');
+  const neutral=newState('premium-seed');
+  for(const name of Object.keys(premium.customerReputation))premium.customerReputation[name]=100;
+  const next=neutral.orderMarket.nextRefreshAt;
+  orderMarket.tick(premium,next+1);
+  orderMarket.tick(neutral,next+1);
+  const boosted=orderMarket.getAvailable(premium).find(x=>x.createdAt>=next);
+  const baseline=orderMarket.getAvailable(neutral).find(x=>x.id===boosted?.id);
+  assert.ok(boosted&&baseline);
+  assert.equal(boosted.reputationBonusPct,15);
+  assert.ok(boosted.reward>=baseline.reward);
 });
 
 test('saved market reload preserves offers, counters, and random progression', () => {
@@ -93,4 +125,3 @@ test('saved market reload preserves offers, counters, and random progression', (
   assert.ok(orderMarket.getAvailable(restored).some(order => !originalIds.includes(order.id)));
   assert.doesNotThrow(() => JSON.stringify(restored));
 });
-
