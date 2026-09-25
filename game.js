@@ -232,8 +232,12 @@
     const order=job(machine);
     $('hall-preview-title').textContent=`${catalog[machine.type].name} · Platz ${machine.bay}`;
     $('hall-preview-meta').textContent=`${catalog[machine.type].kind} · Level ${machine.level} · ${statusFor(machine)}`;
-    $('hall-preview-job').textContent=order?`${order.part} · ${Math.floor(machine.progress)} %`:'Kein laufender Auftrag';
+    $('hall-preview-job').textContent=order?`${order.part} · ${machine.produced}/${order.qty} Teile · ${Math.floor(machine.progress)} %`:'Kein laufender Auftrag';
+    const deadlineLeft=order&&Number.isFinite(machine.deadlineAt)?machine.deadlineAt-state.gameMinutes:null;
+    $('hall-preview-time').hidden=!order;
+    $('hall-preview-time').textContent=order?`Rest ${formatMinutes(remainingMinutes(machine,order))}${deadlineLeft===null?'':` · Frist ${deadlineLeft<0?`${formatMinutes(-deadlineLeft)} überfällig`:formatMinutes(deadlineLeft)}`}`:'';
     $('hall-preview-condition').textContent=`Werkzeug ${Math.round(machine.tool)} % · Wartung ${Math.round(machine.maintenance)} %`;
+    $('hall-preview-operators').textContent=`Bediener S1 ${machine.operator1?'✓':'–'} · S2 ${machine.operator2?'✓':'–'}`;
     const slot=expansionSystem.getBayLayout(state).find(item=>item.bay===machine.bay);
     const hall=$('hall-map'),width=hall.clientWidth,height=hall.clientHeight;
     if(!slot||!width||!height)return;
@@ -316,6 +320,16 @@
       return card;
     }));
   }
+  function renderMaterialPrice(){
+    const type=$('material-type').value,quantity=Number($('material-quantity').value);
+    const price=materialSystem.quote(type,quantity,state.gameMinutes);
+    const per100=materialSystem.quote(type,100,state.gameMinutes);
+    const day=Math.max(0,Math.floor(state.gameMinutes/1440));
+    const change=day?Math.round((materialSystem.marketMultiplier(type,state.gameMinutes)-materialSystem.marketMultiplier(type,(day-1)*1440))*100):0;
+    $('material-market-info').textContent=per100===null?'':`Tageskurs ${euro(per100)} / 100 kg${day?` · ${change>=0?'+':''}${change} % gegenüber gestern`:''} · neuer Kurs in ${formatMinutes(1440-state.gameMinutes%1440)}`;
+    $('material-price').textContent=price===null?'—':`+${quantity} kg · ${euro(price)}`;
+    $('buy-material').disabled=price===null||state.money<price||state.material+quantity>state.capacity;
+  }
   function renderBusiness(){
     const m=selectedMachine();
     const limit=expansionSystem.getUnlockedBays(state),nextCost=expansionSystem.getExpansionCost(state);
@@ -375,6 +389,7 @@
     }
     if(state.inventory.rawMaterial.legacy)stocks.push(`Altbestand (für alle Aufträge): ${Math.floor(state.inventory.rawMaterial.legacy)} kg`);
     $('storage-stock').textContent=stocks.join(' · ');
+    renderMaterialPrice();
   }
   function render(){
     const m=selectedMachine(),o=job(m),pct=m?Math.max(0,Math.min(100,m.progress)):0;
@@ -428,10 +443,6 @@
     $('hud-operators').textContent=m?('S1 '+(m.operator1?'✓':'–')+' · S2 '+(m.operator2?'✓':'–')):'—';
     $('hud-job-button').textContent=o?'Aufträge ansehen':m?'Auftrag wählen':'Maschine kaufen';
 
-    const materialType=$('material-type').value,materialQuantity=Number($('material-quantity').value);
-    const materialPrice=materialSystem.quote(materialType,materialQuantity);
-    $('material-price').textContent=materialPrice===null?'—':`+${materialQuantity} kg · ${euro(materialPrice)}`;
-    $('buy-material').disabled=materialPrice===null||state.money<materialPrice||state.material+materialQuantity>state.capacity;
     $('change-tool').disabled=!m||!!o||state.money<650||m.tool>=99;
     $('maintenance').disabled=!m||!!o||state.money<1200||m.maintenance>=99;
     $('upgrade').disabled=!m||state.money<9000*m.level;
@@ -638,7 +649,7 @@
     }
     render();
     if(currentPanel==='orders')renderOrders();
-    if(currentPanel==='business')renderCosts();
+    if(currentPanel==='business'){renderCosts();renderMaterialPrice();}
   }
   function handleBreakdownEvent(event){
     if(!event)return;
@@ -688,7 +699,6 @@
     if(bay>expansionSystem.getUnlockedBays(state))return;
     tapHallBay(bay);
   });
-  $('hall-preview-open').addEventListener('click',()=>{if(hallPreviewBay!==null)showMachine(hallPreviewBay);});
   $('hall-preview-close').addEventListener('click',()=>{hallPreviewBay=null;renderHallPreview();});
   window.addEventListener('resize',renderHallPreview);
   $('back-to-hall').addEventListener('click',showHall);
@@ -710,17 +720,17 @@
   document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeDrawer();$('speed-menu').hidden=true;}});
   $('buy-material').addEventListener('click',()=>{
     const type=$('material-type').value,quantity=Number($('material-quantity').value);
-    const price=materialSystem.quote(type,quantity);
+    const price=materialSystem.quote(type,quantity,state.gameMinutes);
     if(price===null||state.money<price||state.material+quantity>state.capacity)return;
     const added=inventorySystem.addMaterial(state,type,quantity);
     if(!added.ok)return;
-    if(!book('material',-price,`${quantity} kg ${materialSystem.catalog[type].label} gekauft`,{quantityKg:quantity,type}).ok){
+    if(!book('material',-price,`${quantity} kg ${materialSystem.catalog[type].label} gekauft`,{quantityKg:quantity,type,pricePer100Kg:materialSystem.quote(type,100,state.gameMinutes)}).ok){
       inventorySystem.removeMaterial(state,type,quantity);syncMaterialMirror();return;
     }
     syncMaterialMirror();save();render();renderBusiness();renderOrders();say(`${quantity} kg ${materialSystem.catalog[type].label} eingelagert.`);
   });
-  $('material-type').addEventListener('change',render);
-  $('material-quantity').addEventListener('change',render);
+  $('material-type').addEventListener('change',renderMaterialPrice);
+  $('material-quantity').addEventListener('change',renderMaterialPrice);
   $('change-tool').addEventListener('click',()=>{
     const m=selectedMachine();if(!m||job(m)||state.money<650||m.tool>=99)return;
     if(!book('tools',-650,'Werkzeugwechsel',{bay:m.bay,type:m.type}).ok)return;

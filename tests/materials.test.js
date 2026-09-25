@@ -32,6 +32,20 @@ test('different material prices and amounts use the same typed warehouse capacit
   assert.equal(materials.quote('c45', -25), null);
 });
 
+test('material rates vary by type and game day, while saves get the same quote', () => {
+  const day = 1440;
+  const steel = materials.quote('c45', 100, day);
+  const aluminium = materials.quote('aluminium6082', 100, day);
+  assert.equal(materials.quote('c45', 100, day + 500), steel);
+  assert.equal(materials.quote('c45', 100, day * 2), materials.quote('c45', 100, day * 2 + 50));
+  assert.notEqual(steel, materials.quote('c45', 100, 0));
+  assert.notEqual(steel / materials.catalog.c45.pricePer100Kg, aluminium / materials.catalog.aluminium6082.pricePer100Kg);
+  for (const type of Object.keys(materials.catalog)) {
+    const rate = materials.marketMultiplier(type, day);
+    assert.ok(rate >= .8 && rate <= 1.2);
+  }
+});
+
 test('a steel order cannot consume aluminium and a failed reservation never makes stock negative', () => {
   const saved = state({ aluminium6082: 100, steel42crmo4: 100, c45: 20 });
   const order = { material: 'C45 Stahl', kg: 25 };

@@ -34,9 +34,17 @@
     const type = typeForOrder(order);
     return type ? (stock[type] || 0) + (stock[catalog[type].oldCategory] || 0) + (stock.legacy || 0) : (stock.legacy || 0);
   }
-  function quote(type, quantityKg) {
+  function marketMultiplier(type, gameMinutes = 0) {
+    if (!Object.hasOwn(catalog, type)) return null;
+    const day = Math.max(0, Math.floor((Number(gameMinutes) || 0) / 1440));
+    if (!day) return 1;
+    const index = Object.keys(catalog).indexOf(type) + 1;
+    const hash = (Math.imul(day, 1664525) ^ Math.imul(index, 1013904223)) >>> 0;
+    return (80 + hash % 41) / 100;
+  }
+  function quote(type, quantityKg, gameMinutes = 0) {
     if (!Object.hasOwn(catalog, type) || ![25, 100].includes(quantityKg)) return null;
-    return Math.round(catalog[type].pricePer100Kg * quantityKg / 100);
+    return Math.round(catalog[type].pricePer100Kg * quantityKg / 100 * marketMultiplier(type, gameMinutes));
   }
   function reserve(state, inventory, order) {
     const quantity = requiredKg(order),type = typeForOrder(order);
@@ -59,5 +67,5 @@
     }
     return { ok: true, code: 'ok', consumed };
   }
-  return Object.freeze({ catalog, typeForOrder, requiredKg, available, quote, reserve });
+  return Object.freeze({ catalog, typeForOrder, requiredKg, available, marketMultiplier, quote, reserve });
 });
