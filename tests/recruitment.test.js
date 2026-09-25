@@ -13,7 +13,7 @@ test('creates persistent fantasy applicant profiles with bounded, useful skills'
     assert.match(candidate.name, /^[A-Z][a-z]+ [A-Z][a-z]+$/);
     assert.ok(['Drehtechnik', 'Frästechnik', 'Allround'].includes(candidate.specialty));
     assert.deepEqual(Object.keys(candidate.skills).sort(), ['learning', 'milling', 'precision', 'turning']);
-    assert.ok(Object.values(candidate.skills).every(value => value >= 1 && value <= 5));
+    assert.ok(Object.values(candidate.skills).every(value => value >= 1 && value <= 10));
   }
   assert.ok(first.some(candidate => candidate.specialty === 'Drehtechnik'));
   assert.ok(first.some(candidate => candidate.specialty === 'Frästechnik'));
@@ -44,11 +44,11 @@ test('hiring one applicant refills one stable offer without duplicating ids', ()
 });
 
 test('candidate skills affect the matching machine, learning speed, and tool wear', () => {
-  const novice = { profileVersion: 1, skills: { turning: 1, milling: 1, precision: 1, learning: 1 } };
-  const expert = { profileVersion: 1, skills: { turning: 5, milling: 3, precision: 5, learning: 5 } };
+  const novice = { profileVersion: 2, skills: { turning: 1, milling: 1, precision: 1, learning: 1 } };
+  const expert = { profileVersion: 2, skills: { turning: 10, milling: 5, precision: 10, learning: 10 } };
   assert.equal(recruitment.productionMultiplier(novice, 'Drehen'), 1);
   assert.equal(recruitment.productionMultiplier(expert, 'Drehen'), 1.1);
-  assert.equal(recruitment.productionMultiplier(expert, 'Fräsen'), 1.05);
+  assert.ok(Math.abs(recruitment.productionMultiplier(expert, 'Fräsen') - 1.0444444444444445) < 1e-12);
   assert.ok(Math.abs(recruitment.learningMultiplier(expert) - 1.2) < 1e-12);
   assert.equal(recruitment.toolWearMultiplier(expert), 0.9);
   assert.equal(recruitment.productionMultiplier({ profileVersion: 0 }, 'Drehen'), 1);
@@ -69,9 +69,23 @@ test('normalizes old anonymous staff without changing their existing progression
 
 test('profile ratings use all four skills and portraits remain stable per employee id', () => {
   assert.equal(recruitment.ratingFromSkills({ turning: 1, milling: 1, precision: 1, learning: 1 }), 1);
-  assert.equal(recruitment.ratingFromSkills({ turning: 5, milling: 5, precision: 5, learning: 5 }), 10);
+  assert.equal(recruitment.ratingFromSkills({ turning: 10, milling: 10, precision: 10, learning: 10 }), 10);
   assert.notEqual(recruitment.portraitFor(1), recruitment.portraitFor(2));
   assert.equal(recruitment.portraitFor(1), recruitment.portraitFor(9));
+});
+
+test('migrates saved five-point applicant and employee skills to the ten-point scale', () => {
+  const state = { recruitment: { nextId: 2, applicants: [{
+    id: 1, name: 'Mira Stahlwind', skills: { turning: 1, milling: 2, precision: 4, learning: 5 }
+  }] } };
+  recruitment.ensureState(state);
+  assert.deepEqual(state.recruitment.applicants[0].skills, { turning: 1, milling: 3, precision: 8, learning: 10 });
+  assert.equal(state.recruitment.applicants[0].skillScale, 2);
+  const employee = recruitment.normalizeEmployee({
+    id: 1, profileVersion: 1, name: 'Mira Stahlwind', skills: { turning: 1, milling: 2, precision: 4, learning: 5 }
+  }, 1);
+  assert.equal(employee.profileVersion, 2);
+  assert.deepEqual(employee.skills, { turning: 1, milling: 3, precision: 8, learning: 10 });
 });
 
 test('profile descriptions identify the strongest skill and match its stored value', () => {
@@ -79,7 +93,7 @@ test('profile descriptions identify the strongest skill and match its stored val
     const candidate = recruitment.generateApplicant(id);
     const strongest = Math.max(...Object.values(candidate.skills));
     assert.equal(candidate.rating, recruitment.ratingFromSkills(candidate.skills));
-    assert.match(candidate.about, new RegExp('\\(' + strongest + '/5\\)'));
+    assert.match(candidate.about, new RegExp('\\(' + strongest + '/10\\)'));
     assert.match(candidate.about, /Stärkster Wert:/);
     assert.match(candidate.portrait, /employee-portrait-\d{2}\.webp/);
   }
