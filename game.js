@@ -44,7 +44,7 @@
   const defaults = () => ({
     money:14000,material:0,capacity:300,staff:{shift1:0,shift2:0},
     machines:[],selectedBay:null,speed:1,paused:false,gameMinutes:0,completed:0,
-    payrollDue:0,wagesPaid:0,storagePaid:0,energyPaid:0,selected:null
+    payrollDue:0,wagesPaid:0,storagePaid:0,energyPaid:0,selected:null,selectedMaterialType:'c45'
   });
   let state=defaults();
   function validMachine(m) {
@@ -120,6 +120,7 @@
     economySystem.setTime(state,START+state.gameMinutes*60000);
   }
   ensureEconomyState();
+  if(!Object.hasOwn(materialSystem.catalog,state.selectedMaterialType))state.selectedMaterialType='c45';
   const save = () => {try{
     syncMaterialMirror();
     economySystem.setTime(state,START+state.gameMinutes*60000);
@@ -326,7 +327,7 @@
   }
   let lastMarketBoardKey='';
   function renderMaterialPrice(){
-    const type=$('material-type').value,quantity=Number($('material-quantity').value);
+    const type=state.selectedMaterialType,quantity=Number($('material-quantity').value);
     const price=materialSystem.quote(type,quantity,state.gameMinutes);
     const unitPrice=materialSystem.pricePerKg(type,state.gameMinutes);
     const day=Math.max(0,Math.floor(state.gameMinutes/1440));
@@ -339,18 +340,19 @@
         const status=change<=-8?'Günstig':change>=8?'Teuer':'Normal';
         row.type='button';row.className=`market-row ${status.toLowerCase()}${key===type?' selected':''}`;
         row.setAttribute('aria-label',`${item.label}: ${euroExact(materialSystem.pricePerKg(key,state.gameMinutes))} pro kg, ${status}, ${change>=0?'+':''}${change} Prozent zum Grundpreis`);
+        row.setAttribute('aria-pressed',String(key===type));
         name.className='market-name';name.textContent=item.label;
         unit.textContent=euroExact(materialSystem.pricePerKg(key,state.gameMinutes))+'/kg';
         rating.textContent=`${status} ${change>=0?'+':''}${change} %`;
         row.append(name,unit,rating);
-        row.addEventListener('click',()=>{$('material-type').value=key;renderMaterialPrice();});
+        row.addEventListener('click',()=>{state.selectedMaterialType=key;save();renderMaterialPrice();});
         return row;
       });
       $('material-market-board').replaceChildren(...rows);
       lastMarketBoardKey=boardKey;
     }
     const change=day?Math.round((materialSystem.marketMultiplier(type,state.gameMinutes)-materialSystem.marketMultiplier(type,(day-1)*1440))*100):0;
-    $('material-market-info').textContent=unitPrice===null?'':`Grundpreis ${euroExact(materialSystem.catalog[type].pricePer100Kg/100)}/kg · ${day?`heute ${change>=0?'+':''}${change} % zu gestern · `:''}neuer Kurs in ${formatMinutes(1440-state.gameMinutes%1440)}. Günstig: ab 8 % unter Grundpreis; teuer: ab 8 % darüber.`;
+    $('material-market-info').textContent=unitPrice===null?'':`Gewählt: ${materialSystem.catalog[type].label} · Grundpreis ${euroExact(materialSystem.catalog[type].pricePer100Kg/100)}/kg · ${day?`heute ${change>=0?'+':''}${change} % zu gestern · `:''}neuer Kurs in ${formatMinutes(1440-state.gameMinutes%1440)}. Günstig: ab 8 % unter Grundpreis; teuer: ab 8 % darüber.`;
     $('material-price').textContent=price===null?'—':`+${quantity} kg · ${euroExact(price)}`;
     $('buy-material').disabled=price===null||state.money<price||state.material+quantity>state.capacity;
   }
@@ -747,7 +749,7 @@
   });
   document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeDrawer();$('speed-menu').hidden=true;}});
   $('buy-material').addEventListener('click',()=>{
-    const type=$('material-type').value,quantity=Number($('material-quantity').value);
+    const type=state.selectedMaterialType,quantity=Number($('material-quantity').value);
     const price=materialSystem.quote(type,quantity,state.gameMinutes);
     if(price===null||state.money<price||state.material+quantity>state.capacity)return;
     const added=inventorySystem.addMaterial(state,type,quantity);
@@ -757,7 +759,6 @@
     }
     syncMaterialMirror();save();render();renderBusiness();renderOrders();say(`${quantity} kg ${materialSystem.catalog[type].label} für ${euroExact(price)} eingelagert.`);
   });
-  $('material-type').addEventListener('change',renderMaterialPrice);
   $('material-quantity').addEventListener('change',renderMaterialPrice);
   $('change-tool').addEventListener('click',()=>{
     const m=selectedMachine();if(!m||job(m)||state.money<650||m.tool>=99)return;

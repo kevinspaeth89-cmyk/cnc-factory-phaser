@@ -6,6 +6,7 @@ assert.ok(html.indexOf('id="business-panel"')<html.indexOf('id="warehouse-panel"
 assert.ok(html.indexOf('id="storage-stock"')<html.indexOf('id="buy-material"'));
 assert.ok(html.indexOf('id="warehouse-panel"')>html.indexOf('id="machine-shop"'));
 assert.ok(html.indexOf('id="buy-material"')<html.indexOf('id="storage-upgrade"'));
+assert.equal(ids.includes('material-type'),false);
 function boot(storage,options={}){
   const elements=new Map();
   class El {
@@ -34,7 +35,7 @@ function boot(storage,options={}){
     click(){assert(this.events.click,this.id);this.events.click({stopPropagation(){}})}
   }
   const get=id=>{if(!elements.has(id))elements.set(id,new El(id));return elements.get(id)};
-  for(const id of ids)get(id);get('material-type').value='c45';get('material-quantity').value='25';
+  for(const id of ids)get(id);get('material-quantity').value='25';
   get('detail-view').hidden=true;get('hall-preview').hidden=true;
   get('hall-map').clientWidth=400;get('hall-map').clientHeight=400;
   get('hall-preview').offsetWidth=190;get('hall-preview').offsetHeight=118;
@@ -60,6 +61,7 @@ app.get('repair-now').click();st=app.state();assert.equal(st.breakdowns.machines
 app=boot(storage);st=app.state();assert.equal(st.money,13390);assert.equal(st.breakdowns.machines['2'].status,'repairing');assert.equal(st.finance.transactions.filter(x=>x.category==='repairs').length,1);assert.equal(st.machines[0].activeId,'A12');
 app.frame(1000);st=app.state();assert.equal(st.breakdowns.machines['2'].status,'repairing');assert.equal(st.finance.transactions.filter(x=>x.category==='repairs').length,1);
 const empty=boot({});assert.equal(empty.state().machines.length,0);assert.equal(empty.state().material,0);assert.deepEqual(Object.keys(empty.state().breakdowns.machines),[]);
+assert.equal(empty.state().selectedMaterialType,'c45');
 empty.get('bay-1').click();assert.equal(empty.get('hall-preview').hidden,true);
 empty.get('warehouse-door').click();
 assert.equal(empty.get('warehouse-panel').hidden,false);
@@ -93,7 +95,9 @@ priced=boot(priceStorage);
 assert.equal(priced.state().money,14000-quoted);
 assert.ok(priced.get('material-price').textContent.includes(quoted.toLocaleString('de-DE',{minimumFractionDigits:2})));
 priced.get('material-market-board').children[1].click();
-assert.equal(priced.get('material-type').value,'steel42crmo4');
+assert.equal(priced.state().selectedMaterialType,'steel42crmo4');
+assert.equal(priced.get('material-market-board').children[1].attrs['aria-pressed'],'true');
+assert.equal(priced.get('material-market-board').children[0].attrs['aria-pressed'],'false');
 const fractional=require(dir+'/systems/materials.js').quote('steel42crmo4',25,1440);
 assert.equal(fractional,618.75);
 assert.ok(priced.get('material-price').textContent.includes('618,75'));
@@ -103,6 +107,8 @@ assert.equal(priced.state().inventory.rawMaterial.steel42crmo4,25);
 assert.equal(priced.state().finance.transactions.filter(x=>x.category==='material').length,3);
 priced=boot(priceStorage);
 assert.equal(priced.state().money,14000-quoted-fractional);
+assert.equal(priced.state().selectedMaterialType,'steel42crmo4');
+assert.equal(priced.get('material-market-board').children[1].attrs['aria-pressed'],'true');
 const expensive=boot({cnc_factory_save_v3:JSON.stringify({...empty.state(),gameMinutes:2880})});
 assert.match(expensive.get('material-market-board').children[0].children[2].textContent,/Teuer/);
 const expandedStorage={cnc_factory_save_v3:JSON.stringify({money:250000,material:100,capacity:300,staff:{shift1:0,shift2:0},machines:[{bay:1,type:'standard',progress:0},{bay:3,type:'mill3',progress:0}],selectedBay:1,gameMinutes:0,speed:1,paused:false})};
