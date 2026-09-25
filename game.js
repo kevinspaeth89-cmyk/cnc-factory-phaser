@@ -462,16 +462,24 @@
   }
   function renderStaffDevelopment(){
     $('staff-development').replaceChildren(...[1,2].flatMap(shift=>state.staffRoster['shift'+shift].map(employee=>{
-      const row=document.createElement('div'),label=document.createElement('span'),button=document.createElement('button');
+      const row=document.createElement('div'),portrait=document.createElement('img'),details=document.createElement('div');
+      const name=document.createElement('strong'),about=document.createElement('small'),rating=document.createElement('span'),button=document.createElement('button');
       const level=skillLevel(employee),cost=TRAINING_BASE_COST*(level+1);
       row.className='staff-development-row';
+      portrait.className='staff-profile-portrait';portrait.src=employee.portrait||recruitmentSystem.portraitFor(employee.id);
+      portrait.alt='Porträt von '+employee.name;portrait.loading='lazy';
+      details.className='staff-profile-details';
       const profile=employee.profileVersion===1?employee.specialty:'Altbestand';
-      label.textContent=`S${shift} · ${employee.name} · ${profile} · ${employee.assignedBay?'Platz '+employee.assignedBay:'frei'} · Können ${level}/3`;
-      label.title=employee.about||`${Math.floor(employee.xp)} min Erfahrung`;
-      button.type='button';button.textContent=level===3?'Maximal':`Schulen ${euro(cost)}`;
+      name.className='staff-profile-name';
+      name.textContent='S'+shift+' · '+employee.name+' · '+profile+' · '+(employee.assignedBay?'Platz '+employee.assignedBay:'frei');
+      about.className='staff-profile-about';about.textContent=employee.about||Math.floor(employee.xp)+' min Erfahrung';
+      rating.className='staff-rating';rating.textContent=(employee.rating||recruitmentSystem.ratingFromSkills(employee.skills))+'/10';
+      rating.setAttribute('aria-label','Profilbewertung '+rating.textContent);
+      details.append(name,about);
+      button.type='button';button.textContent=level===3?'Maximal':'Schulen '+euro(cost);
       button.disabled=level===3||state.money<cost;
       button.addEventListener('click',()=>trainEmployee(shift,employee.id));
-      row.append(label,button);return row;
+      row.append(portrait,details,rating,button);return row;
     })));
   }
   function renderRecruitment(){
@@ -480,13 +488,16 @@
     $('applicant-list').replaceChildren(...offers.map(candidate=>{
       const card=document.createElement('article');card.className='applicant-card';
       const head=document.createElement('div');head.className='applicant-head';
-      const avatar=document.createElement('span');avatar.className='applicant-avatar';
-      avatar.setAttribute('aria-hidden','true');
-      avatar.textContent=candidate.name.split(/\s+/).map(part=>part[0]||'').join('').slice(0,2).toUpperCase();
+      const avatar=document.createElement('img');avatar.className='applicant-avatar';
+      avatar.src=candidate.portrait||recruitmentSystem.portraitFor(candidate.id);
+      avatar.alt='Porträt von '+candidate.name;avatar.loading='lazy';
       const identity=document.createElement('div');identity.className='applicant-identity';
       const name=document.createElement('strong');name.textContent=candidate.name;
       const specialty=document.createElement('span');specialty.className='applicant-specialty';specialty.textContent=candidate.specialty;
-      identity.append(name,specialty);head.append(avatar,identity);
+      identity.append(name,specialty);
+      const rating=document.createElement('strong');rating.className='applicant-rating';
+      rating.textContent=candidate.rating+'/10';rating.setAttribute('aria-label','Profilbewertung '+rating.textContent);
+      head.append(avatar,identity,rating);
       const about=document.createElement('p');about.className='applicant-about';about.textContent=`${candidate.trait} · ${candidate.about}`;
       const stats=document.createElement('div');stats.className='applicant-stats';
       for(const [key,label] of [['turning','Drehen'],['milling','Fräsen'],['precision','Präzision'],['learning','Lerntempo']]){

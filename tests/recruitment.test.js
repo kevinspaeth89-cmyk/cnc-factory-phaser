@@ -65,3 +65,22 @@ test('normalizes old anonymous staff without changing their existing progression
   assert.equal(migrated.assignedBay, 3);
   assert.deepEqual(migrated.skills, { turning: 0, milling: 0, precision: 0, learning: 0 });
 });
+
+
+test('profile ratings use all four skills and portraits remain stable per employee id', () => {
+  assert.equal(recruitment.ratingFromSkills({ turning: 1, milling: 1, precision: 1, learning: 1 }), 1);
+  assert.equal(recruitment.ratingFromSkills({ turning: 5, milling: 5, precision: 5, learning: 5 }), 10);
+  assert.notEqual(recruitment.portraitFor(1), recruitment.portraitFor(2));
+  assert.equal(recruitment.portraitFor(1), recruitment.portraitFor(9));
+});
+
+test('profile descriptions identify the strongest skill and match its stored value', () => {
+  for (const id of [1, 2, 3, 4, 5]) {
+    const candidate = recruitment.generateApplicant(id);
+    const strongest = Math.max(...Object.values(candidate.skills));
+    assert.equal(candidate.rating, recruitment.ratingFromSkills(candidate.skills));
+    assert.match(candidate.about, new RegExp('\\(' + strongest + '/5\\)'));
+    assert.match(candidate.about, /Stärkster Wert:/);
+    assert.match(candidate.portrait, /employee-portrait-\d{2}\.webp/);
+  }
+});
