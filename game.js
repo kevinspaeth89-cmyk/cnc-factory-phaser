@@ -222,6 +222,9 @@
   const readyToRun=m=>!!job(m)&&!state.paused&&!!shiftAt(state.gameMinutes)&&
     !!m['operator'+shiftAt(state.gameMinutes)]&&m.tool>=1&&m.maintenance>=8;
   const operating=m=>readyToRun(m)&&breakdownSystem.canContinueProduction(state,m.bay);
+  const canChangeTool=m=>!!m&&state.money>=650&&m.tool<99&&(!job(m)||m.tool<1);
+  const canMaintain=m=>!!m&&state.money>=1200&&m.maintenance<99&&(!job(m)||m.maintenance<8);
+  const conditionLabel=value=>value>0&&value<1?'<1 %':Math.round(value)+' %';
   let visual=null, currentPanel=null, messageTimer, zoomTimer, phaserGame=null, hallPreviewBay=null;
   function say(message){
     $('message').textContent=message;
@@ -559,7 +562,7 @@
     $('machine-readout').textContent=m?`${catalog[m.type].name.toUpperCase()} · PLATZ ${m.bay}`:'KEINE MASCHINE';
     $('machine-meta').textContent=m?`Platz ${m.bay} · ${catalog[m.type].kind} · Level ${m.level} · ${statusFor(m)}`:'Kaufe im Betrieb eine Maschine für einen freien Stellplatz.';
     $('upgrade-cost').textContent=m?euro(9000*m.level)+' · +13 % Tempo':'—';
-    $('tool-label').textContent=m?Math.round(m.tool)+' %':'—';
+    $('tool-label').textContent=m?conditionLabel(m.tool):'—';
     $('tool-meter').style.width=m?Math.max(0,m.tool)+'%':'0%';
     $('maintenance-label').textContent=m?Math.round(m.maintenance)+' %':'—';
     $('maintenance-meter').style.width=m?Math.max(0,m.maintenance)+'%':'0%';
@@ -573,13 +576,13 @@
     $('hud-parts').textContent=o?(m.produced+' / '+o.qty):'—';
     $('hud-time').textContent=o?formatMinutes(remainingMinutes(m,o)):'—';
     $('hud-deadline').textContent=deadlineLeft===null?'—':deadlineLeft<0?(formatMinutes(-deadlineLeft)+' überfällig'):formatMinutes(deadlineLeft);
-    $('hud-tool').textContent=m?Math.round(m.tool)+' %':'—';
+    $('hud-tool').textContent=m?conditionLabel(m.tool):'—';
     $('hud-maintenance').textContent=m?Math.round(m.maintenance)+' %':'—';
     $('hud-operators').textContent=m?('S1 '+(m.operator1?'✓':'–')+' · S2 '+(m.operator2?'✓':'–')):'—';
     $('hud-job-button').textContent=o?'Aufträge ansehen':m?'Auftrag wählen':'Maschine kaufen';
 
-    $('change-tool').disabled=!m||!!o||state.money<650||m.tool>=99;
-    $('maintenance').disabled=!m||!!o||state.money<1200||m.maintenance>=99;
+    $('change-tool').disabled=!canChangeTool(m);
+    $('maintenance').disabled=!canMaintain(m);
     $('upgrade').disabled=!m||state.money<9000*m.level;
     $('sell-machine-value').textContent=m?euro(resaleValue(m)):'—';
     $('sell-machine').disabled=!m||!!o||!!m.queuedOrder;
@@ -913,12 +916,12 @@
   $('material-quantity').addEventListener('change',renderMaterialPrice);
   $('finance-period').addEventListener('change',renderFinance);
   $('change-tool').addEventListener('click',()=>{
-    const m=selectedMachine();if(!m||job(m)||state.money<650||m.tool>=99)return;
+    const m=selectedMachine();if(!canChangeTool(m))return;
     if(!book('tools',-650,'Werkzeugwechsel',{bay:m.bay,type:m.type}).ok)return;
     m.tool=100;save();render();say('Werkzeug gewechselt.');
   });
   $('maintenance').addEventListener('click',()=>{
-    const m=selectedMachine();if(!m||job(m)||state.money<1200||m.maintenance>=99)return;
+    const m=selectedMachine();if(!canMaintain(m))return;
     if(!book('maintenance',-1200,'Wartung abgeschlossen',{bay:m.bay,type:m.type}).ok)return;
     m.maintenance=100;save();render();say('Wartung abgeschlossen.');
   });
