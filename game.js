@@ -675,7 +675,7 @@
       visual.running=!!m&&operating(m);
       visual.condition=!m?'idle':(m.maintenance<8||m.tool<1)?'fault':operating(m)?'running':o?'waiting':'idle';
       visual.robotEnabled=!!m?.loadingRobot;
-      if(m)visual.setMachineType(m.type);
+      if(m)visual.setMachineType(m.type,m.loadingRobot);
     }
   }
   function startOrder(id){
@@ -1019,6 +1019,9 @@
       this.load.image('machine-standard','cell-nexora.jpg?v=c523bfea');
       this.load.image('machine-rapid','cell-nexora-nx420.webp?v=1');
       this.load.image('machine-premium','cell-aurex-at600.webp?v=1');
+      this.load.image('machine-standard-robot','cell-nexora-robot.webp?v=1');
+      this.load.image('machine-rapid-robot','cell-nexora-nx420-robot.webp?v=1');
+      this.load.image('machine-premium-robot','cell-aurex-at600-robot.webp?v=1');
       this.load.image('machine-mill3','assets/veltron-vx500-detail.webp?v=1');
       this.load.image('machine-mill5','assets/orionis-om650x-detail.webp?v=1');
       this.load.image('loading-robot','assets/loading-robot.webp?v=1');
@@ -1076,18 +1079,18 @@
         this.millGroup.add(p);
         return {sprite:p,phase:Math.random()*Math.PI*2,radius:10+Math.random()*48,speed:1+Math.random()*2.5};
       });
-      this.robotImage=this.add.image(635,508,'loading-robot').setDisplaySize(500,545).setVisible(false);
+      this.robotImage=this.add.image(200,502,'loading-robot').setDisplaySize(470,510).setFlipX(true).setVisible(false);
       render();
     }
-    setMachineType(type){
+    setMachineType(type,loadingRobot=false){
       const milling=catalog[type].kind==='Fräsen';
       this.isMilling=milling;
-      const robotLayout=milling?{x:675,y:550,width:350,height:320}:
-        {x:type==='standard'?635:650,y:508,width:500,height:545};
+      const robotLayout=milling?{x:335,y:550,width:370,height:320}:
+        {x:type==='standard'?200:215,y:502,width:470,height:510};
       this.robotImage.setPosition(robotLayout.x,robotLayout.y).setDisplaySize(robotLayout.width,robotLayout.height);
       this.millGroup.setVisible(false);
       this.machineImage.setVisible(true);
-      const key='machine-'+type;
+      const key='machine-'+type+(loadingRobot&&!milling?'-robot':'');
       if(this.machineImage.texture.key!==key)this.machineImage.setTexture(key);
       if(milling){
         this.machineImage.setDisplaySize(1000,750).setPosition(500,400);
