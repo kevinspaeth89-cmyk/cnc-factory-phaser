@@ -200,7 +200,9 @@
     currentPanel=name;
     $('drawer').hidden=false;
     $('scrim').hidden=false;
-    $('drawer-title').textContent={orders:'Aufträge',machine:'Maschine',business:'Betrieb'}[name];
+    $('drawer-title').textContent={orders:'Aufträge',machine:'Maschine',business:'Betrieb',warehouse:'Materiallager'}[name];
+    $('warehouse-panel').hidden=name!=='warehouse';
+    $('warehouse-door').setAttribute('aria-expanded',String(name==='warehouse'));
     for(const panel of ['orders','machine','business']){
       $(panel+'-panel').hidden=name!==panel;
       $(panel+'-tab').classList.toggle('active',name===panel);
@@ -215,6 +217,7 @@
     currentPanel=null;
     $('drawer').hidden=true;
     $('scrim').hidden=true;
+    $('warehouse-door').setAttribute('aria-expanded','false');
     for(const panel of ['orders','machine','business']){
       $(panel+'-tab').classList.remove('active');
       $(panel+'-tab').setAttribute('aria-expanded','false');
@@ -700,6 +703,10 @@
     tapHallBay(bay);
   });
   $('hall-preview-close').addEventListener('click',()=>{hallPreviewBay=null;renderHallPreview();});
+  $('warehouse-door').addEventListener('click',()=>{
+    hallPreviewBay=null;renderHallPreview();
+    currentPanel==='warehouse'?closeDrawer():tab('warehouse');
+  });
   window.addEventListener('resize',renderHallPreview);
   $('back-to-hall').addEventListener('click',showHall);
   $('hud-job-button').addEventListener('click',()=>state.machines.length?tab('orders'):tab('business'));

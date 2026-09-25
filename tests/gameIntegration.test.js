@@ -1,9 +1,11 @@
 const fs=require('fs'),vm=require('vm'),assert=require('assert/strict');
 const dir=require('node:path').resolve(__dirname,'..');
 const html=fs.readFileSync(dir+'/index.html','utf8'), ids=[...html.matchAll(/id="([^"]+)"/g)].map(x=>x[1]);
-assert.ok(html.indexOf('id="business-panel"')<html.indexOf('id="buy-material"'));
+assert.ok(html.indexOf('id="warehouse-panel"')<html.indexOf('id="buy-material"'));
+assert.ok(html.indexOf('id="business-panel"')<html.indexOf('id="warehouse-panel"'));
 assert.ok(html.indexOf('id="storage-stock"')<html.indexOf('id="buy-material"'));
-assert.ok(html.indexOf('id="buy-material"')<html.indexOf('id="machine-shop"'));
+assert.ok(html.indexOf('id="warehouse-panel"')>html.indexOf('id="machine-shop"'));
+assert.ok(html.indexOf('id="buy-material"')<html.indexOf('id="storage-upgrade"'));
 function boot(storage,options={}){
   const elements=new Map();
   class El {
@@ -59,8 +61,18 @@ app=boot(storage);st=app.state();assert.equal(st.money,13390);assert.equal(st.br
 app.frame(1000);st=app.state();assert.equal(st.breakdowns.machines['2'].status,'repairing');assert.equal(st.finance.transactions.filter(x=>x.category==='repairs').length,1);
 const empty=boot({});assert.equal(empty.state().machines.length,0);assert.equal(empty.state().material,0);assert.deepEqual(Object.keys(empty.state().breakdowns.machines),[]);
 empty.get('bay-1').click();assert.equal(empty.get('hall-preview').hidden,true);
+empty.get('warehouse-door').click();
+assert.equal(empty.get('warehouse-panel').hidden,false);
+assert.equal(empty.get('business-panel').hidden,true);
+assert.equal(empty.get('drawer-title').textContent,'Materiallager');
+assert.equal(empty.get('warehouse-door').attrs['aria-expanded'],'true');
 empty.get('buy-material').click();assert.equal(empty.state().money,13550);assert.equal(empty.state().inventory.rawMaterial.c45,25);
 assert.equal(empty.state().finance.transactions.filter(x=>x.category==='material').length,1);
+assert.match(empty.get('storage-stock').textContent,/C45 Stahl: 25 kg/);
+empty.get('warehouse-door').click();assert.equal(empty.get('drawer').hidden,true);
+empty.get('warehouse-door').click();empty.get('business-tab').click();
+assert.equal(empty.get('warehouse-panel').hidden,true);
+assert.equal(empty.get('warehouse-door').attrs['aria-expanded'],'false');
 const emptyReload=boot({cnc_factory_save_v3:JSON.stringify(empty.state())});assert.equal(emptyReload.state().inventory.rawMaterial.c45,25);
 emptyReload.get('storage-upgrade').click();
 assert.equal(emptyReload.state().inventory.capacities.raw,500);
