@@ -1076,12 +1076,15 @@
         this.millGroup.add(p);
         return {sprite:p,phase:Math.random()*Math.PI*2,radius:10+Math.random()*48,speed:1+Math.random()*2.5};
       });
-      this.robotImage=this.add.image(750,590,'loading-robot').setDisplaySize(410,375).setVisible(false);
+      this.robotImage=this.add.image(635,508,'loading-robot').setDisplaySize(500,545).setVisible(false);
       render();
     }
     setMachineType(type){
       const milling=catalog[type].kind==='Fräsen';
       this.isMilling=milling;
+      const robotLayout=milling?{x:675,y:550,width:350,height:320}:
+        {x:type==='standard'?635:650,y:508,width:500,height:545};
+      this.robotImage.setPosition(robotLayout.x,robotLayout.y).setDisplaySize(robotLayout.width,robotLayout.height);
       this.millGroup.setVisible(false);
       this.machineImage.setVisible(true);
       const key='machine-'+type;
