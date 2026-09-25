@@ -21,8 +21,10 @@
     learning: { label: 'Lerntempo', trait: 'Tempo im Blut', about: 'eignet sich neue Abläufe schnell an' }
   };
   const LEGACY_NAMES = ['Mira Altspan', 'Tarek Stahlwind', 'Elira Kupferhand', 'Joren Maßstern', 'Vaska Spindelruh', 'Neris Werkfink', 'Kael Eisenherz', 'Zora Fräsborn'];
-  const clampSkill = value => Number.isInteger(value) ? Math.min(5, Math.max(1, value)) : 1;
+  const SKILL_SCALE = 2;
+  const clampSkill = value => Number.isInteger(value) ? Math.min(10, Math.max(1, value)) : 1;
   const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+  const legacySkill = value => Number.isInteger(value) ? clamp(Math.round(1 + ((clamp(value, 1, 5) - 1) / 4) * 9), 1, 10) : 1;
 
   function portraitFor(id) {
     const safeId = Number.isInteger(id) && id > 0 ? id : 1;
@@ -40,15 +42,16 @@
     const order = ['turning', 'milling', 'precision', 'learning'];
     const strongest = order.reduce((best, key) => normalized[key] > normalized[best] ? key : best, order[0]);
     const average = order.reduce((sum, key) => sum + normalized[key], 0) / order.length;
-    const rating = clamp(Math.round(1 + ((average - 1) / 4) * 9), 1, 10);
+    const rating = clamp(Math.round(average), 1, 10);
     const quality = QUALITY[strongest];
     const specialty = normalized.turning >= normalized.milling + 2 ? 'Drehtechnik' :
       normalized.milling >= normalized.turning + 2 ? 'Frästechnik' : 'Allround';
     return {
       specialty,
       trait: quality.trait,
-      about: 'Stärkster Wert: ' + quality.label + ' (' + normalized[strongest] + '/5) – ' + quality.about + '.',
-      rating
+      about: 'Stärkster Wert: ' + quality.label + ' (' + normalized[strongest] + '/10) – ' + quality.about + '.',
+      rating,
+      skillScale: SKILL_SCALE
     };
   }
 
@@ -71,14 +74,14 @@
     if (!Number.isInteger(id) || id < 1) return null;
     const random = randomFor(id);
     const focus = id % 3;
-    const turning = focus === 1 ? 3 + Math.floor(random() * 3) : focus === 2 ? 1 + Math.floor(random() * 3) : 2 + Math.floor(random() * 3);
-    const milling = focus === 2 ? 3 + Math.floor(random() * 3) : focus === 1 ? 1 + Math.floor(random() * 3) : 2 + Math.floor(random() * 3);
+    const turning = focus === 1 ? 6 + Math.floor(random() * 5) : focus === 2 ? 1 + Math.floor(random() * 6) : 3 + Math.floor(random() * 6);
+    const milling = focus === 2 ? 6 + Math.floor(random() * 5) : focus === 1 ? 1 + Math.floor(random() * 6) : 3 + Math.floor(random() * 6);
     const name = FIRST_NAMES[Math.floor(random() * FIRST_NAMES.length)] + ' ' + FAMILY_NAMES[Math.floor(random() * FAMILY_NAMES.length)];
     const skills = {
       turning,
       milling,
-      precision: 1 + Math.floor(random() * 5),
-      learning: 1 + Math.floor(random() * 5)
+      precision: 1 + Math.floor(random() * 10),
+      learning: 1 + Math.floor(random() * 10)
     };
     return { id, name, ...deriveProfile(skills), portrait: portraitFor(id), skills };
   }
@@ -87,7 +90,7 @@
     return value && Number.isInteger(value.id) && value.id > 0 &&
       typeof value.name === 'string' && value.name.trim().length > 0 &&
       value.skills && ['turning', 'milling', 'precision', 'learning'].every(key =>
-        Number.isInteger(value.skills[key]) && value.skills[key] >= 1 && value.skills[key] <= 5);
+        Number.isInteger(value.skills[key]) && value.skills[key] >= 1 && value.skills[key] <= (value.skillScale === SKILL_SCALE ? 10 : 5));
   }
 
   function ensureState(state) {
@@ -100,11 +103,12 @@
     for (const candidate of Array.isArray(old.applicants) ? old.applicants : []) {
       if (!validApplicant(candidate) || seen.has(candidate.id) || applicants.length >= APPLICANT_COUNT) continue;
       const generated = generateApplicant(candidate.id);
+      const migrate = candidate.skillScale === SKILL_SCALE ? clampSkill : legacySkill;
       const skills = {
-        turning: clampSkill(candidate.skills.turning),
-        milling: clampSkill(candidate.skills.milling),
-        precision: clampSkill(candidate.skills.precision),
-        learning: clampSkill(candidate.skills.learning)
+        turning: migrate(candidate.skills.turning),
+        milling: migrate(candidate.skills.milling),
+        precision: migrate(candidate.skills.precision),
+        learning: migrate(candidate.skills.learning)
       };
       applicants.push({
         ...generated,
@@ -148,7 +152,7 @@
       xp: 0,
       trained: 0,
       assignedBay: null,
-      profileVersion: 1,
+      profileVersion: 2,
       name: candidate.name,
       ...deriveProfile(candidate.skills),
       portrait: portraitFor(id),
@@ -172,16 +176,17 @@
 
   function normalizeEmployee(entry, id) {
     const legacy = legacyProfile(id);
-    const validProfile = entry && entry.profileVersion === 1 && typeof entry.name === 'string' && entry.name.trim() &&
-      entry.skills && ['turning', 'milling', 'precision', 'learning'].every(key => Number.isInteger(entry.skills[key]) && entry.skills[key] >= 1 && entry.skills[key] <= 5);
+    const validProfile = entry && [1, 2].includes(entry.profileVersion) && typeof entry.name === 'string' && entry.name.trim() &&
+      entry.skills && ['turning', 'milling', 'precision', 'learning'].every(key => Number.isInteger(entry.skills[key]) && entry.skills[key] >= 1 && entry.skills[key] <= (entry.profileVersion === 2 ? 10 : 5));
+    const migrate = entry?.profileVersion === 2 ? clampSkill : legacySkill;
     const skills = validProfile ? {
-      turning: clampSkill(entry.skills.turning),
-      milling: clampSkill(entry.skills.milling),
-      precision: clampSkill(entry.skills.precision),
-      learning: clampSkill(entry.skills.learning)
+      turning: migrate(entry.skills.turning),
+      milling: migrate(entry.skills.milling),
+      precision: migrate(entry.skills.precision),
+      learning: migrate(entry.skills.learning)
     } : null;
     const profile = validProfile ? {
-      profileVersion: 1,
+      profileVersion: 2,
       name: entry.name.trim().slice(0, 80),
       ...deriveProfile(skills),
       portrait: portraitFor(id),
@@ -197,19 +202,19 @@
   }
 
   function productionMultiplier(employee, kind) {
-    if (employee?.profileVersion !== 1) return 1;
+    if (employee?.profileVersion !== 2) return 1;
     const stat = kind === 'Drehen' ? employee.skills?.turning : employee.skills?.milling;
-    return 1 + Math.max(0, clampSkill(stat) - 1) * 0.025;
+    return 1 + (clampSkill(stat) - 1) * (0.1 / 9);
   }
 
   function learningMultiplier(employee) {
-    if (employee?.profileVersion !== 1) return 1;
-    return 0.8 + (clampSkill(employee.skills?.learning) - 1) * 0.1;
+    if (employee?.profileVersion !== 2) return 1;
+    return 0.8 + (clampSkill(employee.skills?.learning) - 1) * (0.4 / 9);
   }
 
   function toolWearMultiplier(employee) {
-    if (employee?.profileVersion !== 1) return 1;
-    return 1 - (clampSkill(employee.skills?.precision) - 1) * 0.025;
+    if (employee?.profileVersion !== 2) return 1;
+    return 1 - (clampSkill(employee.skills?.precision) - 1) * (0.1 / 9);
   }
 
   return {

@@ -469,7 +469,7 @@
       portrait.className='staff-profile-portrait';portrait.src=employee.portrait||recruitmentSystem.portraitFor(employee.id);
       portrait.alt='Porträt von '+employee.name;portrait.loading='lazy';
       details.className='staff-profile-details';
-      const profile=employee.profileVersion===1?employee.specialty:'Altbestand';
+      const profile=employee.profileVersion===2?employee.specialty:'Altbestand';
       name.className='staff-profile-name';
       name.textContent='S'+shift+' · '+employee.name+' · '+profile+' · '+(employee.assignedBay?'Platz '+employee.assignedBay:'frei');
       about.className='staff-profile-about';about.textContent=employee.about||Math.floor(employee.xp)+' min Erfahrung';
@@ -504,9 +504,9 @@
         const stat=document.createElement('div');stat.className='applicant-stat';
         const top=document.createElement('div');top.className='applicant-stat-head';
         const statName=document.createElement('span');statName.textContent=label;
-        const value=document.createElement('b');value.textContent=`${candidate.skills[key]}/5`;
+        const value=document.createElement('b');value.textContent=`${candidate.skills[key]}/10`;
         const track=document.createElement('div');track.className='applicant-track';
-        const fill=document.createElement('span');fill.style.width=`${candidate.skills[key]*20}%`;track.append(fill);
+        const fill=document.createElement('span');fill.style.width=`${candidate.skills[key]*10}%`;track.append(fill);
         top.append(statName,value);stat.append(top,track);stats.append(stat);
       }
       const actions=document.createElement('div');actions.className='applicant-actions';
