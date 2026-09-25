@@ -30,12 +30,17 @@ test('different material prices and amounts use the same typed warehouse capacit
   assert.equal(materials.quote('aluminium6082', 100), 2700);
   assert.equal(materials.quote('castiron400', 100), 1600);
   assert.equal(materials.quote('c45', -25), null);
+  assert.equal(materials.pricePerKg('c45'), 18);
+  assert.equal(materials.pricePerKg('unknown'), null);
 });
 
 test('material rates vary by type and game day, while saves get the same quote', () => {
   const day = 1440;
   const steel = materials.quote('c45', 100, day);
   const aluminium = materials.quote('aluminium6082', 100, day);
+  assert.equal(materials.pricePerKg('steel42crmo4',day),24.75);
+  assert.equal(materials.quote('steel42crmo4',25,day),618.75);
+  assert.equal(materials.quote('steel42crmo4',100,day),2475);
   assert.equal(materials.quote('c45', 100, day + 500), steel);
   assert.equal(materials.quote('c45', 100, day * 2), materials.quote('c45', 100, day * 2 + 50));
   assert.notEqual(steel, materials.quote('c45', 100, 0));

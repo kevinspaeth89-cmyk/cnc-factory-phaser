@@ -42,9 +42,13 @@
     const hash = (Math.imul(day, 1664525) ^ Math.imul(index, 1013904223)) >>> 0;
     return (80 + hash % 41) / 100;
   }
+  function pricePerKg(type, gameMinutes = 0) {
+    const multiplier = marketMultiplier(type, gameMinutes);
+    return multiplier === null ? null : Math.round(catalog[type].pricePer100Kg * multiplier) / 100;
+  }
   function quote(type, quantityKg, gameMinutes = 0) {
     if (!Object.hasOwn(catalog, type) || ![25, 100].includes(quantityKg)) return null;
-    return Math.round(catalog[type].pricePer100Kg * quantityKg / 100 * marketMultiplier(type, gameMinutes));
+    return Math.round(pricePerKg(type, gameMinutes) * quantityKg * 100) / 100;
   }
   function reserve(state, inventory, order) {
     const quantity = requiredKg(order),type = typeForOrder(order);
@@ -67,5 +71,5 @@
     }
     return { ok: true, code: 'ok', consumed };
   }
-  return Object.freeze({ catalog, typeForOrder, requiredKg, available, marketMultiplier, quote, reserve });
+  return Object.freeze({ catalog, typeForOrder, requiredKg, available, marketMultiplier, pricePerKg, quote, reserve });
 });
