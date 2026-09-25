@@ -58,6 +58,10 @@ app.get('bay-2').click();
 assert.match(app.get('hall-preview-job').textContent,/12\/\d+ Teile/);
 assert.match(app.get('hall-preview-time').textContent,/Rest .* · Frist /);
 assert.equal(app.get('hall-preview-time').hidden,false);
+assert.equal(app.get('hall-preview-progress-fill').style.width,'25%');
+assert.equal(app.get('hall-preview-tool-fill').style.width,'82%');
+assert.equal(app.get('hall-preview-maintenance-fill').style.width,'50%');
+assert.equal(app.get('hall-preview-progress-bar').attrs['aria-valuenow'],'25');
 assert.match(app.get('hall-preview-operators').textContent,/S1 ✓ · S2 –/);
 app.get('repair-now').click();st=app.state();assert.equal(st.breakdowns.machines['2'].status,'repairing');assert.equal(st.money,13390);assert.equal(st.finance.transactions.filter(x=>x.category==='repairs').length,1);
 app=boot(storage);st=app.state();assert.equal(st.money,13390);assert.equal(st.breakdowns.machines['2'].status,'repairing');assert.equal(st.finance.transactions.filter(x=>x.category==='repairs').length,1);assert.equal(st.machines[0].activeId,'A12');
@@ -237,7 +241,7 @@ assert.match(queueCard.children.at(-1).textContent,/vormerken/);
 queueCard.children.at(-1).click();
 let queueSave=queued.state();
 assert.equal(queueSave.machines[0].activeId,'MATERIAL-TEST');
-assert.equal(queueSave.machines[0].queuedOrder.id,'QUEUE-TEST');
+assert.equal(queueSave.machines[0].orderQueue[0].order.id,'QUEUE-TEST');
 assert.equal(queueSave.inventory.rawMaterial.c45,10);
 assert.equal(queueSave.orderMarket.available.some(x=>x.id==='QUEUE-TEST'),false);
 assert.equal(queueSave.finance.transactions.filter(x=>x.category==='income').length,0);
@@ -245,21 +249,21 @@ assert.equal(queued.get('sell-machine').disabled,true);
 queued=boot(queueStorage);
 assert.equal(queued.get('queued-orders').children.length,1);
 queued.get('queued-orders').children[0].children[1].click();
-assert.equal(queued.state().machines[0].queuedOrder,null);
+assert.equal(queued.state().machines[0].orderQueue.length,0);
 assert.equal(queued.state().inventory.rawMaterial.c45,20);
 assert.equal(queued.state().finance.transactions.filter(x=>x.category==='income').length,0);
 const fullWarehouse=JSON.parse(JSON.stringify(queueSave));
 fullWarehouse.inventory.rawMaterial.c45=200;fullWarehouse.material=300;
 const fullQueue=boot({cnc_factory_save_v3:JSON.stringify(fullWarehouse)});
 assert.equal(fullQueue.get('queued-orders').children[0].children[1].disabled,true);
-assert.equal(fullQueue.state().machines[0].queuedOrder.id,'QUEUE-TEST');
+assert.equal(fullQueue.state().machines[0].orderQueue[0].order.id,'QUEUE-TEST');
 queueSave.machines[0].progress=99.5;
 queueSave.machines[0].activeOrder.customer='Veltraxis Mobility';
 const completionStorage={cnc_factory_save_v3:JSON.stringify(queueSave)};
 let completing=boot(completionStorage);
 completing.frame(1000);
 assert.equal(completing.state().machines[0].activeId,'QUEUE-TEST');
-assert.equal(completing.state().machines[0].queuedOrder,null);
+assert.equal(completing.state().machines[0].orderQueue.length,0);
 assert.equal(completing.state().finance.transactions.filter(x=>x.category==='income').length,1);
 assert.equal(completing.state().customerReputation['Veltraxis Mobility'],54);
 assert.ok(completing.get('customer-reputation').children.some(row=>row.children[0].textContent==='Veltraxis Mobility'&&row.children[1].textContent.includes('54/100')));
@@ -268,6 +272,95 @@ assert.equal(completing.state().machines[0].activeId,'QUEUE-TEST');
 assert.equal(completing.state().finance.transactions.filter(x=>x.category==='income').length,1);
 assert.equal(completing.state().customerReputation['Veltraxis Mobility'],54);
 console.log('Game integration: material purchase, jobs, repair decisions, expansion and reload OK');
+
+const legacyQueueState=JSON.parse(JSON.stringify(queueSave));
+const olderEntry=legacyQueueState.machines[0].orderQueue.shift();
+legacyQueueState.machines[0].queuedOrder=olderEntry.order;
+legacyQueueState.machines[0].queuedMaterial=olderEntry.material;
+legacyQueueState.machines[0].queuedDeadlineAt=olderEntry.deadlineAt;
+const migrated=boot({cnc_factory_save_v3:JSON.stringify(legacyQueueState)});
+assert.equal(migrated.state().machines[0].orderQueue[0].order.id,'QUEUE-TEST');
+assert.equal(migrated.state().machines[0].orderQueue[0].deadlineAt,olderEntry.deadlineAt);
+assert.equal(migrated.state().machines[0].queuedOrder,undefined);
+const multiState=typed.state();
+multiState.inventory.rawMaterial.c45=80;multiState.material=80;
+for(let i=1;i<=4;i++)multiState.orderMarket.available.push({
+  id:`BATCH-${i}`,kind:'Drehen',customer:'Test',part:`Serie ${i}`,material:'C45 Stahl',
+  kg:10,qty:10,reward:3000,duration:20,deadlineHours:4,createdAt:0,expiresAt:1000
+});
+const multiStorage={cnc_factory_save_v3:JSON.stringify(multiState)};
+let multiple=boot(multiStorage);
+const multiInitialStock=multiple.state().material;
+for(let i=1;i<=3;i++){
+  const card=multiple.get('orders').children.find(x=>x.innerHTML?.includes(`BATCH-${i}`));
+  assert.equal(card.children.at(-1).disabled,false);
+  card.children.at(-1).click();
+  assert.equal(multiple.state().machines[0].orderQueue.length,i);
+}
+assert.equal(multiple.state().material,multiInitialStock-30);
+let fourth=multiple.get('orders').children.find(x=>x.innerHTML?.includes('BATCH-4'));
+assert.equal(fourth.children.at(-1).disabled,true);
+fourth.children.at(-1).click();
+assert.equal(multiple.state().machines[0].orderQueue.length,3);
+multiple=boot(multiStorage);
+assert.deepEqual(multiple.state().machines[0].orderQueue.map(entry=>entry.order.id),['BATCH-1','BATCH-2','BATCH-3']);
+multiple.get('queued-orders').children[1].children[1].click();
+assert.deepEqual(multiple.state().machines[0].orderQueue.map(entry=>entry.order.id),['BATCH-1','BATCH-3']);
+assert.equal(multiple.state().material,multiInitialStock-20);
+fourth=multiple.get('orders').children.find(x=>x.innerHTML?.includes('BATCH-4'));
+fourth.children.at(-1).click();
+assert.deepEqual(multiple.state().machines[0].orderQueue.map(entry=>entry.order.id),['BATCH-1','BATCH-3','BATCH-4']);
+assert.equal(multiple.state().material,multiInitialStock-30);
+const plannedIds=['BATCH-1','BATCH-3','BATCH-4'];
+for(const id of plannedIds){
+  const before=multiple.state();
+  before.machines[0].progress=99.5;
+  before.machines[0].tool=90;before.machines[0].maintenance=90;
+  const stepStorage={cnc_factory_save_v3:JSON.stringify(before)};
+  multiple=boot(stepStorage);multiple.frame(1000);
+  assert.equal(multiple.state().machines[0].activeId,id);
+  assert.equal(multiple.state().machines[0].orderQueue.length,plannedIds.length-1-plannedIds.indexOf(id));
+}
+assert.equal(multiple.state().finance.transactions.filter(x=>x.category==='income').length,3);
+const finalStorage={cnc_factory_save_v3:JSON.stringify(multiple.state())};
+assert.equal(boot(finalStorage).state().finance.transactions.filter(x=>x.category==='income').length,3);
+console.log('Three reserved jobs: save migration, inventory, cancellation, FIFO and payouts OK');
+
+const robotState={money:25000,material:120,capacity:300,staff:{shift1:0,shift2:0},
+  machines:[{bay:1,type:'standard',level:1,maintenance:90,tool:82,operator1:false,operator2:false,
+    activeId:'A12',progress:20,produced:10,deadlineAt:900}],
+  selectedBay:1,gameMinutes:480,speed:1,paused:false};
+const robotStorage={cnc_factory_save_v3:JSON.stringify(robotState)};
+let robot=boot(robotStorage);assert.equal(robot.get('buy-robot').disabled,false);
+robot.get('buy-robot').click();
+assert.equal(robot.state().money,16500);
+assert.equal(robot.state().machines[0].operator2,false);
+assert.equal(robot.state().machines[0].loadingRobot,true);
+assert.equal(robot.state().staffRoster.shift2.length,0);
+assert.match(robot.get('hud-operators').textContent,/S2 Roboter/);
+assert.match(robot.get('bay-1').querySelector('.bay-robot').src,/loading-robot/);
+assert.equal(robot.get('buy-robot').disabled,true);
+assert.equal(robot.state().finance.transactions.filter(x=>x.meta?.robot).length,1);
+robot=boot(robotStorage);
+assert.equal(robot.state().finance.transactions.filter(x=>x.meta?.robot).length,1);
+const progressBefore=robot.state().machines[0].progress;
+robot.frame(1000);robot.flush();
+assert.ok(robot.state().machines[0].progress>progressBefore);
+assert.equal(robot.state().payrollDue,0);
+assert.ok(robot.state().energyPaid>0);
+const reassignedState={...robotState,staff:{shift1:0,shift2:1},machines:[{...robotState.machines[0],operator2:true}]};
+const reassigned=boot({cnc_factory_save_v3:JSON.stringify(reassignedState)});
+reassigned.get('buy-robot').click();
+assert.equal(reassigned.state().staffRoster.shift2[0].assignedBay,null);
+assert.equal(reassigned.state().staff.shift2,1);
+assert.equal(reassigned.get('fire-2').disabled,false);
+const soldRobot={cnc_factory_save_v3:JSON.stringify({...robot.state(),machines:[{...robot.state().machines[0],activeId:null,activeOrder:null,progress:0,orderQueue:[]}]})};
+const robotSale=boot(soldRobot);
+assert.match(robotSale.get('sell-machine-value').textContent,/7\.300/);
+robotSale.get('sell-machine').click();
+assert.equal(robotSale.state().machines.length,0);
+assert.equal(robotSale.get('bay-1').querySelector('.bay-robot').hidden,true);
+console.log('Loading robot: purchase, shift 2 operation, wages, reload and sale OK');
 
 const hallStorage={cnc_factory_save_v3:JSON.stringify({
   money:14000,material:0,capacity:300,staff:{shift1:0,shift2:0},

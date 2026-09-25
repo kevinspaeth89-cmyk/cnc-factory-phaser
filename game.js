@@ -11,6 +11,8 @@
   const STORAGE_UPGRADE = 4000;
   const SELL_BASE_RATE = .60;
   const SELL_UPGRADE_RATE = .35;
+  const MAX_QUEUED_ORDERS = 3;
+  const LOADING_ROBOT_COST = 8500;
   const economySystem = globalThis.CNCModules && globalThis.CNCModules.economy;
   const inventorySystem = globalThis.CNCModules && globalThis.CNCModules.inventory;
   const orderMarketSystem = globalThis.CNCModules && globalThis.CNCModules.orderMarket;
@@ -39,9 +41,9 @@
     {id:'P09',kind:'Fräsen',customer:'Orionis Fluidics',part:'Pumpengehäuse P09',material:'EN-GJS-400',kg:88,qty:24,reward:13900,duration:78,deadlineHours:11}
   ];
   const freshMachine = (bay, type='standard') => ({
-    bay,type,level:1,maintenance:90,tool:82,operator1:false,operator2:false,
+    bay,type,level:1,maintenance:90,tool:82,operator1:false,operator2:false,loadingRobot:false,
     activeId:null,activeOrder:null,activeOrderSource:null,progress:0,produced:0,deadlineAt:null,
-    queuedOrder:null,queuedMaterial:null,queuedDeadlineAt:null
+    orderQueue:[]
   });
   const defaults = () => ({
     money:14000,material:0,capacity:300,staff:{shift1:0,shift2:0},
@@ -89,18 +91,28 @@
     }
   } catch (_) { /* Storage may be unavailable. */ }
   state.machines.forEach(m=>{
+    m.loadingRobot=!!m.loadingRobot;
+    if(m.loadingRobot)m.operator2=false;
     if(m.activeId&&!m.activeOrder){
       const legacyOrder=legacyOrders.find(order=>order.id===m.activeId);
       if(legacyOrder){m.activeOrder={...legacyOrder};m.activeOrderSource='legacy';}
     }
-    if(!m.queuedOrder||typeof m.queuedOrder.id!=='string'||m.queuedOrder.id===m.activeId||
-       m.queuedOrder.kind!==catalog[m.type]?.kind){
-      m.queuedOrder=null;m.queuedMaterial=null;m.queuedDeadlineAt=null;
-    }else if(!m.activeId){
-      m.activeId=m.queuedOrder.id;m.activeOrder=m.queuedOrder;m.activeOrderSource='market';
-      m.progress=0;m.produced=0;
-      m.deadlineAt=Number.isFinite(m.queuedDeadlineAt)?m.queuedDeadlineAt:state.gameMinutes+m.queuedOrder.deadlineHours*60;
-      m.queuedOrder=null;m.queuedMaterial=null;m.queuedDeadlineAt=null;
+    const savedQueue=Array.isArray(m.orderQueue)?m.orderQueue:[];
+    if(m.queuedOrder&&typeof m.queuedOrder.id==='string'&&!savedQueue.some(entry=>entry?.order?.id===m.queuedOrder.id)){
+      savedQueue.unshift({order:m.queuedOrder,material:m.queuedMaterial,deadlineAt:m.queuedDeadlineAt});
+    }
+    const seen=new Set([m.activeId]);
+    m.orderQueue=savedQueue.filter(entry=>{
+      const order=entry?.order;
+      if(typeof order?.id!=='string'||!order.id||order.kind!==catalog[m.type]?.kind||seen.has(order.id))return false;
+      seen.add(order.id);return true;
+    }).map(entry=>({order:entry.order,material:entry.material&&typeof entry.material==='object'?entry.material:{},
+      deadlineAt:Number.isFinite(entry.deadlineAt)?entry.deadlineAt:state.gameMinutes+entry.order.deadlineHours*60}));
+    delete m.queuedOrder;delete m.queuedMaterial;delete m.queuedDeadlineAt;
+    if(!m.activeId&&m.orderQueue.length){
+      const next=m.orderQueue.shift();
+      m.activeId=next.order.id;m.activeOrder=next.order;m.activeOrderSource='market';
+      m.progress=0;m.produced=0;m.deadlineAt=next.deadlineAt;
     }
   });
   state.speed=[1,2,5,10].includes(state.speed)?state.speed:1;
@@ -199,7 +211,7 @@
   };
   const compatible=(m,o)=>!!m&&!!o&&catalog[m.type].kind===o.kind;
   const upgradeInvestment=m=>m?9000*((m.level-1)*m.level/2):0;
-  const resaleValue=m=>m?Math.round(catalog[m.type].price*SELL_BASE_RATE+upgradeInvestment(m)*SELL_UPGRADE_RATE):0;
+  const resaleValue=m=>m?Math.round(catalog[m.type].price*SELL_BASE_RATE+upgradeInvestment(m)*SELL_UPGRADE_RATE+(m.loadingRobot?LOADING_ROBOT_COST*.4:0)):0;
   const skillLevel=employee=>employee?Math.min(3,Math.max(employee.trained,employee.xp>=1500?3:employee.xp>=600?2:employee.xp>=180?1:0)):0;
   const assignedEmployee=(m,shift)=>state.staffRoster['shift'+shift].find(employee=>employee.assignedBay===m.bay);
   const productionFactor=m=>catalog[m.type].rate*(1+(m.level-1)*.13)*Math.max(.65,m.maintenance/100*.75+.25)*
@@ -220,7 +232,7 @@
     return `${day} ${String(d.getUTCHours()).padStart(2,'0')}:${String(d.getUTCMinutes()).padStart(2,'0')}`;
   };
   const readyToRun=m=>!!job(m)&&!state.paused&&!!shiftAt(state.gameMinutes)&&
-    !!m['operator'+shiftAt(state.gameMinutes)]&&m.tool>=1&&m.maintenance>=8;
+    !!(m['operator'+shiftAt(state.gameMinutes)]||(shiftAt(state.gameMinutes)===2&&m.loadingRobot))&&m.tool>=1&&m.maintenance>=8;
   const operating=m=>readyToRun(m)&&breakdownSystem.canContinueProduction(state,m.bay);
   const canChangeTool=m=>!!m&&state.money>=650&&m.tool<99&&(!job(m)||m.tool<1);
   const canMaintain=m=>!!m&&state.money>=1200&&m.maintenance<99&&(!job(m)||m.maintenance<8);
@@ -244,7 +256,7 @@
     if(!job(m))return 'Bereit';
     const shift=shiftAt(state.gameMinutes);
     if(!shift)return 'Betrieb geschlossen';
-    if(!m['operator'+shift])return `Kein Bediener Schicht ${shift}`;
+    if(!m['operator'+shift]&&!(shift===2&&m.loadingRobot))return `Kein Bediener Schicht ${shift}`;
     return 'Produktion läuft';
   }
   function tab(name){
@@ -287,11 +299,18 @@
     $('hall-preview-title').textContent=`${catalog[machine.type].name} · Platz ${machine.bay}`;
     $('hall-preview-meta').textContent=`${catalog[machine.type].kind} · Level ${machine.level} · ${statusFor(machine)}`;
     $('hall-preview-job').textContent=order?`${order.part} · ${machine.produced}/${order.qty} Teile · ${Math.floor(machine.progress)} %`:'Kein laufender Auftrag';
+    $('hall-preview-progress').hidden=!order;
+    for(const [name,value] of [['progress',order?machine.progress:0],['tool',machine.tool],['maintenance',machine.maintenance]]){
+      const fill=$(`hall-preview-${name}-fill`);
+      fill.style.width=Math.max(0,Math.min(100,value))+'%';
+      fill.className='preview-meter-fill '+(name==='progress'?'progress':value<=15?'low':value<=40?'medium':'good');
+      $(`hall-preview-${name}-bar`).setAttribute('aria-valuenow',String(Math.max(0,Math.min(100,Math.round(value)))));
+    }
     const deadlineLeft=order&&Number.isFinite(machine.deadlineAt)?machine.deadlineAt-state.gameMinutes:null;
     $('hall-preview-time').hidden=!order;
     $('hall-preview-time').textContent=order?`Rest ${formatMinutes(remainingMinutes(machine,order))}${deadlineLeft===null?'':` · Frist ${deadlineLeft<0?`${formatMinutes(-deadlineLeft)} überfällig`:formatMinutes(deadlineLeft)}`}`:'';
-    $('hall-preview-condition').textContent=`Werkzeug ${Math.round(machine.tool)} % · Wartung ${Math.round(machine.maintenance)} %`;
-    $('hall-preview-operators').textContent=`Bediener S1 ${machine.operator1?'✓':'–'} · S2 ${machine.operator2?'✓':'–'}`;
+    $('hall-preview-condition').textContent=`Werkzeug ${conditionLabel(machine.tool)} · Wartung ${Math.round(machine.maintenance)} % · Geplant ${machine.orderQueue.length}/${MAX_QUEUED_ORDERS}`;
+    $('hall-preview-operators').textContent=`Bediener S1 ${machine.operator1?'✓':'–'} · S2 ${machine.loadingRobot?'Roboter':machine.operator2?'✓':'–'}`;
     const slot=expansionSystem.getBayLayout(state).find(item=>item.bay===machine.bay);
     const hall=$('hall-map'),width=hall.clientWidth,height=hall.clientHeight;
     if(!slot||!width||!height)return;
@@ -361,16 +380,16 @@
     $('order-machine').replaceChildren(...machineOptions);
     $('order-machine').disabled=!state.machines.length;
     const offers=orderMarketSystem.getAvailable(state);
-    $('queued-orders').replaceChildren(...state.machines.filter(m=>m.queuedOrder).map(m=>{
+    $('queued-orders').replaceChildren(...state.machines.flatMap(m=>m.orderQueue.map((entry,index)=>{
       const row=document.createElement('div'),title=document.createElement('span'),cancel=document.createElement('button');
       row.className='queued-job';
-      title.textContent=`Platz ${m.bay}: Danach ${m.queuedOrder.part} · ${m.queuedOrder.qty} Teile · Frist ${formatMinutes(m.queuedDeadlineAt-state.gameMinutes)}`;
+      title.textContent=`Platz ${m.bay} · Planung ${index+1}/${MAX_QUEUED_ORDERS}: ${entry.order.part} · ${entry.order.qty} Teile · Frist ${formatMinutes(entry.deadlineAt-state.gameMinutes)}`;
       cancel.type='button';cancel.textContent='Vormerkung lösen';
-      const held=Object.values(m.queuedMaterial||{}).reduce((sum,amount)=>sum+amount,0);
+      const held=Object.values(entry.material||{}).reduce((sum,amount)=>sum+amount,0);
       cancel.disabled=state.material+held>state.capacity+1e-9;
-      cancel.addEventListener('click',()=>cancelQueuedOrder(m));
+      cancel.addEventListener('click',()=>cancelQueuedOrder(m,index));
       row.append(title,cancel);return row;
-    }));
+    })));
     $('orders').replaceChildren(...offers.map(o=>{
       const m=selectedMachine(),card=document.createElement('article');
       const running=state.machines.find(x=>x.activeId===o.id),fits=compatible(m,o);
@@ -383,8 +402,8 @@
       const button=document.createElement('button');
       button.type='button';
       const shortage=Math.max(0,materialSystem.requiredKg(o)-materialSystem.available(state,o));
-      button.textContent=running?'Produktion läuft':!m?'Zuerst Maschine kaufen':!fits?`Benötigt ${o.kind}`:m.queuedOrder?'Warteschlange belegt':shortage>1e-9?`Fehlen ${Math.ceil(shortage)} kg ${o.material}`:job(m)?`Für Platz ${m.bay} vormerken`:`Auf Platz ${m.bay} annehmen`;
-      button.disabled=!m||!!running||!!m?.queuedOrder||!fits||shortage>1e-9;
+      button.textContent=running?'Produktion läuft':!m?'Zuerst Maschine kaufen':!fits?`Benötigt ${o.kind}`:m.orderQueue.length>=MAX_QUEUED_ORDERS?'Planung voll (3/3)':shortage>1e-9?`Fehlen ${Math.ceil(shortage)} kg ${o.material}`:job(m)?`Für Platz ${m.bay} vormerken (${m.orderQueue.length+1}/${MAX_QUEUED_ORDERS})`:`Auf Platz ${m.bay} annehmen`;
+      button.disabled=!m||!!running||m?.orderQueue.length>=MAX_QUEUED_ORDERS||!fits||shortage>1e-9;
       button.addEventListener('click',event=>{event.stopPropagation();startOrder(o.id);});
       card.append(button);
       card.addEventListener('click',()=>{state.selected=o.id;save();renderOrders();});
@@ -488,12 +507,14 @@
       return card;
     }));
     $('operator-1').textContent=m?(m.operator1?'S1 abziehen':'S1 zuweisen'):'Keine Maschine';
-    $('operator-2').textContent=m?(m.operator2?'S2 abziehen':'S2 zuweisen'):'Keine Maschine';
+    $('operator-2').textContent=m?(m.loadingRobot?'S2 · Roboter aktiv':m.operator2?'S2 abziehen':'S2 zuweisen'):'Keine Maschine';
+    $('buy-robot').textContent=m?.loadingRobot?'Laderoboter installiert':`Laderoboter kaufen · ${euro(LOADING_ROBOT_COST)}`;
+    $('buy-robot').disabled=!m||m.loadingRobot||state.money<LOADING_ROBOT_COST;
     $('sell-machine-value').textContent=m?euro(resaleValue(m)):'—';
-    $('sell-machine').disabled=!m||!!job(m)||!!m.queuedOrder;
+    $('sell-machine').disabled=!m||!!job(m)||!!m.orderQueue.length;
     for(const shift of [1,2]){
       const assigned=state.machines.filter(x=>x['operator'+shift]).length;
-      $('operator-'+shift).disabled=!m||(!m['operator'+shift]&&assigned>=state.staff['shift'+shift]);
+      $('operator-'+shift).disabled=!m||(shift===2&&m.loadingRobot)||(!m['operator'+shift]&&assigned>=state.staff['shift'+shift]);
     }
   }
   function renderCosts(){
@@ -578,14 +599,14 @@
     $('hud-deadline').textContent=deadlineLeft===null?'—':deadlineLeft<0?(formatMinutes(-deadlineLeft)+' überfällig'):formatMinutes(deadlineLeft);
     $('hud-tool').textContent=m?conditionLabel(m.tool):'—';
     $('hud-maintenance').textContent=m?Math.round(m.maintenance)+' %':'—';
-    $('hud-operators').textContent=m?('S1 '+(m.operator1?'✓':'–')+' · S2 '+(m.operator2?'✓':'–')):'—';
+    $('hud-operators').textContent=m?('S1 '+(m.operator1?'✓':'–')+' · S2 '+(m.loadingRobot?'Roboter':m.operator2?'✓':'–')):'—';
     $('hud-job-button').textContent=o?'Aufträge ansehen':m?'Auftrag wählen':'Maschine kaufen';
 
     $('change-tool').disabled=!canChangeTool(m);
     $('maintenance').disabled=!canMaintain(m);
     $('upgrade').disabled=!m||state.money<9000*m.level;
     $('sell-machine-value').textContent=m?euro(resaleValue(m)):'—';
-    $('sell-machine').disabled=!m||!!o||!!m.queuedOrder;
+    $('sell-machine').disabled=!m||!!o||!!m.orderQueue.length;
     for(let bay=1;bay<=8;bay++){
       const b=$('bay-'+bay),machine=machineAt(bay);
       const slot=layout.bays.find(entry=>entry.bay===bay);
@@ -603,6 +624,7 @@
       b.classList.toggle('milling-bay',milling);
       b.classList.toggle('veltron-bay',!!machine&&machine.type==='mill3');
       b.classList.toggle('turning-bay',turning);
+      b.classList.toggle('robot-loading',!!machine?.loadingRobot&&operating(machine)&&shiftAt(state.gameMinutes)===2);
 
       let machineArt=b.querySelector('.bay-machine');
       let turningFrame=b.querySelector('.bay-turning-frame');
@@ -636,6 +658,14 @@
       }else if(machineArt){
         machineArt.hidden=true;
       }
+      let robotArt=b.querySelector('.bay-robot');
+      if(machine?.loadingRobot){
+        if(!robotArt){
+          robotArt=document.createElement('img');robotArt.className='bay-robot';robotArt.alt='';
+          robotArt.src='assets/loading-robot.webp?v=1';b.append(robotArt);
+        }
+        robotArt.hidden=false;
+      }else if(robotArt)robotArt.hidden=true;
       b.querySelector('span').textContent=machine?catalog[machine.type].name:`+ Platz ${bay}`;
       b.setAttribute('aria-label',machine?`${catalog[machine.type].name}, Platz ${bay} ansehen`:`Freier Stellplatz ${bay}, Maschinen kaufen`);
       b.title=machine?statusFor(machine):'Maschine kaufen';
@@ -644,13 +674,14 @@
     if(visual){
       visual.running=!!m&&operating(m);
       visual.condition=!m?'idle':(m.maintenance<8||m.tool<1)?'fault':operating(m)?'running':o?'waiting':'idle';
+      visual.robotEnabled=!!m?.loadingRobot;
       if(m)visual.setMachineType(m.type);
     }
   }
   function startOrder(id){
     orderMarketSystem.tick(state,state.gameMinutes);
     const o=orderMarketSystem.getAvailable(state).find(order=>order.id===id),m=selectedMachine();
-    if(!o||!m||m.queuedOrder||state.machines.some(x=>x.activeId===id||x.queuedOrder?.id===id)){say('Dieses Angebot ist nicht mehr verfügbar oder die Warteschlange ist belegt.');return;}
+    if(!o||!m||m.orderQueue.length>=MAX_QUEUED_ORDERS||state.machines.some(x=>x.activeId===id||x.orderQueue.some(entry=>entry.order.id===id))){say('Dieses Angebot ist nicht mehr verfügbar oder die Auftragsplanung ist voll.');return;}
     if(!compatible(m,o)){say(`${o.part} benötigt ${o.kind}. ${catalog[m.type].name} ist für ${catalog[m.type].kind} ausgelegt.`);return;}
     const requiredMaterial=materialSystem.requiredKg(o),availableMaterial=materialSystem.available(state,o);
     if(availableMaterial+1e-9<requiredMaterial){
@@ -663,11 +694,11 @@
     if(!accepted){restoreOrderMaterial(materialResult.consumed);say('Das Angebot ist inzwischen abgelaufen.');return;}
     orderMarketSystem.tick(state,state.gameMinutes);
     if(job(m)){
-      m.queuedOrder=accepted;m.queuedMaterial=materialResult.consumed;
-      m.queuedDeadlineAt=state.gameMinutes+accepted.deadlineHours*60;
+      m.orderQueue.push({order:accepted,material:materialResult.consumed,
+        deadlineAt:state.gameMinutes+accepted.deadlineHours*60});
       state.selected=null;
       save();renderOrders();renderBusiness();render();
-      say(`${accepted.part} für Platz ${m.bay} vorgemerkt. Material wurde reserviert.`);
+      say(`${accepted.part} für Platz ${m.bay} vorgemerkt (${m.orderQueue.length}/${MAX_QUEUED_ORDERS}). Material wurde reserviert.`);
       return;
     }
     m.activeId=accepted.id;m.activeOrder=accepted;m.activeOrderSource='market';m.progress=0;m.produced=0;
@@ -676,12 +707,12 @@
     save();renderOrders();renderBusiness();render();closeDrawer();showMachine(m.bay);
     say(`${accepted.part} auf Platz ${m.bay} angenommen. ${statusFor(m)}.`);
   }
-  function cancelQueuedOrder(m){
-    if(!m?.queuedOrder||!m.queuedMaterial)return;
-    const held=Object.values(m.queuedMaterial).reduce((sum,amount)=>sum+amount,0);
+  function cancelQueuedOrder(m,index){
+    const entry=m?.orderQueue[index];if(!entry)return;
+    const held=Object.values(entry.material).reduce((sum,amount)=>sum+amount,0);
     if(state.material+held>state.capacity+1e-9){say('Zum Zurücklegen des reservierten Materials fehlt Lagerplatz.');return;}
-    if(!restoreOrderMaterial(m.queuedMaterial))return;
-    m.queuedOrder=null;m.queuedMaterial=null;m.queuedDeadlineAt=null;
+    if(!restoreOrderMaterial(entry.material))return;
+    m.orderQueue.splice(index,1);
     save();renderOrders();renderBusiness();render();say('Vormerkung gelöst. Reserviertes Material ist zurück im Lager.');
   }
   function buyMachine(type){
@@ -699,7 +730,7 @@
   function sellMachine(){
     const m=selectedMachine();
     if(!m)return;
-    if(job(m)||m.queuedOrder){say('Laufenden oder vorgemerkten Auftrag zuerst abschließen.');return;}
+    if(job(m)||m.orderQueue.length){say('Laufenden oder vorgemerkten Auftrag zuerst abschließen.');return;}
     const name=catalog[m.type].name,value=resaleValue(m),oldBay=m.bay;
     if(!book('machine_sale',value,`${name} verkauft`,{type:m.type,bay:oldBay}).ok)return;
     for(const shift of [1,2]){
@@ -743,7 +774,7 @@
   }
   function toggleOperator(shift){
     const m=selectedMachine(),key='operator'+shift;
-    if(!m)return;
+    if(!m||(shift===2&&m.loadingRobot))return;
     if(!m[key]&&state.machines.filter(x=>x[key]).length>=state.staff['shift'+shift])return;
     const roster=state.staffRoster['shift'+shift];
     const employee=m[key]?roster.find(person=>person.assignedBay===m.bay):roster.find(person=>person.assignedBay===null);
@@ -752,6 +783,15 @@
     m[key]=!m[key];
     renderBusiness();render();save();
     say(`Schicht ${shift}: Bediener ${m[key]?'zugewiesen':'abgezogen'}.`);
+  }
+  function buyRobot(){
+    const m=selectedMachine();
+    if(!m||m.loadingRobot||state.money<LOADING_ROBOT_COST)return;
+    if(!book('machine_purchase',-LOADING_ROBOT_COST,`Laderoboter für ${catalog[m.type].name} gekauft`,{bay:m.bay,type:m.type,robot:true}).ok)return;
+    const employee=assignedEmployee(m,2);
+    if(employee)employee.assignedBay=null;
+    m.operator2=false;m.loadingRobot=true;
+    save();renderBusiness();render();say(`Laderoboter auf Platz ${m.bay} installiert. Spätschicht ist automatisiert.`);
   }
   function trainEmployee(shift,id){
     const employee=state.staffRoster['shift'+shift].find(person=>person.id===id);
@@ -781,7 +821,7 @@
       for(const m of state.machines){
         const o=job(m);
         if(!o||!operating(m))continue;
-        const power=14*.28*step/60;
+        const power=(14*.28+(shift===2&&m.loadingRobot?.60:0))*step/60;
         const dateKey=gameDateKey();
         book('energy',-power,'Stromkosten laufende Maschinen',{gameDate:dateKey},`daily:energy:${dateKey}`);
         state.energyPaid+=power;
@@ -803,11 +843,10 @@
           }
           state.completed++;
           m.activeId=null;m.activeOrder=null;m.activeOrderSource=null;m.progress=0;m.produced=0;m.deadlineAt=null;
-          const next=m.queuedOrder;
+          const next=m.orderQueue.shift();
           if(next){
-            m.activeId=next.id;m.activeOrder=next;m.activeOrderSource='market';
-            m.deadlineAt=m.queuedDeadlineAt;
-            m.queuedOrder=null;m.queuedMaterial=null;m.queuedDeadlineAt=null;
+            m.activeId=next.order.id;m.activeOrder=next.order;m.activeOrderSource='market';
+            m.deadlineAt=next.deadlineAt;
           }
           state.speed=1;
           save();renderOrders();
@@ -931,6 +970,7 @@
     m.level++;save();render();say(`${catalog[m.type].name} verbessert.`);
   });
   $('sell-machine').addEventListener('click',sellMachine);
+  $('buy-robot').addEventListener('click',buyRobot);
   $('expand-factory').addEventListener('click',expandFactory);
   $('repair-now').addEventListener('click',()=>chooseBreakdown('repairNow'));
   $('continue-risky').addEventListener('click',()=>chooseBreakdown('continueRisky'));
@@ -981,6 +1021,7 @@
       this.load.image('machine-premium','cell-aurex-at600.webp?v=1');
       this.load.image('machine-mill3','assets/veltron-vx500-detail.webp?v=1');
       this.load.image('machine-mill5','assets/orionis-om650x-detail.webp?v=1');
+      this.load.image('loading-robot','assets/loading-robot.webp?v=1');
     }
     create(){
       visual=this;
@@ -1035,6 +1076,7 @@
         this.millGroup.add(p);
         return {sprite:p,phase:Math.random()*Math.PI*2,radius:10+Math.random()*48,speed:1+Math.random()*2.5};
       });
+      this.robotImage=this.add.image(750,590,'loading-robot').setDisplaySize(410,375).setVisible(false);
       render();
     }
     setMachineType(type){
@@ -1061,6 +1103,8 @@
     update(_time,delta){
       const dt=Math.min(delta/1000,.2);this.elapsed+=dt;this.spindle.clear();
       const on=this.running;
+      this.robotImage.setVisible(!!this.robotEnabled);
+      if(this.robotEnabled)this.robotImage.setAngle(on&&shiftAt(state.gameMinutes)===2?Math.sin(this.elapsed*2)*1.4:0);
       if(on){
         this.spindle.lineStyle(3,0x97e6ff,.55).beginPath().arc(445,377,31,this.elapsed*9,this.elapsed*9+1.7).strokePath();
         this.spindle.lineStyle(2,0xffffff,.32).beginPath().arc(445,377,22,-this.elapsed*13,-this.elapsed*13+1.25).strokePath();
