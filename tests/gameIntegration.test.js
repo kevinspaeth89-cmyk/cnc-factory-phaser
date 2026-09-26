@@ -3,9 +3,10 @@ const dir=require('node:path').resolve(__dirname,'..');
 const html=fs.readFileSync(dir+'/index.html','utf8'), ids=[...html.matchAll(/id="([^"]+)"/g)].map(x=>x[1]);
 assert.ok(html.indexOf('id="warehouse-panel"')<html.indexOf('id="buy-material"'));
 assert.ok(html.indexOf('id="business-panel"')<html.indexOf('id="warehouse-panel"'));
+assert.ok(html.indexOf('id="credit-panel"')<html.indexOf('id="machine-shop"'));
 assert.ok(html.indexOf('id="storage-stock"')<html.indexOf('id="buy-material"'));
 assert.ok(html.indexOf('id="warehouse-panel"')>html.indexOf('id="machine-shop"'));
-assert.ok(html.indexOf('id="buy-material"')<html.indexOf('id="storage-upgrade"'));
+assert.ok(html.indexOf('id="storage-upgrade"')<html.indexOf('id="material-market-board"'));
 assert.equal(ids.includes('material-type'),false);
 assert.ok(ids.includes('recruitment-panel'));
 assert.ok(ids.includes('applicant-list'));
@@ -31,20 +32,23 @@ function boot(storage,options={}){
     }
     addEventListener(type,fn){this.events[type]=fn}
     append(...children){this.children.push(...children);for(const child of children)if(child.id)elements.set(child.id,child)}
+    insertBefore(child,before){const index=before?this.children.indexOf(before):-1;if(index<0)this.children.push(child);else this.children.splice(index,0,child);child.parentElement=this;if(child.id)elements.set(child.id,child);return child}
     prepend(...children){this.children.unshift(...children)}
     replaceChildren(...children){this.children=children}
     querySelector(q){return q==='span'?this.children.find(x=>x.tagName==='span')||this.children[0]:this.children.find(x=>x.className===q.slice(1))||null}
+    querySelectorAll(q){const matches=[];const visit=node=>{for(const child of node.children||[]){if(q==='[data-office-key]'&&child.dataset?.officeKey)matches.push(child);visit(child)}};visit(this);return matches}
     getAttribute(name){return this.attrs[name]||null}
     setAttribute(name,value){this.attrs[name]=value}
+    scrollIntoView(){}
     click(){assert(this.events.click,this.id);this.events.click({stopPropagation(){}})}
   }
   const get=id=>{if(!elements.has(id))elements.set(id,new El(id));return elements.get(id)};
-  for(const id of ids)get(id);get('material-quantity').value='25';get('finance-period').value='day';
+  for(const id of ids)get(id);get('machine-shop').parentElement=get('business-panel');get('material-quantity').value='25';get('loan-amount').value='10000';get('loan-repayment-amount').value='all';get('finance-period').value='day';
   get('detail-view').hidden=true;get('hall-preview').hidden=true;
   get('hall-map').clientWidth=400;get('hall-map').clientHeight=400;
   get('hall-preview').offsetWidth=190;get('hall-preview').offsetHeight=118;
   for(let bay=1;bay<=4;bay++){const span=new El();span.tagName='span';get('bay-'+bay).append(span)}
-  const document={getElementById:get,createElement:()=>new El(),querySelectorAll:()=>[],addEventListener(){}};
+  const document={getElementById:id=>id==='order-office-panel'&&!elements.has(id)?null:get(id),createElement:()=>new El(),querySelectorAll:()=>[],addEventListener(){}};
   let nextFrame=()=>{},saveInterval=()=>{};
   const windowEvents={};
   const context={document,console,Date,Math,JSON,performance:{now:()=>0},requestAnimationFrame:fn=>nextFrame=fn,setTimeout:(fn,ms)=>{if(options.phaser&&ms===0)fn();return 1},clearTimeout(){},setInterval:fn=>saveInterval=fn,window:{matchMedia:()=>({matches:true}),confirm:()=>true,addEventListener:(type,fn)=>windowEvents[type]=fn},localStorage:{getItem:k=>storage[k]||null,setItem:(k,v)=>storage[k]=v,removeItem:k=>delete storage[k]},CNCModules:{economy:require(dir+'/systems/economy.js').economy,inventory:require(dir+'/systems/economy.js').inventory,orderMarket:require(dir+'/systems/orderMarket.js'),breakdowns:require(dir+'/systems/breakdowns.js'),factoryExpansion:require(dir+'/factory-expansion.js'),materials:require(dir+'/systems/materials.js'),recruitment:require(dir+'/systems/recruitment.js')}};
@@ -130,6 +134,47 @@ const emptyReload=boot({cnc_factory_save_v3:JSON.stringify(empty.state())});asse
 emptyReload.get('storage-upgrade').click();
 assert.equal(emptyReload.state().inventory.capacities.raw,500);
 assert.equal(emptyReload.state().money,9550);
+const officeOrder={id:'OFFICE-TEST',kind:'Drehen',customer:'Test',part:'Disponentenauftrag',material:'C45 Stahl',kg:30,qty:10,reward:4000,duration:8,deadlineHours:4,createdAt:0,expiresAt:1000};
+const officeBase=JSON.parse(JSON.stringify(empty.state()));
+officeBase.money=20000;officeBase.material=0;officeBase.capacity=300;officeBase.gameMinutes=120;officeBase.paused=false;officeBase.speed=1;
+officeBase.inventory.rawMaterial.c45=0;officeBase.factoryExpansion={level:2,unlockedBays:6};
+officeBase.machines=[{bay:1,type:'standard',level:1,maintenance:90,tool:82,operator1:false,operator2:false,activeId:null,activeOrder:null,activeOrderSource:null,progress:0,produced:0,deadlineAt:null,orderQueue:[]}];
+officeBase.orderMarket.available=[officeOrder,...officeBase.orderMarket.available.map(order=>({...order,kind:'Fräsen'}))];
+officeBase.orderMarket.now=120;officeBase.orderMarket.nextRefreshAt=10000;officeBase.orderMarket.pendingFollowUps=[];
+officeBase.orderOffice={hired:true,autoPurchase:true,autoAccept:true,cashReserve:5000,maxMarketMarkupPct:0,minMaterialSurplus:1000,queueLimit:1,nextReviewAt:120};
+let office=boot({cnc_factory_save_v3:JSON.stringify(officeBase)});office.frame(1000);
+let officeSaved=office.state();
+assert.equal(officeSaved.machines[0].activeId,'OFFICE-TEST');
+assert.equal(officeSaved.inventory.rawMaterial.c45,0);
+assert.equal(officeSaved.finance.transactions.filter(entry=>entry.category==='material'&&entry.meta?.automatic).length,1);
+assert.equal(officeSaved.orderMarket.available.some(order=>order.id==='OFFICE-TEST'),false);
+const reserveLimited={...officeBase,money:5000};
+office=boot({cnc_factory_save_v3:JSON.stringify(reserveLimited)});office.frame(1000);
+officeSaved=office.state();
+assert.equal(officeSaved.machines[0].activeId,null);
+assert.equal(officeSaved.finance.transactions.filter(entry=>entry.category==='material').length,officeBase.finance.transactions.filter(entry=>entry.category==='material').length);
+assert.equal(officeSaved.inventory.rawMaterial.c45,0);
+const officeUiState=JSON.parse(JSON.stringify(empty.state()));
+officeUiState.money=20000;officeUiState.factoryExpansion={level:2,unlockedBays:6};
+let officeUi=boot({cnc_factory_save_v3:JSON.stringify(officeUiState)});officeUi.get('business-tab').click();
+assert.equal(officeUi.get('hire-order-office').disabled,false);
+assert.equal(officeUi.get('order-office-settings').hidden,true);
+officeUi.get('hire-order-office').click();
+assert.equal(officeUi.state().orderOffice.hired,true);
+assert.equal(officeUi.state().money,8000);
+assert.equal(officeUi.get('order-office-settings').hidden,false);
+let officeControls=officeUi.get('order-office-settings').querySelectorAll('[data-office-key]');
+assert.equal(officeControls.length,6);
+const acceptToggle=officeControls.find(control=>control.dataset.officeKey==='autoAccept');
+const reserveSelect=officeControls.find(control=>control.dataset.officeKey==='cashReserve');
+assert.equal(acceptToggle.checked,true);acceptToggle.checked=false;acceptToggle.events.change();
+reserveSelect.value='10000';reserveSelect.events.change();
+assert.equal(officeUi.state().orderOffice.autoAccept,false);
+assert.equal(officeUi.state().orderOffice.cashReserve,10000);
+officeUi=boot({cnc_factory_save_v3:JSON.stringify(officeUi.state())});officeUi.get('business-tab').click();
+officeControls=officeUi.get('order-office-settings').querySelectorAll('[data-office-key]');
+assert.equal(officeControls.find(control=>control.dataset.officeKey==='autoAccept').checked,false);
+assert.equal(officeControls.find(control=>control.dataset.officeKey==='cashReserve').value,'10000');
 const priceStorage={cnc_factory_save_v3:JSON.stringify({...empty.state(),gameMinutes:1440,money:14000})};
 let priced=boot(priceStorage);
 const quoted=require(dir+'/systems/materials.js').quote('c45',25,1440);
@@ -165,10 +210,10 @@ assert.match(expensive.get('material-market-board').children[0].children[2].text
 assert.equal(expensive.get('material-history').children.length,3);
 assert.equal(expensive.get('material-history').children[0].children[0].textContent,'Tag 1');
 assert.match(expensive.get('material-history').children[2].children[2].textContent,/20,70\/kg/);
-const expandedStorage={cnc_factory_save_v3:JSON.stringify({money:250000,material:100,capacity:300,staff:{shift1:0,shift2:0},machines:[{bay:1,type:'standard',progress:0},{bay:3,type:'mill3',progress:0}],selectedBay:1,gameMinutes:0,speed:1,paused:false})};
+const expandedStorage={cnc_factory_save_v3:JSON.stringify({money:400000,material:100,capacity:300,staff:{shift1:0,shift2:0},machines:[{bay:1,type:'standard',progress:0},{bay:3,type:'mill3',progress:0}],selectedBay:1,gameMinutes:0,speed:1,paused:false})};
 let exp=boot(expandedStorage);assert.equal(exp.state().factoryExpansion.unlockedBays,4);
-exp.get('expand-factory').click();assert.equal(exp.state().factoryExpansion.unlockedBays,6);assert.equal(exp.state().money,210000);assert.equal(exp.get('hall-image').src,'hall-level-2.svg?v=1');
-exp.get('expand-factory').click();assert.equal(exp.state().factoryExpansion.unlockedBays,8);assert.equal(exp.state().money,120000);
+exp.get('expand-factory').click();assert.equal(exp.state().factoryExpansion.unlockedBays,6);assert.equal(exp.state().money,325000);assert.equal(exp.get('hall-image').src,'hall-level-2-photo.png?v=1');
+exp.get('expand-factory').click();assert.equal(exp.state().factoryExpansion.unlockedBays,8);assert.equal(exp.state().money,175000);
 assert.equal(exp.get('expand-factory').hidden,true);
 const shop=exp.get('machine-shop').children;
 shop[0].children.at(-1).children.at(-1).click();
@@ -200,13 +245,13 @@ let typed=boot(typedStorage);let card=typed.get('orders').children.find(x=>x.inn
 assert.equal(card.children.at(-1).disabled,true);
 typed.get('buy-material').click();card=typed.get('orders').children.find(x=>x.innerHTML?.includes('MATERIAL-TEST'));
 assert.equal(card.children.at(-1).disabled,false);
-card.children.at(-1).click();const accepted=typed.state();
+card.children.at(-1).click();typed.get('assignment-options').children[0].click();const accepted=typed.state();
 assert.equal(accepted.machines[0].activeId,'MATERIAL-TEST');assert.equal(accepted.inventory.rawMaterial.c45,20);
 assert.equal(accepted.inventory.rawMaterial.aluminium6082,100);
 typed=boot(typedStorage);assert.equal(typed.state().machines[0].activeId,'MATERIAL-TEST');assert.equal(typed.state().inventory.rawMaterial.c45,20);
 assert.equal(typed.state().staffRoster.shift1[0].assignedBay,1);
 const beforeTraining=typed.state().money;
-typed.get('staff-development').children[0].children[1].click();
+typed.get('staff-development').children[0].children.at(-1).click();
 assert.equal(typed.state().money,beforeTraining-900);
 assert.equal(typed.state().staffRoster.shift1[0].trained,1);
 assert.equal(typed.state().finance.transactions.filter(x=>x.meta?.employeeId).length,1);
@@ -241,8 +286,9 @@ queueState.orderMarket.available.push({id:'QUEUE-TEST',kind:'Drehen',customer:'T
 const queueStorage={cnc_factory_save_v3:JSON.stringify(queueState)};
 let queued=boot(queueStorage);
 let queueCard=queued.get('orders').children.find(x=>x.innerHTML?.includes('QUEUE-TEST'));
-assert.match(queueCard.children.at(-1).textContent,/vormerken/);
 queueCard.children.at(-1).click();
+assert.match(queued.get('assignment-options').children[0].textContent,/Vormerken 1\/3/);
+queued.get('assignment-options').children[0].click();
 let queueSave=queued.state();
 assert.equal(queueSave.machines[0].activeId,'MATERIAL-TEST');
 assert.equal(queueSave.machines[0].orderQueue[0].order.id,'QUEUE-TEST');
@@ -299,6 +345,7 @@ for(let i=1;i<=3;i++){
   const card=multiple.get('orders').children.find(x=>x.innerHTML?.includes(`BATCH-${i}`));
   assert.equal(card.children.at(-1).disabled,false);
   card.children.at(-1).click();
+  multiple.get('assignment-options').children[0].click();
   assert.equal(multiple.state().machines[0].orderQueue.length,i);
 }
 assert.equal(multiple.state().material,multiInitialStock-30);
@@ -313,6 +360,7 @@ assert.deepEqual(multiple.state().machines[0].orderQueue.map(entry=>entry.order.
 assert.equal(multiple.state().material,multiInitialStock-20);
 fourth=multiple.get('orders').children.find(x=>x.innerHTML?.includes('BATCH-4'));
 fourth.children.at(-1).click();
+multiple.get('assignment-options').children[0].click();
 assert.deepEqual(multiple.state().machines[0].orderQueue.map(entry=>entry.order.id),['BATCH-1','BATCH-3','BATCH-4']);
 assert.equal(multiple.state().material,multiInitialStock-30);
 const plannedIds=['BATCH-1','BATCH-3','BATCH-4'];
@@ -452,7 +500,7 @@ let recruited=recruiting.state();
 assert.equal(recruited.money,13850);
 assert.equal(recruited.staff.shift1,1);
 assert.equal(recruited.staffRoster.shift1[0].name,firstApplicant.name);
-assert.equal(recruited.staffRoster.shift1[0].profileVersion,1);
+assert.equal(recruited.staffRoster.shift1[0].profileVersion,2);
 assert.equal(recruited.staffRoster.shift1[0].assignedBay,null);
 assert.equal(recruited.recruitment.applicants.length,3);
 assert.equal(recruited.recruitment.applicants.some(candidate=>candidate.id===firstApplicant.id),false);
@@ -463,7 +511,7 @@ assert.equal(recruiting.get('applicant-list').children[0].children[3].children[1
 assert.equal(recruiting.get('applicant-list').children[0].children[3].children[1].children[1].textContent,'€ 150 einmalig · 26 €/h');
 recruiting.get('recruitment-back').click();
 assert.equal(recruiting.get('business-panel').hidden,false);
-assert.match(recruiting.get('staff-development').children[0].children[0].textContent,new RegExp(firstApplicant.name));
+assert.match(recruiting.get('staff-development').children[0].children[1].children[0].textContent,new RegExp(firstApplicant.name));
 const secondApplicant=recruited.recruitment.applicants[0];
 recruiting.get('open-recruitment').click();
 recruiting.get('applicant-list').children[0].children[3].children[1].click();
@@ -474,8 +522,12 @@ assert.equal(recruited.staffRoster.shift2[0].name,secondApplicant.name);
 assert.equal(recruited.finance.transactions.filter(entry=>entry.meta?.setupFee).length,2);
 recruiting=boot({cnc_factory_save_v3:JSON.stringify(recruited)});
 assert.equal(recruiting.state().staffRoster.shift1[0].name,firstApplicant.name);
-assert.equal(recruiting.state().staffRoster.shift1[0].profileVersion,1);
+assert.equal(recruiting.state().staffRoster.shift1[0].profileVersion,2);
 assert.deepEqual(recruiting.state().recruitment.applicants,recruited.recruitment.applicants);
+recruiting.get('business-tab').click();
+const stableTrainingButton=recruiting.get('staff-development').children[0].children[3];
+recruiting.frame(1000);
+assert.strictEqual(recruiting.get('staff-development').children[0].children[3],stableTrainingButton);
 
 const oldRoster=boot({cnc_factory_save_v3:JSON.stringify({
   money:5000,material:0,capacity:300,staff:{shift1:1,shift2:0},staffRoster:{nextId:2,shift1:[{id:1,xp:640,trained:1,assignedBay:null}],shift2:[]},
@@ -489,4 +541,62 @@ assert.equal(migratedEmployee.trained,1);
 const oldRosterReload=boot({cnc_factory_save_v3:JSON.stringify(oldRoster.state())});
 assert.equal(oldRosterReload.state().staffRoster.shift1[0].name,migratedEmployee.name);
 assert.equal(oldRosterReload.state().staffRoster.shift1[0].trained,1);
-console.log('Recruitment: profiles, shift hiring, finance booking, refills and old-save migration OK');
+const developmentRow=recruiting.get('staff-development').children[0];
+assert.match(developmentRow.children[1].children[1].textContent,/Können 0\/3/);
+assert.match(developmentRow.children[3].textContent,/Stufe 1.*€ 900/);
+assert.match(developmentRow.children[3].title,/\+5 % Produktionstempo/);
+developmentRow.children[3].click();
+const trained=recruiting.state();
+assert.equal(trained.staffRoster.shift1[0].trained,1);
+assert.equal(trained.money,12800);
+assert.equal(trained.finance.transactions.filter(entry=>entry.text?.startsWith('Schulung')).length,1);
+assert.match(recruiting.get('staff-development').children[0].children[1].children[1].textContent,/Können 1\/3/);
+console.log('Recruitment: profiles, shift hiring, finance booking, training feedback and old-save migration OK');
+
+const loanStorage={};
+let loan=boot(loanStorage);
+loan.get('business-tab').click();
+assert.match(loan.get('credit-offer').textContent,/24 Monatsraten/);
+assert.equal(loan.get('take-loan').disabled,false);
+loan.get('loan-amount').value='25000';
+loan.get('loan-amount').events.change();
+loan.get('take-loan').click();
+let loanState=loan.state();
+assert.equal(loanState.money,39000);
+assert.equal(loanState.credit.principal,25000);
+assert.equal(loan.get('take-loan').disabled,true);
+assert.equal(loanState.finance.transactions.filter(entry=>entry.category==='loan_drawdown')[0].amount,25000);
+assert.equal(require(dir+'/systems/economy.js').economy.getProfit(loanState),0);
+assert.match(loan.get('finance-totals').children.map(row=>row.children[0].textContent).join(' '),/Kreditauszahlung/);
+loan.get('repay-credit').click();
+loanState=loan.state();
+assert.equal(loanState.money,14000);
+assert.equal(loanState.credit.principal,0);
+assert.equal(loanState.finance.transactions.filter(entry=>entry.category==='loan_repayment')[0].amount,-25000);
+assert.equal(require(dir+'/systems/economy.js').economy.getProfit(loanState),0);
+
+const dueAtMonthStart=boot({cnc_factory_save_v3:JSON.stringify({
+  money:5000,material:0,capacity:300,staff:{shift1:0,shift2:0},machines:[],selectedBay:null,
+  gameMinutes:38519,speed:1,paused:false,
+  credit:{principal:10000,originalAmount:10000,annualRate:.12,paymentsRemaining:24,accruedInterest:0,nextPaymentAt:38520,missedPayments:0}
+})});
+dueAtMonthStart.frame(1000);
+const paidInstallment=dueAtMonthStart.state();
+assert.equal(paidInstallment.credit.principal,9583.33);
+assert.equal(paidInstallment.credit.paymentsRemaining,23);
+assert.equal(paidInstallment.money,4483.33);
+assert.equal(paidInstallment.finance.transactions.filter(entry=>entry.category==='loan_interest').length,1);
+assert.equal(paidInstallment.finance.transactions.filter(entry=>entry.category==='loan_repayment').length,1);
+
+const missedAtMonthStart=boot({cnc_factory_save_v3:JSON.stringify({
+  money:100,material:0,capacity:300,staff:{shift1:0,shift2:0},machines:[],selectedBay:null,
+  gameMinutes:38519,speed:1,paused:false,
+  credit:{principal:10000,originalAmount:10000,annualRate:.12,paymentsRemaining:24,accruedInterest:0,nextPaymentAt:38520,missedPayments:0}
+})});
+missedAtMonthStart.frame(1000);
+const missedInstallment=missedAtMonthStart.state();
+assert.equal(missedInstallment.credit.principal,10000);
+assert.equal(missedInstallment.credit.accruedInterest,100);
+assert.equal(missedInstallment.credit.missedPayments,1);
+assert.equal(missedInstallment.finance.transactions.filter(entry=>entry.category==='loan_repayment').length,0);
+console.log('Credit: visible offer, drawdown, early repayment, monthly rate and missed-payment handling OK');

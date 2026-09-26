@@ -13,7 +13,7 @@ function testStartAndMigration() {
   var expansion = factoryExpansion.init(oldSave);
   assert.deepEqual(expansion, { level: 1, unlockedBays: 4 });
   assert.equal(factoryExpansion.getUnlockedBays(oldSave), 4);
-  assert.equal(factoryExpansion.getExpansionCost(oldSave), 40000);
+  assert.equal(factoryExpansion.getExpansionCost(oldSave), 75000);
   assert.equal(factoryExpansion.canExpand(oldSave), true);
   assert.deepEqual(factoryExpansion.getFreeBays(oldSave), [1, 2, 3, 4]);
 }
@@ -34,12 +34,12 @@ function testLockedSlotsAndNoFinanceMutation() {
 function testExpansionTiersAndCosts() {
   var state = makeState();
   var first = factoryExpansion.expand(state);
-  assert.deepEqual(first, { success: true, newLevel: 2, newBays: 6, cost: 40000 });
-  assert.equal(factoryExpansion.getExpansionCost(state), 90000);
+  assert.deepEqual(first, { success: true, newLevel: 2, newBays: 6, cost: 75000 });
+  assert.equal(factoryExpansion.getExpansionCost(state), 150000);
   assert.deepEqual(factoryExpansion.getFreeBays(state), [1, 2, 3, 4, 5, 6]);
 
   var second = factoryExpansion.expand(state);
-  assert.deepEqual(second, { success: true, newLevel: 3, newBays: 8, cost: 90000 });
+  assert.deepEqual(second, { success: true, newLevel: 3, newBays: 8, cost: 150000 });
   assert.equal(factoryExpansion.getUnlockedBays(state), 8);
   assert.equal(factoryExpansion.getExpansionCost(state), null);
   assert.equal(factoryExpansion.canExpand(state), false);
@@ -119,7 +119,7 @@ function testReloadAndLayoutData() {
     });
   });
   layouts[2].bays[0].x = -100;
-  assert.equal(factoryExpansion.getLayoutDefinition(2).bays[0].x, 4);
+  assert.equal(factoryExpansion.getLayoutDefinition(2).bays[0].x, 6);
 }
 
 testStartAndMigration();

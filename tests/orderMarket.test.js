@@ -14,9 +14,9 @@ test('initializes a balanced, varied market with serializable order data', () =>
   const state = newState(12345);
   const offers = orderMarket.getAvailable(state);
 
-  assert.equal(offers.length, 6);
-  assert.equal(offers.filter(order => order.kind === 'Drehen').length, 3);
-  assert.equal(offers.filter(order => order.kind === 'Fräsen').length, 3);
+  assert.equal(offers.length, orderMarket.limits.startOffers);
+  assert.equal(offers.filter(order => order.kind === 'Drehen').length, 2);
+  assert.equal(offers.filter(order => order.kind === 'Fräsen').length, 2);
   assert.equal(new Set(offers.map(order => order.customer)).size, 4);
   for (const order of offers) {
     assert.ok(order.qty > 0);
@@ -27,6 +27,46 @@ test('initializes a balanced, varied market with serializable order data', () =>
     assert.match(order.partKey, order.kind === 'Drehen' ? /^turn-/ : /^mill-/);
   }
   assert.doesNotThrow(() => JSON.stringify(state));
+});
+
+test('slows the offer cycle while keeping several choices visible', () => {
+  const state = newState(32123);
+  assert.equal(orderMarket.limits.minOffers, 3);
+  assert.equal(orderMarket.limits.maxOffers, 6);
+  assert.ok(state.orderMarket.nextRefreshAt >= 240);
+  assert.ok(state.orderMarket.nextRefreshAt <= 360);
+  for (const order of orderMarket.getAvailable(state)) {
+    assert.ok(order.duration >= 44);
+    assert.ok(order.expiresAt - order.createdAt >= 960);
+  }
+});
+
+test('migrates offers from older saves to the slower, lower reward balance', () => {
+  const state = newState(8891);
+  state.orderMarket.version = 1;
+  state.orderMarket.now = 0;
+  state.orderMarket.nextRefreshAt = 1;
+  state.gameMinutes = 10;
+  const before = orderMarket.getAvailable(state).map(order => ({ ...order }));
+  before.forEach(order => {
+    order.duration = 5;
+    order.deadlineHours = 2;
+    order.reward *= 5;
+    order.expiresAt = 1;
+  });
+  state.orderMarket.available = before;
+
+  orderMarket.init(state);
+
+  assert.equal(state.orderMarket.version, 2);
+  assert.deepEqual(orderMarket.getAvailable(state).map(order => order.id), before.map(order => order.id));
+  for (const order of orderMarket.getAvailable(state)) {
+    assert.ok(order.duration >= 44);
+    assert.ok(order.deadlineHours >= 10);
+    assert.ok(order.reward < before.find(previous => previous.id === order.id).reward);
+    assert.ok(order.expiresAt > state.gameMinutes);
+  }
+  assert.ok(state.orderMarket.nextRefreshAt >= state.gameMinutes + 240);
 });
 
 test('expires offers over time and supplies new orders while retaining several choices', () => {

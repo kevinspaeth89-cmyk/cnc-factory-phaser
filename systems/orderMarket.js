@@ -10,10 +10,11 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function createOrderMarket() {
   'use strict';
 
-  const VERSION = 1;
-  const MIN_OFFERS = 4;
-  const START_OFFERS = 6;
-  const MAX_OFFERS = 8;
+  const VERSION = 2;
+  const MIN_OFFERS = 3;
+  const START_OFFERS = 4;
+  const MAX_OFFERS = 6;
+  const REFRESH_MINUTES = [240, 360];
   const FOLLOW_UP_DELAY_MIN = 120;
   const FOLLOW_UP_DELAY_MAX = 360;
   const FOLLOW_UP_RETRY_MINUTES = 60;
@@ -23,23 +24,23 @@
   const profiles = [
     {
       key: 'standard', customer: 'Veltraxis Mobility', label: 'Standardkunde', weight: 42,
-      qty: [25, 55], rewardPerPart: [170, 235], duration: [32, 58], deadline: [7, 13],
-      difficulty: [1, 3], lifetime: [780, 1500], followUpChance: 0.18
+      qty: [25, 55], rewardPerPart: [135, 185], duration: [50, 82], deadline: [14, 24],
+      difficulty: [1, 3], lifetime: [1680, 2880], followUpChance: 0.18
     },
     {
       key: 'premium', customer: 'Orionis Fluidics', label: 'Premiumkunde', weight: 22,
-      qty: [20, 45], rewardPerPart: [235, 320], duration: [40, 72], deadline: [10, 18],
-      difficulty: [3, 5], lifetime: [660, 1260], followUpChance: 0.30
+      qty: [20, 45], rewardPerPart: [185, 255], duration: [62, 100], deadline: [20, 34],
+      difficulty: [3, 5], lifetime: [1440, 2520], followUpChance: 0.30
     },
     {
       key: 'series', customer: 'Kaeldor Components', label: 'Serienkunde', weight: 21,
-      qty: [60, 100], rewardPerPart: [105, 155], duration: [38, 70], deadline: [16, 28],
-      difficulty: [2, 4], lifetime: [900, 1800], followUpChance: 0.34
+      qty: [60, 100], rewardPerPart: [85, 125], duration: [62, 105], deadline: [30, 48],
+      difficulty: [2, 4], lifetime: [2160, 3600], followUpChance: 0.34
     },
     {
       key: 'express', customer: 'Asteron Robotics', label: 'Expresskunde', weight: 15,
-      qty: [15, 32], rewardPerPart: [285, 385], duration: [25, 52], deadline: [4, 8],
-      difficulty: [2, 4], lifetime: [420, 780], followUpChance: 0.16
+      qty: [15, 32], rewardPerPart: [220, 300], duration: [44, 70], deadline: [10, 17],
+      difficulty: [2, 4], lifetime: [960, 1680], followUpChance: 0.16
     }
   ];
 
@@ -122,16 +123,37 @@
     };
   }
 
+  function rebalanceLegacyOffer(order, now) {
+    const profile = profiles.find(item => item.key === order.customerProfile) || profiles[0];
+    const midpoint = bounds => Math.round((bounds[0] + bounds[1]) / 2);
+    const difficulty = finite(order.difficulty, midpoint(profile.difficulty));
+    const reputationBonusPct = finite(order.reputationBonusPct, 0);
+    const rewardFactor = (1 + (difficulty - 1) * 0.035) * (1 + reputationBonusPct / 100);
+    const maxReward = Number.isFinite(order.qty)
+      ? Math.max(100, Math.round((order.qty * midpoint(profile.rewardPerPart) * rewardFactor) / 100) * 100)
+      : finite(order.reward, 100);
+    const offerLifetime = midpoint(profile.lifetime);
+    return {
+      ...order,
+      reward: Math.max(100, Math.round(Math.min(finite(order.reward, maxReward), maxReward) / 100) * 100),
+      duration: Math.max(finite(order.duration, 0), midpoint(profile.duration)),
+      deadlineHours: Math.max(finite(order.deadlineHours, 0), midpoint(profile.deadline)),
+      offerLifetimeMinutes: offerLifetime,
+      expiresAt: Math.max(finite(order.expiresAt, now), now + offerLifetime)
+    };
+  }
+
   function normalizeMarket(market, now) {
+    const previousVersion = Math.max(0, Math.floor(finite(market.version, 0)));
     market.version = VERSION;
     market.initialized = true;
     market.now = Math.max(0, finite(market.now, now));
     market.available = Array.isArray(market.available)
-      ? market.available.filter(validOrder).map(order => ({ ...order }))
+      ? market.available.filter(validOrder).map(order => previousVersion < VERSION ? rebalanceLegacyOffer(order, now) : ({ ...order }))
       : [];
     market.pendingFollowUps = Array.isArray(market.pendingFollowUps)
       ? market.pendingFollowUps.filter(item => item && Number.isFinite(item.readyAt) && validOrder(item.order))
-        .map(item => ({ readyAt: item.readyAt, order: { ...item.order } }))
+        .map(item => ({ readyAt: item.readyAt, order: previousVersion < VERSION ? rebalanceLegacyOffer(item.order, now) : ({ ...item.order }) }))
       : [];
     market.completedCustomers = market.completedCustomers && typeof market.completedCustomers === 'object' && !Array.isArray(market.completedCustomers)
       ? market.completedCustomers
@@ -142,7 +164,10 @@
     market.rngState = toSeed(market.rngState);
     market.nextOrderNumber = Math.max(1, Math.floor(finite(market.nextOrderNumber, 1)));
     market.nextKind = isValidKind(market.nextKind) ? market.nextKind : 'Drehen';
-    market.nextRefreshAt = finite(market.nextRefreshAt, market.now + integer(market, 105, 180));
+    market.nextRefreshAt = finite(market.nextRefreshAt, market.now + integer(market, REFRESH_MINUTES[0], REFRESH_MINUTES[1]));
+    if (previousVersion < VERSION) {
+      market.nextRefreshAt = Math.max(market.nextRefreshAt, now + integer(market, REFRESH_MINUTES[0], REFRESH_MINUTES[1]));
+    }
     return market;
   }
 
@@ -176,7 +201,7 @@
         addGeneratedOffer(state, now);
       }
       state.orderMarket.initialized = true;
-      state.orderMarket.nextRefreshAt = now + integer(state.orderMarket, 105, 180);
+      state.orderMarket.nextRefreshAt = now + integer(state.orderMarket, REFRESH_MINUTES[0], REFRESH_MINUTES[1]);
     } else {
       const previouslyInitialized = state.orderMarket.initialized === true;
       normalizeMarket(state.orderMarket, now);
@@ -354,7 +379,7 @@
       activateDueFollowUps(state, market.now);
       if (market.nextRefreshAt <= market.now) {
         if (market.available.length < MAX_OFFERS) addGeneratedOffer(state, market.now);
-        market.nextRefreshAt = market.now + integer(market, 105, 180);
+        market.nextRefreshAt = market.now + integer(market, REFRESH_MINUTES[0], REFRESH_MINUTES[1]);
       }
       fillMinimum(state, market.now);
     }

@@ -124,6 +124,19 @@ test('calculates range profit and category totals inclusively', () => {
   assert.equal(totals.income, 0);
 });
 
+test('keeps loan principal out of profit while counting interest as an expense', () => {
+  const state = makeState();
+  economy.setTime(state, utc(5));
+  economy.record(state, 'loan_drawdown', 25000, 'Kreditauszahlung');
+  economy.record(state, 'loan_repayment', -1000, 'Kredittilgung');
+  economy.record(state, 'loan_interest', -250, 'Kreditzinsen');
+  economy.record(state, 'material', -100, 'Material');
+  const summary = economy.getDailySummary(state, utc(5));
+  assert.equal(summary.categoryTotals.loan_drawdown, 25000);
+  assert.equal(summary.categoryTotals.loan_repayment, -1000);
+  assert.equal(summary.profit, -350);
+});
+
 test('serializes and reloads state with its inventory and finance records intact', () => {
   const state = makeState();
   economy.setTime(state, 0);

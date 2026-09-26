@@ -74,6 +74,38 @@ test('profile ratings use all four skills and portraits remain stable per employ
   assert.equal(recruitment.portraitFor(1), recruitment.portraitFor(9));
 });
 
+test('generated applicants and legacy identities use matching portrait groups', () => {
+  const femalePortraits = new Set([4, 5, 6, 7]);
+  const malePortraits = new Set([1, 2, 3, 8]);
+  for (let id = 1; id <= 100; id += 1) {
+    const candidate = recruitment.generateApplicant(id);
+    const portraitId = Number(candidate.portrait.match(/employee-portrait-(\d+)/)[1]);
+    assert.equal(candidate.gender, recruitment.genderForName(candidate.name));
+    assert.ok(candidate.gender === 'female' ? femalePortraits.has(portraitId) : malePortraits.has(portraitId));
+  }
+  assert.equal(recruitment.legacyProfile(1).gender, 'female');
+  assert.equal(recruitment.legacyProfile(2).gender, 'male');
+  assert.ok(femalePortraits.has(Number(recruitment.legacyProfile(1).portrait.match(/employee-portrait-(\d+)/)[1])));
+  assert.ok(malePortraits.has(Number(recruitment.legacyProfile(2).portrait.match(/employee-portrait-(\d+)/)[1])));
+});
+
+test('corrects a saved applicant portrait from the name when an old save mismatches', () => {
+  const state = { recruitment: { nextId: 2, applicants: [{
+    id: 1, name: 'Tarek Stahlwind', gender: 'female', portrait: recruitment.portraitFor(1, 'female'), skillScale: 2,
+    skills: { turning: 5, milling: 5, precision: 5, learning: 5 }
+  }] } };
+  recruitment.ensureState(state);
+  assert.equal(state.recruitment.applicants[0].gender, 'male');
+  assert.equal(state.recruitment.applicants[0].portrait, recruitment.portraitFor(1, 'male'));
+  const employee = recruitment.normalizeEmployee({
+    id: 1, profileVersion: 2, name: 'Tarek Stahlwind', gender: 'female',
+    portrait: recruitment.portraitFor(1, 'female'),
+    skills: { turning: 5, milling: 5, precision: 5, learning: 5 }
+  }, 1);
+  assert.equal(employee.gender, 'male');
+  assert.equal(employee.portrait, recruitment.portraitFor(1, 'male'));
+});
+
 test('migrates saved five-point applicant and employee skills to the ten-point scale', () => {
   const state = { recruitment: { nextId: 2, applicants: [{
     id: 1, name: 'Mira Stahlwind', skills: { turning: 1, milling: 2, precision: 4, learning: 5 }

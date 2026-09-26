@@ -11,7 +11,14 @@
   'use strict';
 
   const APPLICANT_COUNT = 3;
-  const FIRST_NAMES = ['Mira', 'Tarek', 'Elira', 'Joren', 'Vaska', 'Neris', 'Kael', 'Zora', 'Fenja', 'Orin', 'Tavik', 'Sera', 'Kiro', 'Liora', 'Bran', 'Yuna', 'Darek', 'Aven', 'Tyra', 'Eron'];
+  const FIRST_NAMES = Object.freeze({
+    female: ['Mira', 'Elira', 'Vaska', 'Neris', 'Zora', 'Fenja', 'Sera', 'Liora', 'Yuna', 'Tyra'],
+    male: ['Tarek', 'Joren', 'Kael', 'Orin', 'Tavik', 'Kiro', 'Bran', 'Darek', 'Aven', 'Eron']
+  });
+  const FIRST_NAME_GENDER = Object.freeze(Object.fromEntries(
+    Object.entries(FIRST_NAMES).flatMap(([gender, names]) => names.map(name => [name.toLocaleLowerCase('de-DE'), gender]))
+  ));
+  const PORTRAITS_BY_GENDER = Object.freeze({ female: [4, 5, 6, 7], male: [1, 2, 3, 8] });
   const FAMILY_NAMES = ['Stahlwind', 'Spindelruh', 'Kupferhand', 'Funkenfels', 'Drehkamm', 'Eisenherz', 'Maßstern', 'Werkfink', 'Schneidorn', 'Spanlauf', 'Feilensang', 'Fräsborn', 'Bohrhain', 'Zirkelkind', 'Taktvoll', 'Kühlwasser', 'Zahnrad', 'Stahlfeder', 'Kantenschliff', 'Werkglanz'];
   const PORTRAIT_COUNT = 8;
   const QUALITY = {
@@ -26,9 +33,15 @@
   const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
   const legacySkill = value => Number.isInteger(value) ? clamp(Math.round(1 + ((clamp(value, 1, 5) - 1) / 4) * 9), 1, 10) : 1;
 
-  function portraitFor(id) {
+  function genderForName(name) {
+    const firstName = typeof name === 'string' ? name.trim().split(/\s+/)[0].toLocaleLowerCase('de-DE') : '';
+    return FIRST_NAME_GENDER[firstName] || null;
+  }
+
+  function portraitFor(id, gender) {
     const safeId = Number.isInteger(id) && id > 0 ? id : 1;
-    const index = ((safeId - 1) % PORTRAIT_COUNT) + 1;
+    const pool = PORTRAITS_BY_GENDER[gender];
+    const index = pool ? pool[(safeId - 1) % pool.length] : ((safeId - 1) % PORTRAIT_COUNT) + 1;
     return 'assets/employee-portrait-' + String(index).padStart(2, '0') + '.webp?v=1';
   }
 
@@ -73,17 +86,19 @@
   function generateApplicant(id) {
     if (!Number.isInteger(id) || id < 1) return null;
     const random = randomFor(id);
+    const gender = random() < 0.5 ? 'female' : 'male';
     const focus = id % 3;
     const turning = focus === 1 ? 6 + Math.floor(random() * 5) : focus === 2 ? 1 + Math.floor(random() * 6) : 3 + Math.floor(random() * 6);
     const milling = focus === 2 ? 6 + Math.floor(random() * 5) : focus === 1 ? 1 + Math.floor(random() * 6) : 3 + Math.floor(random() * 6);
-    const name = FIRST_NAMES[Math.floor(random() * FIRST_NAMES.length)] + ' ' + FAMILY_NAMES[Math.floor(random() * FAMILY_NAMES.length)];
+    const firstNames = FIRST_NAMES[gender];
+    const name = firstNames[Math.floor(random() * firstNames.length)] + ' ' + FAMILY_NAMES[Math.floor(random() * FAMILY_NAMES.length)];
     const skills = {
       turning,
       milling,
       precision: 1 + Math.floor(random() * 10),
       learning: 1 + Math.floor(random() * 10)
     };
-    return { id, name, ...deriveProfile(skills), portrait: portraitFor(id), skills };
+    return { id, name, gender, ...deriveProfile(skills), portrait: portraitFor(id, gender), skills };
   }
 
   function validApplicant(value) {
@@ -110,11 +125,14 @@
         precision: migrate(candidate.skills.precision),
         learning: migrate(candidate.skills.learning)
       };
+      const name = candidate.name.trim().slice(0, 80);
+      const gender = genderForName(name) || (candidate.gender === 'female' || candidate.gender === 'male' ? candidate.gender : generated.gender);
       applicants.push({
         ...generated,
-        name: candidate.name.trim().slice(0, 80),
+        name,
+        gender,
         ...deriveProfile(skills),
-        portrait: portraitFor(candidate.id),
+        portrait: portraitFor(candidate.id, gender),
         skills
       });
       seen.add(candidate.id);
@@ -147,6 +165,7 @@
 
   function createEmployee(candidate, id) {
     if (!validApplicant(candidate) || !Number.isInteger(id) || id < 1) return null;
+    const gender = genderForName(candidate.name) || (candidate.gender === 'female' || candidate.gender === 'male' ? candidate.gender : null);
     return {
       id,
       xp: 0,
@@ -154,22 +173,26 @@
       assignedBay: null,
       profileVersion: 2,
       name: candidate.name,
+      gender,
       ...deriveProfile(candidate.skills),
-      portrait: portraitFor(id),
+      portrait: portraitFor(id, gender),
       skills: { ...candidate.skills }
     };
   }
 
   function legacyProfile(id) {
     const index = Number.isInteger(id) && id > 0 ? (id - 1) % LEGACY_NAMES.length : 0;
+    const name = LEGACY_NAMES[index];
+    const gender = genderForName(name);
     return {
       profileVersion: 0,
-      name: LEGACY_NAMES[index],
+      name,
+      gender,
       specialty: 'Altes Profil',
       trait: 'Langjährige Besetzung',
       about: 'Aus einem älteren Spielstand übernommen; bisherige Werte bleiben erhalten.',
       rating: 5,
-      portrait: portraitFor(id),
+      portrait: portraitFor(id, gender),
       skills: { turning: 0, milling: 0, precision: 0, learning: 0 }
     };
   }
@@ -186,10 +209,11 @@
       learning: migrate(entry.skills.learning)
     } : null;
     const profile = validProfile ? {
+      gender: genderForName(entry.name) || (entry.gender === 'female' || entry.gender === 'male' ? entry.gender : null),
       profileVersion: 2,
       name: entry.name.trim().slice(0, 80),
       ...deriveProfile(skills),
-      portrait: portraitFor(id),
+      portrait: portraitFor(id, genderForName(entry.name) || (entry.gender === 'female' || entry.gender === 'male' ? entry.gender : null)),
       skills
     } : legacy;
     return {
@@ -220,6 +244,7 @@
   return {
     APPLICANT_COUNT,
     PORTRAIT_COUNT,
+    genderForName,
     portraitFor,
     ratingFromSkills,
     deriveProfile,

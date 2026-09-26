@@ -37,40 +37,40 @@
     2: {
       level: 2,
       unlockedBays: 6,
-      asset: 'hall-level-2.svg',
+      asset: 'hall-level-2-photo.png',
       assetStatus: 'existing',
       aspectRatio: 1.6,
       targetDimensions: { width: 1920, height: 1200 },
       bays: [
-        { bay: 1, x: 4, y: 14, width: 29, height: 32 },
-        { bay: 2, x: 35.5, y: 14, width: 29, height: 32 },
-        { bay: 3, x: 67, y: 14, width: 29, height: 32 },
-        { bay: 4, x: 4, y: 54, width: 29, height: 32 },
-        { bay: 5, x: 35.5, y: 54, width: 29, height: 32 },
-        { bay: 6, x: 67, y: 54, width: 29, height: 32 }
+        { bay: 1, x: 6, y: 26, width: 30, height: 21 },
+        { bay: 2, x: 36, y: 26, width: 28, height: 21 },
+        { bay: 3, x: 64, y: 26, width: 30, height: 21 },
+        { bay: 4, x: 0, y: 53, width: 33, height: 33 },
+        { bay: 5, x: 33.5, y: 53, width: 33, height: 33 },
+        { bay: 6, x: 67, y: 53, width: 33, height: 33 }
       ]
     },
     3: {
       level: 3,
       unlockedBays: 8,
-      asset: 'hall-level-3.svg',
+      asset: 'hall-level-3-photo.png',
       assetStatus: 'existing',
       aspectRatio: 1.6,
       targetDimensions: { width: 1920, height: 1200 },
       bays: [
-        { bay: 1, x: 3, y: 14, width: 22, height: 33 },
-        { bay: 2, x: 27, y: 14, width: 22, height: 33 },
-        { bay: 3, x: 51, y: 14, width: 22, height: 33 },
-        { bay: 4, x: 75, y: 14, width: 22, height: 33 },
-        { bay: 5, x: 3, y: 54, width: 22, height: 33 },
-        { bay: 6, x: 27, y: 54, width: 22, height: 33 },
-        { bay: 7, x: 51, y: 54, width: 22, height: 33 },
-        { bay: 8, x: 75, y: 54, width: 22, height: 33 }
+        { bay: 1, x: 8, y: 27, width: 23, height: 20 },
+        { bay: 2, x: 29, y: 27, width: 21, height: 20 },
+        { bay: 3, x: 50, y: 27, width: 21, height: 20 },
+        { bay: 4, x: 71, y: 27, width: 23, height: 20 },
+        { bay: 5, x: 0, y: 54, width: 25, height: 31 },
+        { bay: 6, x: 24, y: 54, width: 25, height: 31 },
+        { bay: 7, x: 50, y: 54, width: 25, height: 31 },
+        { bay: 8, x: 75, y: 54, width: 25, height: 31 }
       ]
     }
   };
 
-  var expansionCosts = { 1: 40000, 2: 90000, 3: null };
+  var expansionCosts = { 1: 75000, 2: 150000, 3: null };
 
   function copyBay(bay) {
     return {

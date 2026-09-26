@@ -15,7 +15,8 @@
   const DEFAULT_TOOLS = Object.freeze({ turningInsert: 0, millingInsert: 0 });
   const CATEGORIES = Object.freeze([
     'income', 'material', 'wages', 'energy', 'tools', 'maintenance', 'repairs',
-    'storage', 'machine_purchase', 'machine_sale', 'factory_expansion', 'other'
+    'storage', 'machine_purchase', 'machine_sale', 'factory_expansion', 'loan_drawdown',
+    'loan_repayment', 'loan_interest', 'other'
   ]);
   const CATEGORY_ALIASES = Object.freeze({ tool: 'tools', repair: 'repairs' });
   const STORAGE_ALIASES = Object.freeze({
@@ -383,7 +384,11 @@
 
   function getProfit(state, from, to) {
     const { transactions } = rangeTotals(state, from, to);
-    return roundStock(transactions.reduce((sum, transaction) => sum + transaction.amount, 0));
+    return roundStock(transactions.reduce((sum, transaction) => {
+      return ['loan_drawdown','loan_repayment'].includes(normalizeCategory(transaction.category))
+        ? sum
+        : sum + transaction.amount;
+    }, 0));
   }
 
   function getCategoryTotals(state, from, to) {
@@ -425,7 +430,7 @@
       to,
       transactionCount: transactions.length,
       categoryTotals,
-      profit: roundStock(transactions.reduce((sum, transaction) => sum + transaction.amount, 0)),
+      profit: getProfit(state, from, to),
       transactions: transactions.map(transaction => ({ ...transaction, meta: { ...(transaction.meta || {}) } }))
     };
   }
