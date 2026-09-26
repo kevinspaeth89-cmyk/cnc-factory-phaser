@@ -8,6 +8,7 @@
   const HIRING_FEE = 150;
   const TRAINING_BASE_COST = 900;
   const CREDIT_AMOUNTS = [10000,25000,50000,100000];
+  const CREDIT_RATE_BY_AMOUNT = Object.freeze({10000:.09,25000:.10,50000:.11,100000:.12});
   const CREDIT_ANNUAL_RATE = .12;
   const CREDIT_TERM_MONTHS = 24;
   const LEGACY_MACHINE_PRICES = {standard:6500,rapid:9000,premium:12500,mill3:10500,mill5:14800};
@@ -874,14 +875,17 @@
   function renderCreditPanel(){
     const credit=state.credit,active=credit.principal>0;
     const selectedAmount=Number($('loan-amount').value)||CREDIT_AMOUNTS[0];
-    const firstPayment=selectedAmount/CREDIT_TERM_MONTHS+selectedAmount*CREDIT_ANNUAL_RATE/12;
+    const selectedRate=CREDIT_RATE_BY_AMOUNT[selectedAmount]??CREDIT_ANNUAL_RATE;
+    const firstQuote=creditPaymentQuote({principal:selectedAmount,originalAmount:selectedAmount,annualRate:selectedRate,accruedInterest:0});
     $('loan-amount').disabled=active;
     $('credit-offer').textContent=active
       ?'Ein weiterer Kredit ist erst nach Rückzahlung des offenen Kredits möglich.'
-      :`${CREDIT_TERM_MONTHS} Monatsraten · 12 % p. a. auf die Restschuld · erste Rate etwa ${euroExact(firstPayment)}. Ohne Vorfälligkeitsgebühr.`;
+      :`${(selectedRate*100).toLocaleString('de-DE')} % Zinsen p. a. · ${CREDIT_TERM_MONTHS} Monate mit gleichbleibender Tilgung. Erste Rate: ${euroExact(firstQuote.total)} (${euroExact(firstQuote.principal)} Tilgung + ${euroExact(firstQuote.interest)} Zinsen); danach sinkt sie monatlich. Sondertilgung ohne Vorfälligkeitsgebühr.`;
     $('take-loan').disabled=active;
+    const quote=active?creditPaymentQuote():null;
+    const rateLabel=active?`${(credit.annualRate*100).toLocaleString('de-DE',{maximumFractionDigits:1})} % p. a.`:'';
     $('credit-summary').textContent=active
-      ?`Restschuld ${euroExact(credit.principal)} · offene Zinsen ${euroExact(credit.accruedInterest)} · ${credit.paymentsRemaining} Raten offen · nächste Rate etwa ${euroExact(creditPaymentQuote().total)} zum Monatsanfang${credit.missedPayments?` · ${credit.missedPayments} Rate${credit.missedPayments===1?'':'n'} ausstehend`:''}.`
+      ?`Restschuld ${euroExact(credit.principal)} · ${rateLabel} · offene Zinsen ${euroExact(credit.accruedInterest)} · ${credit.paymentsRemaining} Raten offen · nächste Rate ${euroExact(quote.total)} (${euroExact(quote.principal)} Tilgung + ${euroExact(quote.interest)} Zinsen) zum Monatsanfang${credit.missedPayments?` · ${credit.missedPayments} Rate${credit.missedPayments===1?'':'n'} ausstehend`:''}.`
       :'Kein Kredit offen. Die Kreditaufnahme erscheint im Kontostand, aber nicht als Gewinn; Zinsen zählen als Ausgabe.';
     $('loan-repayment-amount').disabled=!active;
     $('repay-credit').disabled=!active||state.money<=0;
@@ -890,11 +894,13 @@
     if(state.credit.principal>0)return;
     const amount=Number($('loan-amount').value);
     if(!CREDIT_AMOUNTS.includes(amount))return;
-    if(!book('loan_drawdown',amount,`Kredit über ${euro(amount)} aufgenommen`,{amount,annualRate:CREDIT_ANNUAL_RATE,termMonths:CREDIT_TERM_MONTHS}).ok)return;
-    state.credit={principal:amount,originalAmount:amount,annualRate:CREDIT_ANNUAL_RATE,paymentsRemaining:CREDIT_TERM_MONTHS,
+    const annualRate=CREDIT_RATE_BY_AMOUNT[amount]??CREDIT_ANNUAL_RATE;
+    if(!book('loan_drawdown',amount,`Kredit über ${euro(amount)} aufgenommen`,{amount,annualRate,termMonths:CREDIT_TERM_MONTHS}).ok)return;
+    state.credit={principal:amount,originalAmount:amount,annualRate,paymentsRemaining:CREDIT_TERM_MONTHS,
       accruedInterest:0,nextPaymentAt:nextMonthMinute(state.gameMinutes),missedPayments:0};
     save();renderBusiness();render();
-    say(`Kredit über ${euro(amount)} aufgenommen. Die erste Rate ist zum nächsten Monatsanfang fällig.`);
+    const firstQuote=creditPaymentQuote();
+    say(`Kredit über ${euro(amount)} zu ${(annualRate*100).toLocaleString('de-DE')} % p. a. aufgenommen. Die erste Rate über ${euroExact(firstQuote.total)} ist zum nächsten Monatsanfang fällig.`);
   }
   function repayCredit(){
     const credit=state.credit;
