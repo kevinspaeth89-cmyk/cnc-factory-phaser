@@ -1774,6 +1774,7 @@
         this.millGroup.add(p);
         return {sprite:p,phase:Math.random()*Math.PI*2,radius:10+Math.random()*48,speed:1+Math.random()*2.5};
       });
+      this.robotShadow=this.add.ellipse(0,0,200,22,0x10191c,.42).setVisible(false);
       this.robotImage=this.add.image(200,502,'loading-robot').setDisplaySize(470,510).setFlipX(true).setVisible(false);
       render();
     }
@@ -1789,9 +1790,11 @@
         this.coolantSprayEndpoints=[];
         this.coolantZoneType=type;
       }
-      const robotLayout=milling?{x:335,y:550,width:370,height:320}:
+      const robotLayout=type==='mill3'?{x:250,y:560,width:460,height:460}:milling?{x:335,y:550,width:370,height:320}:
         {x:type==='standard'?200:215,y:502,width:470,height:510};
       this.robotImage.setPosition(robotLayout.x,robotLayout.y).setDisplaySize(robotLayout.width,robotLayout.height);
+      this.robotShadowEnabled=type==='mill3';
+      this.robotShadow.setPosition(robotLayout.x-robotLayout.width*.18,robotLayout.y+robotLayout.height*.42);
       this.millGroup.setVisible(false);
       this.machineImage.setVisible(true);
       const key='machine-'+type+(loadingRobot&&!milling?'-robot':'');
@@ -1817,6 +1820,7 @@
       const dt=Math.min(delta/1000,.2);this.elapsed+=dt;this.spindle.clear();
       const on=this.running;
       this.robotImage.setVisible(!!this.robotEnabled);
+      this.robotShadow.setVisible(!!this.robotEnabled&&!!this.robotShadowEnabled);
       if(this.robotEnabled)this.robotImage.setAngle(on&&shiftAt(state.gameMinutes)===2?Math.sin(this.elapsed*2)*1.4:0);
       if(on&&!this.isMilling){
         this.spindle.lineStyle(3,0x97e6ff,.55).beginPath().arc(445,377,31,this.elapsed*9,this.elapsed*9+1.7).strokePath();
