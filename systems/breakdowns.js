@@ -13,6 +13,7 @@
   const MINUTES_PER_HOUR = 60;
   const BASE_WARNING_RATE_PER_HOUR = 0.006;
   const BASE_ESCALATION_RATE_PER_HOUR = 0.04;
+  const BASE_SUDDEN_FAILURE_RATE_PER_HOUR = 0.00035;
   const VALID_STATUSES = new Set(['ok', 'warning', 'major_failure', 'repairing']);
   const randomSources = new WeakMap();
 
@@ -174,16 +175,24 @@
       machine.jobActive === true || machine.hasActiveJob === true;
   }
 
-  function repairNumbers(record, planned) {
+  function repairNumbers(record, method) {
     const info = faults[record.fault];
     const major = record.severity >= 2 || record.status === 'major_failure';
-    if (planned) {
+    if (method === 'planned') {
       const factor = major ? 1.45 : 0.72;
       const timeFactor = major ? 1.65 : 0.8;
       return { cost: Math.round(info.cost * factor), downtime: Math.max(1, Math.round(info.downtime * timeFactor)) };
     }
-    if (major) return { cost: Math.round(info.cost * 2.25 + 600), downtime: Math.round(info.downtime * 3 + 50) };
-    return { cost: info.cost, downtime: info.downtime };
+    if (method === 'technician') {
+      return {
+        cost: Math.round(info.cost * (major ? 3.1 : 1.65) + (major ? 900 : 250)),
+        downtime: Math.max(1, Math.round(info.downtime * (major ? 4.2 : 1.75) + (major ? 60 : 18)))
+      };
+    }
+    return {
+      cost: Math.round(info.cost * (major ? 1.8 : 0.55) + (major ? 350 : 0)),
+      downtime: Math.max(1, Math.round(info.downtime * (major ? 2.8 : 0.48) + (major ? 40 : 0)))
+    };
   }
 
   function startRepair(record, downtime, planned) {
@@ -195,13 +204,37 @@
   }
 
   function repairNow(state, bay) {
+    return repairSelf(state, bay);
+  }
+
+  function getRepairOptions(state, bay) {
+    const record = recordAt(state, bay);
+    if (!record || !record.fault || !['warning', 'major_failure'].includes(record.status)) return null;
+    return {
+      self: repairNumbers(record, 'self'),
+      technician: repairNumbers(record, 'technician'),
+      planned: repairNumbers(record, 'planned')
+    };
+  }
+
+  function repairSelf(state, bay) {
     const machine = machineAt(state, bay);
     const record = recordAt(state, bay);
     if (!machine || !record || !record.fault || !['warning', 'major_failure'].includes(record.status)) return null;
-    const { cost, downtime } = repairNumbers(record, false);
+    const { cost, downtime } = repairNumbers(record, 'self');
     const fault = record.fault;
     startRepair(record, downtime, false);
-    return { event: 'repair', bay, fault, cost, downtime, planned: false, blocksProduction: true };
+    return { event: 'repair', method: 'self', bay, fault, cost, downtime, planned: false, blocksProduction: true };
+  }
+
+  function repairTechnician(state, bay) {
+    const machine = machineAt(state, bay);
+    const record = recordAt(state, bay);
+    if (!machine || !record || !record.fault || !['warning', 'major_failure'].includes(record.status)) return null;
+    const { cost, downtime } = repairNumbers(record, 'technician');
+    const fault = record.fault;
+    startRepair(record, downtime, false);
+    return { event: 'repair', method: 'technician', bay, fault, cost, downtime, planned: false, blocksProduction: true };
   }
 
   function continueRisky(state, bay) {
@@ -216,7 +249,7 @@
     const record = recordAt(state, bay);
     if (!machine || !record || !record.fault || !['warning', 'major_failure'].includes(record.status) || record.scheduledRepair) return null;
     const wasWarning = record.status === 'warning';
-    const { cost, downtime } = repairNumbers(record, true);
+    const { cost, downtime } = repairNumbers(record, 'planned');
     const scheduledAfterJob = wasWarning && machineHasJob(machine);
     record.riskyContinue = false;
     record.scheduledRepair = scheduledAfterJob;
@@ -285,6 +318,26 @@
     };
   }
 
+  function makeSuddenFailure(state, machine, record, bay, dt) {
+    const ids = Object.keys(faults);
+    record.fault = ids[Math.floor(randomValue(state) * ids.length)];
+    const info = faults[record.fault];
+    record.status = 'major_failure';
+    record.severity = 2;
+    record.since = eventTime(state, dt);
+    record.riskyContinue = false;
+    record.scheduledRepair = false;
+    record.warningAgeMinutes = 0;
+    const cost = Math.round(info.cost * 2.6 + 750);
+    const downtime = Math.round(info.downtime * 3.6 + 55);
+    const hasProducedParts = Number.isFinite(machine.produced) && machine.produced > 0;
+    const scrapParts = hasProducedParts && randomValue(state) < info.scrapChance ? 1 : 0;
+    return {
+      event: 'major_failure', sudden: true, bay, fault: record.fault, faultLabel: info.label,
+      severity: 2, since: record.since, cost, downtime, scrapParts, blocksProduction: true
+    };
+  }
+
   function canContinueProduction(state, bay) {
     const machine = machineAt(state, bay);
     const record = recordAt(state, bay);
@@ -324,7 +377,7 @@
       }
 
       if (record.scheduledRepair && !machineHasJob(machine)) {
-        const { downtime } = repairNumbers(record, true);
+        const { downtime } = repairNumbers(record, 'planned');
         const fault = record.fault;
         startRepair(record, downtime, true);
         events.push({ event: 'repair_started', bay, fault, downtime, planned: true, cost: 0, blocksProduction: true });
@@ -339,6 +392,10 @@
       if (record.status === 'ok') {
         const rate = BASE_WARNING_RATE_PER_HOUR * factors.maintenanceFactor * factors.toolFactor * factors.runtimeFactor * factors.reliabilityFactor;
         if (randomValue(state) < probabilityFor(rate, minutes)) events.push(makeWarning(state, machine, record, bay, minutes));
+        else {
+          const crashRate = BASE_SUDDEN_FAILURE_RATE_PER_HOUR * factors.maintenanceFactor * factors.toolFactor * factors.runtimeFactor * factors.reliabilityFactor;
+          if (randomValue(state) < probabilityFor(crashRate, minutes)) events.push(makeSuddenFailure(state, machine, record, bay, minutes));
+        }
       } else if (record.status === 'warning' && record.riskyContinue) {
         record.warningAgeMinutes += minutes;
         const continuedRiskFactor = 1.5 + Math.min(1.5, record.warningAgeMinutes / 120);
@@ -357,8 +414,11 @@
     getFaultInfo,
     getRecord,
     getRiskProfile,
+    getRepairOptions,
     canContinueProduction,
     repairNow,
+    repairSelf,
+    repairTechnician,
     continueRisky,
     scheduleRepair
   });

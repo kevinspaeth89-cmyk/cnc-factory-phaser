@@ -13,6 +13,8 @@
   const LEGACY_MACHINE_PRICES = {standard:6500,rapid:9000,premium:12500,mill3:10500,mill5:14800};
   const STORAGE_RATE = .08; // euros per kg and game day
   const STORAGE_UPGRADE = 4000;
+  const MACHINE_POWER_COST_PER_HOUR = 7.50;
+  const ROBOT_POWER_COST_PER_HOUR = 1.20;
   const SELL_BASE_RATE = .60;
   const SELL_UPGRADE_RATE = .35;
   const MAX_QUEUED_ORDERS = 3;
@@ -61,6 +63,7 @@
   const defaults = () => ({
     money:14000,material:0,capacity:300,staff:{shift1:0,shift2:0},
     machines:[],selectedBay:null,speed:1,paused:false,gameMinutes:0,completed:0,
+    eventQueue:[],
     payrollDue:0,wagesPaid:0,storagePaid:0,energyPaid:0,selected:null,selectedMaterialType:'c45',
     credit:{principal:0,originalAmount:0,annualRate:CREDIT_ANNUAL_RATE,paymentsRemaining:0,accruedInterest:0,nextPaymentAt:null,missedPayments:0},
     recruitment:{applicants:[],nextId:1},
@@ -110,6 +113,10 @@
       }
     }
   } catch (_) { /* Storage may be unavailable. */ }
+  state.eventQueue=Array.isArray(state.eventQueue)?state.eventQueue.filter(event=>
+    event&&['warning','major_failure'].includes(event.event)&&Number.isInteger(event.bay)&&typeof event.fault==='string'
+  ).map(event=>({...event,id:event.id||`${event.event}:${event.bay}:${event.since??state.gameMinutes}`})):[];
+  if(state.eventQueue.length)state.paused=true;
   state.machines.forEach(m=>{
     m.loadingRobot=!!m.loadingRobot;
     if(m.loadingRobot)m.operator2=false;
@@ -267,11 +274,25 @@
   const resaleValue=m=>m?Math.round((Number.isFinite(m.purchasePrice)?m.purchasePrice:LEGACY_MACHINE_PRICES[m.type]||catalog[m.type].price)*SELL_BASE_RATE+upgradeInvestment(m)*SELL_UPGRADE_RATE+(m.loadingRobot?LOADING_ROBOT_COST*.4:0)):0;
   const skillLevel=employee=>employee?Math.min(3,Math.max(employee.trained,employee.xp>=1500?3:employee.xp>=600?2:employee.xp>=180?1:0)):0;
   const assignedEmployee=(m,shift)=>state.staffRoster['shift'+shift].find(employee=>employee.assignedBay===m.bay);
-  const productionFactor=m=>{
-    const employee=assignedEmployee(m,shiftAt(state.gameMinutes)||1);
+  const productionFactorForShift=(m,shift)=>{
+    const employee=assignedEmployee(m,shift);
     return catalog[m.type].rate*(1+(m.level-1)*.13)*Math.max(.65,m.maintenance/100*.75+.25)*
       (1+.05*skillLevel(employee))*recruitmentSystem.productionMultiplier(employee,catalog[m.type].kind);
   };
+  const productionFactor=m=>productionFactorForShift(m,shiftAt(state.gameMinutes)||1);
+  function plannedMachineLoad(machine){
+    const shifts=[1,2].filter(shift=>machine['operator'+shift]||(shift===2&&machine.loadingRobot));
+    const capacityMinutes=shifts.length*8*60;
+    const factor=shifts.length
+      ?shifts.reduce((sum,shift)=>sum+productionFactorForShift(machine,shift),0)/shifts.length
+      :productionFactor(machine);
+    const active=job(machine);
+    let plannedMinutes=active?Math.max(0,(100-machine.progress)*active.duration*6/(100*factor)):0;
+    for(const entry of machine.orderQueue){
+      if(Number.isFinite(entry.order?.duration))plannedMinutes+=entry.order.duration*6/factor;
+    }
+    return {shifts,capacityMinutes,plannedMinutes,percent:capacityMinutes?plannedMinutes/capacityMinutes*100:null};
+  }
   const remainingMinutes=(m,o)=>o?Math.max(0,(100-m.progress)*o.duration*6/(100*productionFactor(m))):0;
   const formatMinutes=min=>{
     min=Math.max(0,Math.ceil(min));
@@ -304,6 +325,67 @@
     $('message').textContent=message;
     clearTimeout(messageTimer);
     messageTimer=setTimeout(()=>{if($('message').textContent===message)$('message').textContent='';},5000);
+  }
+  function setupEventWindow(){
+    if($('event-window'))return;
+    const overlay=document.createElement('section'),card=document.createElement('article');
+    const eyebrow=document.createElement('span'),title=document.createElement('h2'),detail=document.createElement('p');
+    const consequence=document.createElement('div'),actions=document.createElement('div'),count=document.createElement('p');
+    overlay.id='event-window';overlay.hidden=true;overlay.setAttribute('role','dialog');overlay.setAttribute('aria-modal','true');overlay.setAttribute('aria-labelledby','event-title');
+    card.className='event-card';eyebrow.id='event-eyebrow';eyebrow.className='event-eyebrow';
+    title.id='event-title';detail.id='event-detail';consequence.id='event-consequence';consequence.className='event-consequence';
+    actions.id='event-actions';actions.className='event-actions';count.id='event-count';count.className='event-count';
+    card.append(eyebrow,title,detail,consequence,actions,count);overlay.append(card);document.querySelector('main').append(overlay);
+    const selfButton=$('repair-now'),selfDetail=document.createElement('b');selfDetail.id='repair-self-detail';
+    selfButton.replaceChildren(document.createTextNode('Selbst reparieren'),selfDetail);
+    const technician=document.createElement('button'),technicianDetail=document.createElement('b');
+    technician.id='repair-technician';technician.type='button';technician.className='action';
+    technician.append(document.createTextNode('Monteur beauftragen'),technicianDetail);technicianDetail.id='repair-technician-detail';
+    selfButton.parentElement.insertBefore(technician,$('continue-risky'));
+    const scheduleDetail=document.createElement('b');scheduleDetail.id='schedule-repair-detail';$('schedule-repair').append(scheduleDetail);
+  }
+  function renderEventWindow(){
+    const overlay=$('event-window');
+    if(!overlay)return;
+    const event=state.eventQueue[0];overlay.hidden=!event;
+    if(!event)return;
+    const machine=machineAt(event.bay),warning=event.event==='warning';
+    const fault=breakdownSystem.getFaultInfo(event.fault),options=breakdownSystem.getRepairOptions(state,event.bay);
+    $('event-eyebrow').textContent=event.sudden?'PLÖTZLICHER MASCHINENCRASH':warning?'MASCHINENWARNUNG':'SCHWERER MASCHINENSCHADEN';
+    $('event-title').textContent=`${fault?.label||'Maschinenstörung'} · Platz ${event.bay}`;
+    $('event-detail').textContent=event.sudden
+      ?'Die Maschine ist ohne vorherige Warnung ausgefallen. Die Produktion auf diesem Platz steht.'
+      :warning?'Die Maschine meldet eine Störung. Entscheide jetzt, wie der Betrieb weitergeht.':'Ein schwerer Maschinenschaden hat die Produktion gestoppt.';
+    const effects=[];
+    if(machine&&job(machine))effects.push(`Laufender Auftrag: ${job(machine).part} · ${machine.produced}/${job(machine).qty} Teile`);
+    if(event.scrapParts)effects.push(`${event.scrapParts} Teil${event.scrapParts===1?'':'e'} Ausschuss`);
+    if(event.cost)effects.push(`Schadenskosten bereits gebucht: ${euro(event.cost)}`);
+    if(event.downtime)effects.push(`Grundausfallzeit: ${formatMinutes(event.downtime)}`);
+    $('event-consequence').textContent=effects.length?effects.join(' · '):'Die Maschine bleibt bis zur Entscheidung angehalten.';
+    const actions=$('event-actions');actions.replaceChildren();
+    const addChoice=(label,detailText,action,cost=0,risky=false)=>{
+      const button=document.createElement('button'),small=document.createElement('small');
+      button.type='button';button.className='action event-choice'+(risky?' event-risk':'');
+      button.append(document.createTextNode(label));small.textContent=detailText;button.append(small);
+      button.disabled=cost>state.money;button.addEventListener('click',()=>chooseBreakdown(action,event.bay,event.id));actions.append(button);
+    };
+    if(options){
+      addChoice('Selbst reparieren',`${euro(options.self.cost)} · ${formatMinutes(options.self.downtime)} · schnell`, 'repairSelf',options.self.cost);
+      addChoice('Monteur beauftragen',`${euro(options.technician.cost)} · ${formatMinutes(options.technician.downtime)} · dauert länger`, 'repairTechnician',options.technician.cost);
+      if(warning){
+        addChoice('Riskant weiterproduzieren','Keine Sofortkosten · höheres Crash- und Ausschussrisiko','continueRisky');
+        const afterJob=!!machine&&!!job(machine);
+        addChoice(afterJob?'Nach aktuellem Auftrag reparieren':'Günstiger reparieren',`${euro(options.planned.cost)} · ${formatMinutes(options.planned.downtime)}${afterJob?' · Auftrag erst abschließen':''}`,'scheduleRepair',options.planned.cost);
+      }
+    }
+    const defer=document.createElement('button');defer.type='button';defer.className='action event-choice';
+    defer.textContent='Später entscheiden';
+    const deferHint=document.createElement('small');deferHint.textContent='Diese Maschine bleibt stehen.';defer.append(deferHint);
+    defer.addEventListener('click',()=>resolveEventWithoutAction());actions.append(defer);
+    $('event-count').textContent=state.eventQueue.length>1?`Ereignis 1 von ${state.eventQueue.length} · Das Spiel ist pausiert.`:'Das Spiel ist pausiert, bis du eine Entscheidung triffst.';
+  }
+  function resolveEventWithoutAction(){
+    state.eventQueue.shift();state.paused=state.eventQueue.length>0;save();render();
   }
   function statusFor(m){
     if(!m)return 'Freier Stellplatz';
@@ -444,6 +526,41 @@
     return [offers.map(o=>o.id).join(','),JSON.stringify(state.inventory.rawMaterial)].join('::');
   }
   let pendingOrderAssignmentId=null;
+  function renderMachineLoadCard(machine){
+    const card=document.createElement('section');
+    const head=document.createElement('div'),title=document.createElement('strong'),value=document.createElement('span');
+    const bar=document.createElement('div'),fill=document.createElement('span'),meta=document.createElement('p');
+    card.dataset.bay=String(machine.bay);
+    card.className='machine-load-card';
+    head.className='machine-load-head';
+    title.textContent=`Platz ${machine.bay} · ${catalog[machine.type].name}`;
+    value.className='machine-load-value';
+    head.append(title,value);
+    bar.className='machine-load-bar';bar.setAttribute('role','progressbar');
+    bar.setAttribute('aria-label',`Theoretische Auslastung Platz ${machine.bay} pro Werktag`);
+    bar.setAttribute('aria-valuemin','0');bar.setAttribute('aria-valuemax','100');bar.append(fill);
+    meta.className='machine-load-meta';card.append(head,bar,meta);
+    updateMachineLoadCard(card,machine);return card;
+  }
+  function updateMachineLoadCard(card,machine){
+    const load=plannedMachineLoad(machine),rounded=load.percent===null?null:Math.round(load.percent);
+    const value=card.querySelector('.machine-load-value'),bar=card.querySelector('.machine-load-bar'),fill=bar?.firstElementChild,meta=card.querySelector('.machine-load-meta');
+    card.classList.toggle('overloaded',rounded!==null&&rounded>100);
+    value.textContent=rounded===null?'—':`${rounded} %`;
+    bar.setAttribute('aria-valuenow',String(Math.max(0,Math.min(100,rounded||0))));
+    fill.style.width=`${Math.max(0,Math.min(100,load.percent||0))}%`;
+    const plannedHours=(load.plannedMinutes/60).toLocaleString('de-DE',{maximumFractionDigits:1});
+    if(load.percent===null)meta.textContent=`${plannedHours} h geplant · keine Schicht zugewiesen`;
+    else{
+      const capacityHours=(load.capacityMinutes/60).toLocaleString('de-DE',{maximumFractionDigits:0});
+      meta.textContent=`${plannedHours} h Aufträge / ${capacityHours} h Tageskapazität · ${load.shifts.length} Schicht${load.shifts.length===1?'':'en'}`;
+    }
+  }
+  function updateMachineLoadCards(){
+    document.querySelectorAll('.machine-load-card').forEach(card=>{
+      const machine=machineAt(Number(card.dataset.bay));if(machine)updateMachineLoadCard(card,machine);
+    });
+  }
   function renderOrders(){
     $('customer-reputation').replaceChildren(...Object.entries(orderMarketSystem.getReputation(state)).map(([customer,score])=>{
       const row=document.createElement('div'),name=document.createElement('span'),status=document.createElement('b');
@@ -454,7 +571,7 @@
     }));
     const offers=orderMarketSystem.getAvailable(state);
     lastOrdersRenderKey=ordersRenderKey();
-    $('queued-orders').replaceChildren(...state.machines.flatMap(m=>m.orderQueue.map((entry,index)=>{
+    $('queued-orders').replaceChildren(...state.machines.map(renderMachineLoadCard),...state.machines.flatMap(m=>m.orderQueue.map((entry,index)=>{
       const row=document.createElement('div'),title=document.createElement('span'),controls=document.createElement('div'),cancel=document.createElement('button');
       row.className='queued-job';
       title.textContent=`Platz ${m.bay} · Planung ${index+1}/${MAX_QUEUED_ORDERS}: ${entry.order.part} · ${entry.order.qty} Teile · Frist ${formatMinutes(entry.deadlineAt-state.gameMinutes)}`;
@@ -911,12 +1028,33 @@
     $('energy-paid').textContent=euro(state.energyPaid);
     $('storage-paid').textContent=euro(state.storagePaid);
     $('storage-info').textContent=`${Math.floor(state.material)} / ${state.capacity} kg · ${euro(state.material*STORAGE_RATE)} pro Spieltag`;
-    const stocks=Object.entries(materialSystem.catalog).map(([type,item])=>`${item.label}: ${Math.floor(state.inventory.rawMaterial[type]||0)} kg`);
+    const stockBox=$('storage-stock');
+    stockBox.className='hint storage-stock-list';stockBox.setAttribute('role','list');
+    const stockRows=Object.entries(materialSystem.catalog).map(([type,item])=>{
+      const row=document.createElement('span'),name=document.createElement('span'),amount=document.createElement('strong');
+      const quantity=Math.max(0,Number(state.inventory.rawMaterial[type])||0);
+      row.className='storage-stock-row'+(quantity<=1e-9?' empty':'');row.setAttribute('role','listitem');
+      name.textContent=item.label;amount.textContent=`${quantity.toLocaleString('de-DE',{minimumFractionDigits:Number.isInteger(quantity)?0:1,maximumFractionDigits:1})} kg`;
+      row.append(name,amount);return row;
+    });
+    const legacyLabels={steel:'Altbestand · Stahl',stainless:'Altbestand · Edelstahl',aluminium:'Altbestand · Aluminium',castiron:'Altbestand · Gusseisen'};
     for(const category of new Set(Object.values(materialSystem.catalog).map(item=>item.oldCategory))){
-      if(state.inventory.rawMaterial[category])stocks.push(`Altbestand ${category}: ${Math.floor(state.inventory.rawMaterial[category])} kg`);
+      const quantity=Math.max(0,Number(state.inventory.rawMaterial[category])||0);
+      if(quantity<=1e-9)continue;
+      const row=document.createElement('span'),name=document.createElement('span'),amount=document.createElement('strong');
+      row.className='storage-stock-row legacy';row.setAttribute('role','listitem');
+      name.textContent=legacyLabels[category]||`Altbestand · ${category}`;
+      amount.textContent=`${quantity.toLocaleString('de-DE',{minimumFractionDigits:Number.isInteger(quantity)?0:1,maximumFractionDigits:1})} kg`;
+      row.append(name,amount);stockRows.push(row);
     }
-    if(state.inventory.rawMaterial.legacy)stocks.push(`Altbestand (für alle Aufträge): ${Math.floor(state.inventory.rawMaterial.legacy)} kg`);
-    $('storage-stock').textContent=stocks.join(' · ');
+    const legacyQuantity=Math.max(0,Number(state.inventory.rawMaterial.legacy)||0);
+    if(legacyQuantity>1e-9){
+      const row=document.createElement('span'),name=document.createElement('span'),amount=document.createElement('strong');
+      row.className='storage-stock-row legacy';row.setAttribute('role','listitem');
+      name.textContent='Altbestand · für alle Aufträge';amount.textContent=`${legacyQuantity.toLocaleString('de-DE',{minimumFractionDigits:Number.isInteger(legacyQuantity)?0:1,maximumFractionDigits:1})} kg`;
+      row.append(name,amount);stockRows.push(row);
+    }
+    stockBox.replaceChildren(...stockRows);
     renderMaterialPrice();
     if(currentPanel==='business')renderFinance();
   }
@@ -946,11 +1084,16 @@
     hallMap.style.aspectRatio=String(layout.aspectRatio);
     const fault=m?breakdownSystem.getRecord(state,m.bay):null;
     const faultInfo=fault?.fault?breakdownSystem.getFaultInfo(fault.fault):null;
+    const repairOptions=m?breakdownSystem.getRepairOptions(state,m.bay):null;
     $('breakdown-panel').hidden=!fault||!['warning','major_failure','repairing'].includes(fault.status);
-    $('breakdown-info').textContent=!faultInfo?'':`${faultInfo.label} · ${statusFor(m)}. ${fault.status==='major_failure'?'Produktion gestoppt.':fault.status==='warning'?'Reparieren, riskant weiterproduzieren oder Wartung nach dem Auftrag einplanen.':''}`;
-    $('repair-now').disabled=!faultInfo||!['warning','major_failure'].includes(fault.status);
+    $('breakdown-info').textContent=!faultInfo?'':`${faultInfo.label} · ${statusFor(m)}. Selbstreparatur ist schneller und günstiger; ein Monteur braucht länger und kostet mehr.`;
+    $('repair-self-detail').textContent=repairOptions?`${euro(repairOptions.self.cost)} · ${formatMinutes(repairOptions.self.downtime)}`:'schnell';
+    $('repair-technician-detail').textContent=repairOptions?`${euro(repairOptions.technician.cost)} · ${formatMinutes(repairOptions.technician.downtime)}`:'länger';
+    $('schedule-repair-detail').textContent=repairOptions?`${euro(repairOptions.planned.cost)} · ${formatMinutes(repairOptions.planned.downtime)}`:'';
+    $('repair-now').disabled=!repairOptions||state.money<repairOptions.self.cost;
+    $('repair-technician').disabled=!repairOptions||state.money<repairOptions.technician.cost;
     $('continue-risky').disabled=fault?.status!=='warning'||fault.riskyContinue||fault.scheduledRepair;
-    $('schedule-repair').disabled=!faultInfo||!['warning','major_failure'].includes(fault.status)||fault.scheduledRepair;
+    $('schedule-repair').disabled=!repairOptions||fault?.status!=='warning'||fault.scheduledRepair||state.money<repairOptions.planned.cost;
     const hallImage=$('hall-image');
     const artwork=layout.asset+'?v=1';
     if(hallImage.getAttribute('src')!==artwork)hallImage.src=artwork;
@@ -1086,6 +1229,7 @@
       b.title=machine?statusFor(machine):'Maschine kaufen';
     }
     renderHallPreview();
+    renderEventWindow();
     if(visual){
       visual.running=!!m&&operating(m);
       visual.condition=!m?'idle':(m.maintenance<8||m.tool<1)?'fault':operating(m)?'running':o?'waiting':'idle';
@@ -1291,7 +1435,7 @@
     if(state.paused)return;
     // Slice at minute boundaries so shift changes and month end are charged exactly once.
     let left=dt*state.speed*6;
-    while(left>1e-8){
+    while(left>1e-8&&!state.paused){
       const step=Math.min(left,1-(state.gameMinutes%1)||1);
       const before=dateAt(state.gameMinutes),shift=shiftAt(state.gameMinutes);
       if(shift)state.payrollDue+=state.staff['shift'+shift]*(shift===1?24:26)*step/60;
@@ -1307,7 +1451,7 @@
       for(const m of state.machines){
         const o=job(m);
         if(!o||!operating(m))continue;
-        const power=(14*.28+(shift===2&&m.loadingRobot?.60:0))*step/60;
+        const power=(MACHINE_POWER_COST_PER_HOUR+(shift===2&&m.loadingRobot?ROBOT_POWER_COST_PER_HOUR:0))*step/60;
         const dateKey=gameDateKey();
         book('energy',-power,'Stromkosten laufende Maschinen',{gameDate:dateKey},`daily:energy:${dateKey}`);
         state.energyPaid+=power;
@@ -1355,14 +1499,18 @@
     }
     render();
     if(currentPanel==='orders'&&ordersRenderKey()!==lastOrdersRenderKey)renderOrders();
-    if(currentPanel==='orders')updateOrderCountdowns();
+    if(currentPanel==='orders'){
+      updateOrderCountdowns();
+      updateMachineLoadCards();
+    }
     if(currentPanel==='business'||currentPanel==='warehouse')renderCosts();
     if(currentPanel==='business'){updateStaffDevelopment();renderCreditPanel();}
   }
   function handleBreakdownEvent(event){
     if(!event)return;
     if(event.cost>0&&['repair','repair_scheduled','major_failure'].includes(event.event)){
-      book('repairs',-event.cost,`Platz ${event.bay}: ${breakdownSystem.getFaultInfo(event.fault)?.label||'Reparatur'}`,{bay:event.bay,fault:event.fault,event:event.event});
+      const method=event.method==='technician'?'Monteur':event.method==='self'?'Selbstreparatur':event.event==='major_failure'?'Maschinenschaden':'geplante Reparatur';
+      book('repairs',-event.cost,`Platz ${event.bay}: ${method} · ${breakdownSystem.getFaultInfo(event.fault)?.label||'Reparatur'}`,{bay:event.bay,fault:event.fault,event:event.event,method,downtime:event.downtime});
     }
     if(event.event==='major_failure'&&event.scrapParts>0){
       const machine=machineAt(event.bay),order=job(machine);
@@ -1374,25 +1522,36 @@
       }
     }
     if(event.event==='warning'||event.event==='major_failure'){
-      say(`Platz ${event.bay}: ${breakdownSystem.getFaultInfo(event.fault)?.label||'Maschinenstörung'}. Im Maschinenmenü entscheiden.`);
+      state.eventQueue=Array.isArray(state.eventQueue)?state.eventQueue:[];
+      const id=event.id||`${event.event}:${event.bay}:${event.since??state.gameMinutes}`;
+      if(!state.eventQueue.some(item=>item.id===id))state.eventQueue.push({...event,id});
+      state.paused=true;
+      renderEventWindow();
     }else if(event.event==='repair_complete')say(`Platz ${event.bay}: Reparatur abgeschlossen.`);
     save();
   }
-  function chooseBreakdown(action){
-    const m=selectedMachine();if(!m)return;
+  function chooseBreakdown(action,bay=selectedMachine()?.bay,eventId=null){
+    const m=machineAt(Number(bay));if(!m)return false;
     const before=breakdownSystem.getRecord(state,m.bay);
     const event=breakdownSystem[action](state,m.bay);
-    if(!event)return;
+    if(!event)return false;
     if(event.cost>0&&state.money<event.cost){
       state.breakdowns.machines[String(m.bay)]=before;
       say(`Für diese Reparatur fehlen ${euro(event.cost-state.money)}.`);
-      return;
+      return false;
     }
     handleBreakdownEvent(event);
-    render();renderBusiness();
-    if(event.event==='repair')say(`Platz ${m.bay}: Sofortreparatur beauftragt · ${euro(event.cost)}.`);
+    if(event.event==='repair')say(`Platz ${m.bay}: ${event.method==='technician'?'Monteur beauftragt':'Selbstreparatur gestartet'} · ${euro(event.cost)} · ${formatMinutes(event.downtime)}.`);
     if(event.event==='repair_scheduled')say(`Platz ${m.bay}: Reparatur eingeplant · ${euro(event.cost)}.`);
     if(event.event==='continue_risky')say(`Platz ${m.bay}: Produktion läuft mit erhöhtem Risiko weiter.`);
+    if(eventId){
+      const index=state.eventQueue.findIndex(item=>item.id===eventId);
+      if(index>=0)state.eventQueue.splice(index,1);
+      state.paused=state.eventQueue.length>0;
+      save();
+    }
+    render();renderBusiness();
+    return true;
   }
   for(const name of ['orders','machine','business'])
     $(name+'-tab').addEventListener('click',()=>currentPanel===name?closeDrawer():tab(name));
@@ -1478,7 +1637,8 @@
   $('loan-amount').addEventListener('change',renderCreditPanel);
   $('take-loan').addEventListener('click',takeCredit);
   $('repay-credit').addEventListener('click',repayCredit);
-  $('repair-now').addEventListener('click',()=>chooseBreakdown('repairNow'));
+  $('repair-now').addEventListener('click',()=>chooseBreakdown('repairSelf'));
+  $('repair-technician').addEventListener('click',()=>chooseBreakdown('repairTechnician'));
   $('continue-risky').addEventListener('click',()=>chooseBreakdown('continueRisky'));
   $('schedule-repair').addEventListener('click',()=>chooseBreakdown('scheduleRepair'));
   $('new-game').addEventListener('click',newGame);
@@ -1510,7 +1670,7 @@
     $('speed-menu').hidden=true;$('speed-toggle').setAttribute('aria-expanded','false');
   }));
   document.addEventListener('visibilitychange',()=>{if(document.hidden)save();});
-  renderOrders();renderBusiness();render();
+  setupEventWindow();renderOrders();renderBusiness();render();
   class FactoryScene extends (typeof Phaser==='undefined'?class{}:Phaser.Scene) {
     constructor(){super('factory');this.running=false;this.condition='idle';this.elapsed=0;}
     preload(){
