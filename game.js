@@ -314,6 +314,15 @@
     !!(m['operator'+shiftAt(state.gameMinutes)]||(shiftAt(state.gameMinutes)===2&&m.loadingRobot))&&m.tool>=1&&m.maintenance>=8;
   const operating=m=>readyToRun(m)&&breakdownSystem.canContinueProduction(state,m.bay);
   const spareToolCount=m=>m?Math.max(0,Number(state.inventory?.tools?.[m.type])||0):0;
+  function autoReplaceWornTool(machine,shift){
+    if(!machine||machine.tool>=1||!machine['operator'+shift]||spareToolCount(machine)<1)return false;
+    const result=inventorySystem.consumeTool(state,machine.type,1);
+    if(!result.ok)return false;
+    machine.tool=100;
+    save();
+    say(`Bediener Schicht ${shift} hat an Platz ${machine.bay} automatisch ein Reservewerkzeug eingesetzt.`);
+    return true;
+  }
   const canChangeTool=m=>!!m&&m.tool<100&&(spareToolCount(m)>0||state.money>=650);
   const canBuySpareTool=m=>{
     if(!m||state.money<650)return false;
@@ -1442,6 +1451,7 @@
       const before=dateAt(state.gameMinutes),shift=shiftAt(state.gameMinutes);
       if(shift)state.payrollDue+=state.staff['shift'+shift]*(shift===1?24:26)*step/60;
       if(state.orderOffice.hired&&officeOpenAt(state.gameMinutes))state.payrollDue+=ORDER_OFFICE_HOURLY_WAGE*step/60;
+      if(shift)for(const machine of state.machines)autoReplaceWornTool(machine,shift);
       const storageCharge=state.material*STORAGE_RATE*step/1440;
       if(storageCharge>0){
         const dateKey=gameDateKey();
