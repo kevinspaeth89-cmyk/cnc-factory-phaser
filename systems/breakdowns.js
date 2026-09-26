@@ -14,6 +14,7 @@
   const BASE_WARNING_RATE_PER_HOUR = 0.006;
   const BASE_ESCALATION_RATE_PER_HOUR = 0.04;
   const BASE_SUDDEN_FAILURE_RATE_PER_HOUR = 0.00035;
+  const COMPLEX_SELF_REPAIR_FAULTS = new Set(['voltage_problem', 'sensor_error', 'magazine_fault', 'spindle_temperature']);
   const VALID_STATUSES = new Set(['ok', 'warning', 'major_failure', 'repairing']);
   const randomSources = new WeakMap();
 
@@ -38,7 +39,9 @@
     operatingHours: 0,
     warningAgeMinutes: 0,
     repairRemainingMinutes: 0,
-    plannedRepair: false
+    plannedRepair: false,
+    repairMethod: null,
+    repairWillFail: false
   });
 
   function machineList(state) {
@@ -72,7 +75,9 @@
       operatingHours: Math.max(0, Number(source.operatingHours) || 0),
       warningAgeMinutes: Math.max(0, Number(source.warningAgeMinutes) || 0),
       repairRemainingMinutes: status === 'repairing' ? Math.max(0, Number(source.repairRemainingMinutes) || 0) : 0,
-      plannedRepair: status === 'repairing' && source.plannedRepair === true
+      plannedRepair: status === 'repairing' && source.plannedRepair === true,
+      repairMethod: status === 'repairing' && ['self', 'technician', 'planned'].includes(source.repairMethod) ? source.repairMethod : null,
+      repairWillFail: status === 'repairing' && source.repairMethod === 'self' && source.repairWillFail === true
     };
   }
 
@@ -189,18 +194,43 @@
         downtime: Math.max(1, Math.round(info.downtime * (major ? 4.2 : 1.75) + (major ? 60 : 18)))
       };
     }
+    if (method === 'self') {
+      const complex = COMPLEX_SELF_REPAIR_FAULTS.has(record.fault);
+      const factor = complex ? (major ? 4.4 : 2.1) : (major ? 3.6 : 0.6);
+      const extra = complex ? (major ? 70 : 18) : (major ? 55 : 10);
+      return {
+        cost: Math.round(info.cost * (major ? 1.8 : 0.55) + (major ? 350 : 0)),
+        downtime: Math.max(1, Math.round(info.downtime * factor + extra))
+      };
+    }
     return {
       cost: Math.round(info.cost * (major ? 1.8 : 0.55) + (major ? 350 : 0)),
       downtime: Math.max(1, Math.round(info.downtime * (major ? 2.8 : 0.48) + (major ? 40 : 0)))
     };
   }
 
-  function startRepair(record, downtime, planned) {
+  function selfRepairFailureChance(state, bay, record) {
+    const machine = machineAt(state, bay);
+    if (!machine || !record) return 0;
+    const factors = conditionFactors(state, machine, record);
+    let chance = record.severity >= 2 || record.status === 'major_failure' ? 0.34 : 0.18;
+    if (COMPLEX_SELF_REPAIR_FAULTS.has(record.fault)) chance += 0.05;
+    if (factors.maintenance < 50) chance += 0.1;
+    else if (factors.maintenance < 80) chance += 0.04;
+    if (factors.tool < 20) chance += 0.06;
+    else if (factors.tool < 50) chance += 0.025;
+    chance += clamp((factors.reliabilityFactor - 1) * 0.1, -0.04, 0.1);
+    return clamp(chance, 0.08, 0.65);
+  }
+
+  function startRepair(record, downtime, planned, method, willFail) {
     record.status = 'repairing';
     record.riskyContinue = false;
     record.scheduledRepair = false;
     record.repairRemainingMinutes = downtime;
     record.plannedRepair = planned;
+    record.repairMethod = method || (planned ? 'planned' : 'technician');
+    record.repairWillFail = willFail === true;
   }
 
   function repairNow(state, bay) {
@@ -211,7 +241,7 @@
     const record = recordAt(state, bay);
     if (!record || !record.fault || !['warning', 'major_failure'].includes(record.status)) return null;
     return {
-      self: repairNumbers(record, 'self'),
+      self: { ...repairNumbers(record, 'self'), failureChance: selfRepairFailureChance(state, bay, record) },
       technician: repairNumbers(record, 'technician'),
       planned: repairNumbers(record, 'planned')
     };
@@ -222,9 +252,11 @@
     const record = recordAt(state, bay);
     if (!machine || !record || !record.fault || !['warning', 'major_failure'].includes(record.status)) return null;
     const { cost, downtime } = repairNumbers(record, 'self');
+    const failureChance = selfRepairFailureChance(state, bay, record);
+    const willFail = randomValue(state) < failureChance;
     const fault = record.fault;
-    startRepair(record, downtime, false);
-    return { event: 'repair', method: 'self', bay, fault, cost, downtime, planned: false, blocksProduction: true };
+    startRepair(record, downtime, false, 'self', willFail);
+    return { event: 'repair', method: 'self', bay, fault, cost, downtime, failureChance, planned: false, blocksProduction: true };
   }
 
   function repairTechnician(state, bay) {
@@ -233,7 +265,7 @@
     if (!machine || !record || !record.fault || !['warning', 'major_failure'].includes(record.status)) return null;
     const { cost, downtime } = repairNumbers(record, 'technician');
     const fault = record.fault;
-    startRepair(record, downtime, false);
+    startRepair(record, downtime, false, 'technician', false);
     return { event: 'repair', method: 'technician', bay, fault, cost, downtime, planned: false, blocksProduction: true };
   }
 
@@ -253,7 +285,7 @@
     const scheduledAfterJob = wasWarning && machineHasJob(machine);
     record.riskyContinue = false;
     record.scheduledRepair = scheduledAfterJob;
-    if (!scheduledAfterJob) startRepair(record, downtime, true);
+    if (!scheduledAfterJob) startRepair(record, downtime, true, 'planned', false);
     return {
       event: 'repair_scheduled', bay, fault: record.fault, cost, downtime,
       planned: true, scheduledAfterJob, blocksProduction: !scheduledAfterJob
@@ -362,16 +394,29 @@
         record.repairRemainingMinutes = Math.max(0, record.repairRemainingMinutes - minutes);
         if (record.repairRemainingMinutes <= 0) {
           const fault = record.fault;
-          record.status = 'ok';
-          record.fault = null;
-          record.severity = 0;
-          record.since = null;
+          const selfRepairFailed = record.repairMethod === 'self' && record.repairWillFail;
           record.riskyContinue = false;
           record.scheduledRepair = false;
           record.warningAgeMinutes = 0;
           record.repairRemainingMinutes = 0;
           record.plannedRepair = false;
-          events.push({ event: 'repair_complete', bay, fault, blocksProduction: false });
+          record.repairMethod = null;
+          record.repairWillFail = false;
+          if (selfRepairFailed) {
+            record.status = record.severity >= 2 ? 'major_failure' : 'warning';
+            record.since = now;
+            events.push({
+              event: record.status === 'major_failure' ? 'major_failure' : 'warning',
+              selfRepairFailed: true, bay, fault, severity: record.severity, since: now,
+              blocksProduction: true
+            });
+          } else {
+            record.status = 'ok';
+            record.fault = null;
+            record.severity = 0;
+            record.since = null;
+            events.push({ event: 'repair_complete', bay, fault, blocksProduction: false });
+          }
         }
         continue;
       }
@@ -379,7 +424,7 @@
       if (record.scheduledRepair && !machineHasJob(machine)) {
         const { downtime } = repairNumbers(record, 'planned');
         const fault = record.fault;
-        startRepair(record, downtime, true);
+        startRepair(record, downtime, true, 'planned', false);
         events.push({ event: 'repair_started', bay, fault, downtime, planned: true, cost: 0, blocksProduction: true });
         continue;
       }

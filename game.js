@@ -362,11 +362,13 @@
     if(!overlay)return;
     const event=state.eventQueue[0];overlay.hidden=!event;
     if(!event)return;
-    const machine=machineAt(event.bay),warning=event.event==='warning';
+    const machine=machineAt(event.bay),warning=event.event==='warning',selfRepairFailed=event.selfRepairFailed===true;
     const fault=breakdownSystem.getFaultInfo(event.fault),options=breakdownSystem.getRepairOptions(state,event.bay);
-    $('event-eyebrow').textContent=event.sudden?'PLÖTZLICHER MASCHINENCRASH':warning?'MASCHINENWARNUNG':'SCHWERER MASCHINENSCHADEN';
+    $('event-eyebrow').textContent=selfRepairFailed?'SELBSTREPARATUR GESCHEITERT':event.sudden?'PLÖTZLICHER MASCHINENCRASH':warning?'MASCHINENWARNUNG':'SCHWERER MASCHINENSCHADEN';
     $('event-title').textContent=`${fault?.label||'Maschinenstörung'} · Platz ${event.bay}`;
-    $('event-detail').textContent=event.sudden
+    $('event-detail').textContent=selfRepairFailed
+      ?'Der Selbstversuch hat nicht gehalten. Die Maschine bleibt stehen. Du kannst es erneut versuchen oder einen Monteur beauftragen.'
+      :event.sudden
       ?'Die Maschine ist ohne vorherige Warnung ausgefallen. Die Produktion auf diesem Platz steht.'
       :warning?'Die Maschine meldet eine Störung. Entscheide jetzt, wie der Betrieb weitergeht.':'Ein schwerer Maschinenschaden hat die Produktion gestoppt.';
     const effects=[];
@@ -383,10 +385,12 @@
       button.disabled=cost>state.money;button.addEventListener('click',()=>chooseBreakdown(action,event.bay,event.id));actions.append(button);
     };
     if(options){
-      addChoice('Selbst reparieren',`${euro(options.self.cost)} · ${formatMinutes(options.self.downtime)} · schnell`, 'repairSelf',options.self.cost);
-      addChoice('Monteur beauftragen',`${euro(options.technician.cost)} · ${formatMinutes(options.technician.downtime)} · dauert länger`, 'repairTechnician',options.technician.cost);
+      const selfDuration=options.self.downtime>options.technician.downtime?' · langsamer als Monteur':'';
+      const selfRisk=Math.round(options.self.failureChance*100);
+      addChoice('Selbst reparieren',`${euro(options.self.cost)} · ${formatMinutes(options.self.downtime)} bei Erfolg · ${selfRisk}% Fehlerrisiko${selfDuration}`, 'repairSelf',options.self.cost);
+      addChoice('Monteur beauftragen',`${euro(options.technician.cost)} · ${formatMinutes(options.technician.downtime)} · verlässlich`, 'repairTechnician',options.technician.cost);
       if(warning){
-        addChoice('Riskant weiterproduzieren','Keine Sofortkosten · höheres Crash- und Ausschussrisiko','continueRisky');
+        if(!selfRepairFailed)addChoice('Riskant weiterproduzieren','Keine Sofortkosten · höheres Crash- und Ausschussrisiko','continueRisky');
         const afterJob=!!machine&&!!job(machine);
         addChoice(afterJob?'Nach aktuellem Auftrag reparieren':'Günstiger reparieren',`${euro(options.planned.cost)} · ${formatMinutes(options.planned.downtime)}${afterJob?' · Auftrag erst abschließen':''}`,'scheduleRepair',options.planned.cost);
       }
@@ -1104,9 +1108,9 @@
     const faultInfo=fault?.fault?breakdownSystem.getFaultInfo(fault.fault):null;
     const repairOptions=m?breakdownSystem.getRepairOptions(state,m.bay):null;
     $('breakdown-panel').hidden=!fault||!['warning','major_failure','repairing'].includes(fault.status);
-    $('breakdown-info').textContent=!faultInfo?'':`${faultInfo.label} · ${statusFor(m)}. Selbstreparatur ist schneller und günstiger; ein Monteur braucht länger und kostet mehr.`;
-    $('repair-self-detail').textContent=repairOptions?`${euro(repairOptions.self.cost)} · ${formatMinutes(repairOptions.self.downtime)}`:'schnell';
-    $('repair-technician-detail').textContent=repairOptions?`${euro(repairOptions.technician.cost)} · ${formatMinutes(repairOptions.technician.downtime)}`:'länger';
+    $('breakdown-info').textContent=!faultInfo?'':`${faultInfo.label} · ${statusFor(m)}. Selbstreparatur kostet weniger, kann aber scheitern; der Monteur arbeitet verlässlich.`;
+    $('repair-self-detail').textContent=repairOptions?`${euro(repairOptions.self.cost)} · ${formatMinutes(repairOptions.self.downtime)} bei Erfolg · ${Math.round(repairOptions.self.failureChance*100)}% Risiko`:'Fehlerrisiko';
+    $('repair-technician-detail').textContent=repairOptions?`${euro(repairOptions.technician.cost)} · ${formatMinutes(repairOptions.technician.downtime)} · verlässlich`:'verlässlich';
     $('schedule-repair-detail').textContent=repairOptions?`${euro(repairOptions.planned.cost)} · ${formatMinutes(repairOptions.planned.downtime)}`:'';
     $('repair-now').disabled=!repairOptions||state.money<repairOptions.self.cost;
     $('repair-technician').disabled=!repairOptions||state.money<repairOptions.technician.cost;
