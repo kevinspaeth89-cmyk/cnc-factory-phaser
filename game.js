@@ -1374,8 +1374,39 @@
     showHall();save();renderOrders();renderBusiness();render();
     say(`${name} verkauft · +${euro(value)}.`);
   }
+  function setupNewGameConfirm(){
+    if($('new-game-confirm'))return;
+    const style=document.createElement('style');
+    style.textContent='#new-game-confirm[hidden]{display:none!important}#new-game-confirm{position:fixed;inset:0;z-index:1100;display:grid;place-items:center;padding:16px;background:#02080bd9;backdrop-filter:blur(4px)}#new-game-confirm .new-game-card{width:min(100%,430px);padding:18px;border:1px solid #d5a055;border-radius:15px;background:linear-gradient(155deg,#203a45,#101e28);box-shadow:0 18px 65px #000c}#new-game-confirm .event-eyebrow{display:block;margin-bottom:5px;color:#ffd17b;font-size:10px;font-weight:900;letter-spacing:.12em}#new-game-confirm h2{margin:0 0 8px;font-size:20px}#new-game-confirm p{margin:6px 0 12px;color:#d2e0e4;font-size:13px;line-height:1.45}#new-game-confirm .new-game-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:16px}#new-game-confirm #confirm-new-game{background:#6d3438;border-color:#b76368}';
+    document.head.append(style);
+    const overlay=document.createElement('section'),card=document.createElement('article');
+    const eyebrow=document.createElement('span'),title=document.createElement('h2'),detail=document.createElement('p'),actions=document.createElement('div');
+    const cancel=document.createElement('button'),confirm=document.createElement('button');
+    overlay.id='new-game-confirm';overlay.hidden=true;overlay.setAttribute('role','alertdialog');overlay.setAttribute('aria-modal','true');overlay.setAttribute('aria-labelledby','new-game-confirm-title');overlay.setAttribute('aria-describedby','new-game-confirm-detail');
+    card.className='new-game-card';eyebrow.className='event-eyebrow';eyebrow.textContent='SPIELSTAND';
+    title.id='new-game-confirm-title';title.textContent='Neues Spiel starten?';
+    detail.id='new-game-confirm-detail';detail.textContent='Der aktuelle Spielstand mit Maschinen, Material und Fortschritt wird gelöscht.';
+    actions.className='new-game-actions';
+    cancel.id='cancel-new-game';cancel.type='button';cancel.className='action';cancel.textContent='Abbrechen';
+    confirm.id='confirm-new-game';confirm.type='button';confirm.className='action danger';confirm.textContent='Spielstand löschen';
+    actions.append(cancel,confirm);card.append(eyebrow,title,detail,actions);overlay.append(card);document.querySelector('main').append(overlay);
+    cancel.addEventListener('click',closeNewGameConfirm);
+    confirm.addEventListener('click',confirmNewGame);
+    overlay.addEventListener('click',event=>{if(event.target===overlay)closeNewGameConfirm();});
+    document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!overlay.hidden)closeNewGameConfirm();});
+  }
   function newGame(){
-    if(!window.confirm('Neues Spiel starten? Der aktuelle Spielstand wird vollständig gelöscht.'))return;
+    setupNewGameConfirm();
+    $('new-game-confirm').hidden=false;
+    $('cancel-new-game').focus();
+  }
+  function closeNewGameConfirm(){
+    const overlay=$('new-game-confirm');
+    if(overlay)overlay.hidden=true;
+    $('new-game').focus();
+  }
+  function confirmNewGame(){
+    $('new-game-confirm').hidden=true;
     try{
       localStorage.removeItem(SAVE_KEY);
       localStorage.removeItem('cnc_factory_save_v2');
