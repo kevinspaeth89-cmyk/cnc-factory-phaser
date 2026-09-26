@@ -353,6 +353,7 @@
     const technician=document.createElement('button'),technicianDetail=document.createElement('b');
     technician.id='repair-technician';technician.type='button';technician.className='action';
     technician.append(document.createTextNode('Monteur beauftragen'),technicianDetail);technicianDetail.id='repair-technician-detail';
+    technician.addEventListener('click',()=>chooseBreakdown('repairTechnician'));
     selfButton.parentElement.insertBefore(technician,$('continue-risky'));
     const scheduleDetail=document.createElement('b');scheduleDetail.id='schedule-repair-detail';$('schedule-repair').append(scheduleDetail);
   }
@@ -1687,7 +1688,6 @@
   $('take-loan').addEventListener('click',takeCredit);
   $('repay-credit').addEventListener('click',repayCredit);
   $('repair-now').addEventListener('click',()=>chooseBreakdown('repairSelf'));
-  $('repair-technician').addEventListener('click',()=>chooseBreakdown('repairTechnician'));
   $('continue-risky').addEventListener('click',()=>chooseBreakdown('continueRisky'));
   $('schedule-repair').addEventListener('click',()=>chooseBreakdown('scheduleRepair'));
   $('new-game').addEventListener('click',newGame);
