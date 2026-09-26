@@ -1694,7 +1694,8 @@
       this.coolantZones={
         standard:{source:[475,362],target:[420,374],points:[[354,298],[527,356],[530,491],[354,423]]},
         rapid:{source:[495,350],target:[410,365],points:[[352,286],[552,325],[565,448],[353,439]]},
-        premium:{source:[520,340],target:[435,365],points:[[327,230],[579,303],[548,420],[327,357]]}
+        premium:{source:[520,340],target:[435,365],points:[[327,230],[579,303],[548,420],[327,357]]},
+        mill3:{source:[520,286],target:[512,365],points:[[365,222],[526,222],[526,530],[365,530]]}
       };
       this.coolantJet=this.add.graphics();
       this.coolantSplash=this.add.graphics();
@@ -1717,6 +1718,7 @@
       this.towerAmber=this.add.circle(199,45,8,0xffc15b,.08).setBlendMode(Phaser.BlendModes.ADD);
       this.towerGreen=this.add.circle(199,61,8,0x6cff98,.08).setBlendMode(Phaser.BlendModes.ADD);
       this.isMilling=false;
+      this.coolantEnabled=false;
       this.millWorkX=500;this.millWorkY=405;
       this.millPhotoGlow=this.add.circle(500,405,34,0x8cefff,0).setBlendMode(Phaser.BlendModes.ADD);
       this.millPhotoRed=this.add.circle(820,120,8,0xff5b62,0).setBlendMode(Phaser.BlendModes.ADD);
@@ -1762,11 +1764,13 @@
     setMachineType(type,loadingRobot=false){
       const milling=catalog[type].kind==='Fräsen';
       this.isMilling=milling;
-      if(!milling&&this.coolantZones&&this.coolantZoneType!==type){
+      this.coolantEnabled=!milling||type==='mill3';
+      if(this.coolantEnabled&&this.coolantZones&&this.coolantZoneType!==type){
         const zone=this.coolantZones[type]||this.coolantZones.standard;
         this.coolantSource=zone.source;this.coolantTarget=zone.target;
         this.coolantWindowPolygon=new Phaser.Geom.Polygon(zone.points);
         this.coolantMaskShape.clear().fillStyle(0xffffff,1).fillPoints(zone.points.map(([x,y])=>new Phaser.Geom.Point(x,y)),true);
+        this.coolantSprayEndpoints=[];
         this.coolantZoneType=type;
       }
       const robotLayout=milling?{x:335,y:550,width:370,height:320}:
@@ -1798,11 +1802,11 @@
       const on=this.running;
       this.robotImage.setVisible(!!this.robotEnabled);
       if(this.robotEnabled)this.robotImage.setAngle(on&&shiftAt(state.gameMinutes)===2?Math.sin(this.elapsed*2)*1.4:0);
-      if(on){
+      if(on&&!this.isMilling){
         this.spindle.lineStyle(3,0x97e6ff,.55).beginPath().arc(445,377,31,this.elapsed*9,this.elapsed*9+1.7).strokePath();
         this.spindle.lineStyle(2,0xffffff,.32).beginPath().arc(445,377,22,-this.elapsed*13,-this.elapsed*13+1.25).strokePath();
       }
-      const coolantOn=on&&!this.isMilling;
+      const coolantOn=on&&this.coolantEnabled;
       const coolantPulsePeriod=1.15;
       const coolantPulseDuration=.8;
       const coolantPhase=(this.elapsed%coolantPulsePeriod)/coolantPulsePeriod;
