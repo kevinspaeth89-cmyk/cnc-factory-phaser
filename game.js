@@ -2459,6 +2459,7 @@
     const layout=expansionSystem.getLayoutConfig(state),hallMap=$('hall-map');
     hallMap.classList.toggle('expanded',layout.level>1);
     hallMap.classList.toggle('six-bay',layout.level===2);
+    hallMap.classList.toggle('eight-bay',layout.level===3);
     hallMap.style.aspectRatio=String(layout.aspectRatio);
     const fault=m?breakdownSystem.getRecord(state,m.bay):null;
     const faultInfo=fault?.fault?breakdownSystem.getFaultInfo(fault.fault):null;
@@ -2544,6 +2545,14 @@
       }else{
         b.style.removeProperty('--six-art-width');
         b.style.removeProperty('--six-art-height');
+      }
+      if(layout.level===3){
+        b.style.setProperty('--eight-art-width',(19/slot.width*100)+'%');
+        b.style.setProperty('--eight-art-height',(19/slot.height*100)+'%');
+        b.style.setProperty('--eight-robot-width',(11/slot.width*100)+'%');
+        b.style.setProperty('--eight-robot-height',(15/slot.height*100)+'%');
+      }else{
+        for(const variable of ['--eight-art-width','--eight-art-height','--eight-robot-width','--eight-robot-height'])b.style.removeProperty(variable);
       }
       b.classList.toggle('installed',!!machine);
       b.classList.toggle('selected-bay',!!m&&bay===m.bay);
