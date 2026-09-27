@@ -187,6 +187,13 @@
     return state.customerReputation;
   }
 
+  function changeReputation(state, customer, delta) {
+    const reputation = ensureReputation(state);
+    if (!Object.hasOwn(reputation, customer)) return null;
+    reputation[customer] = clamp(Math.round(reputation[customer] + delta), 0, 100);
+    return reputation[customer];
+  }
+
   function init(state, options) {
     assertState(state);
     ensureReputation(state);
@@ -324,10 +331,12 @@
     return order;
   }
 
-  function expireAt(market, at) {
-    const before = market.available.length;
+  function expireAt(state, at) {
+    const market = state.orderMarket;
+    const expired = market.available.filter(order => order.expiresAt <= at);
     market.available = market.available.filter(order => order.expiresAt > at);
-    return before - market.available.length;
+    expired.filter(order => order.isRushOrder).forEach(order => changeReputation(state, order.customer, -6));
+    return expired.length;
   }
 
   function earliestExpiry(market) {
@@ -375,7 +384,7 @@
       if (!Number.isFinite(eventAt) || eventAt > target) break;
 
       market.now = Math.max(market.now, eventAt);
-      expireAt(market, market.now);
+      expireAt(state, market.now);
       activateDueFollowUps(state, market.now);
       if (market.nextRefreshAt <= market.now) {
         if (market.available.length < MAX_OFFERS) addGeneratedOffer(state, market.now);
@@ -385,7 +394,7 @@
     }
 
     market.now = target;
-    expireAt(market, target);
+    expireAt(state, target);
     activateDueFollowUps(state, target);
     fillMinimum(state, target);
     return market;
@@ -404,6 +413,65 @@
       .slice()
       .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
       .map(order => ({ ...order }));
+  }
+
+  function createRushOrder(state, compatibleKinds) {
+    const market = ensureMarket(state);
+    if (market.available.length >= MAX_OFFERS) return null;
+    const kinds = Array.isArray(compatibleKinds) ? compatibleKinds.filter(isValidKind) : [];
+    if (!kinds.length) return null;
+
+    const eligible = profiles.filter(profile => finite(market.completedCustomers[profile.customer], 0) > 0);
+    if (!eligible.length) return null;
+    const weighted = eligible.map(profile => {
+      const completed = finite(market.completedCustomers[profile.customer], 0);
+      const reputation = ensureReputation(state)[profile.customer];
+      return { profile, weight: Math.max(1, completed) * (0.5 + reputation / 100) };
+    });
+    const totalWeight = weighted.reduce((sum, item) => sum + item.weight, 0);
+    let draw = random(market) * totalWeight;
+    let profile = weighted[weighted.length - 1].profile;
+    for (const item of weighted) {
+      draw -= item.weight;
+      if (draw < 0) {
+        profile = item.profile;
+        break;
+      }
+    }
+    const kind = kinds[integer(market, 0, kinds.length - 1)];
+    const order = addGeneratedOffer(state, market.now, { kind, profileKey: profile.key, defer: true });
+    if (!order) return null;
+
+    const rushBonusPct = 20;
+    const reward = Math.round(order.reward * (1 + rushBonusPct / 100) / 100) * 100;
+    const offerLifetimeMinutes = 24 * 60;
+    const baseDeadlineHours = order.deadlineHours;
+    return {
+      ...order,
+      reward,
+      baseReward: order.reward,
+      rushBonus: reward - order.reward,
+      rushBonusPct,
+      baseDeadlineHours,
+      deadlineHours: Math.max(8, Math.round(baseDeadlineHours * 0.6)),
+      offerLifetimeMinutes,
+      expiresAt: market.now + offerLifetimeMinutes,
+      isRushOrder: true
+    };
+  }
+
+  function acceptRushOffer(state, order) {
+    const market = ensureMarket(state);
+    if (!order || !order.isRushOrder || !validOrder(order) || order.expiresAt <= market.now ||
+      market.available.length >= MAX_OFFERS || market.available.some(item => item.id === order.id)) return null;
+    const accepted = { ...order };
+    market.available.push(accepted);
+    return { ...accepted };
+  }
+
+  function recordRushDecision(state, order, accepted) {
+    if (!order || !order.isRushOrder || typeof order.customer !== 'string') return null;
+    return changeReputation(state, order.customer, accepted ? 2 : -4);
   }
 
   function accept(state, orderId) {
@@ -429,8 +497,7 @@
     }
     const customer = typeof order.customer === 'string' && order.customer ? order.customer : 'Unbekannter Kunde';
     market.completedCustomers[customer] = Math.max(0, finite(market.completedCustomers[customer], 0)) + 1;
-    const reputation=ensureReputation(state);
-    if(Object.hasOwn(reputation,customer))reputation[customer]=clamp(reputation[customer]+(options.late?-6:4),0,100);
+    changeReputation(state,customer,order.isRushOrder?(options.late?-12:8):(options.late?-6:4));
 
     const profile = profiles.find(item => item.key === order.customerProfile) ||
       profiles.find(item => item.customer === customer);
@@ -469,6 +536,9 @@
     tick,
     getAvailable,
     accept,
+    createRushOrder,
+    acceptRushOffer,
+    recordRushDecision,
     onCompleted,
     getReputation: state => ({ ...ensureReputation(state) }),
     limits: Object.freeze({ minOffers: MIN_OFFERS, startOffers: START_OFFERS, maxOffers: MAX_OFFERS })

@@ -68,7 +68,7 @@
   const defaults = () => ({
     money:14000,material:0,capacity:300,staff:{shift1:0,shift2:0},
     machines:[],selectedBay:null,speed:1,paused:false,gameMinutes:0,completed:0,
-    eventQueue:[],
+    eventQueue:[],nextRushOrderAt:null,
     payrollDue:0,wagesPaid:0,storagePaid:0,energyPaid:0,selected:null,selectedMaterialType:'c45',
     credit:{principal:0,originalAmount:0,annualRate:CREDIT_ANNUAL_RATE,paymentsRemaining:0,accruedInterest:0,nextPaymentAt:null,missedPayments:0},
     recruitment:{applicants:[],nextId:1},
@@ -124,9 +124,15 @@
       }
     }
   } catch (_) { /* Storage may be unavailable. */ }
+  state.nextRushOrderAt=Number.isFinite(state.nextRushOrderAt)&&state.nextRushOrderAt>0
+    ?state.nextRushOrderAt:state.gameMinutes+36*60;
   state.eventQueue=Array.isArray(state.eventQueue)?state.eventQueue.filter(event=>
-    event&&['warning','major_failure'].includes(event.event)&&Number.isInteger(event.bay)&&typeof event.fault==='string'
-  ).map(event=>({...event,id:event.id||`${event.event}:${event.bay}:${event.since??state.gameMinutes}`})):[];
+    event&&(
+      (['warning','major_failure'].includes(event.event)&&Number.isInteger(event.bay)&&typeof event.fault==='string')||
+      (event.event==='rush_order'&&event.order?.isRushOrder===true&&typeof event.order.id==='string'&&
+        typeof event.order.customer==='string'&&Number.isFinite(event.order.createdAt)&&Number.isFinite(event.order.expiresAt))
+    )
+  ).map(event=>({...event,id:event.id||(event.event==='rush_order'?`rush:${event.order.id}`:`${event.event}:${event.bay}:${event.since??state.gameMinutes}`)})):[];
   if(state.eventQueue.length)state.paused=true;
   state.machines.forEach(m=>{
     m.loadingRobot=!!m.loadingRobot;
@@ -429,11 +435,46 @@
     selfButton.parentElement.insertBefore(technician,$('continue-risky'));
     const scheduleDetail=document.createElement('b');scheduleDetail.id='schedule-repair-detail';$('schedule-repair').append(scheduleDetail);
   }
+  function renderRushOrderEvent(event){
+    const order=event.order,bonus=Number.isFinite(order.rushBonus)?order.rushBonus:Math.max(0,order.reward-(order.baseReward||order.reward));
+    const rate=order.kind==='Fräsen'?catalog.mill3.rate:catalog.standard.rate;
+    const processing=setupMinutesForOrder(order)+Math.max(0,(order.qty-1)/Math.max(1,order.qty)*order.duration*6/rate);
+    $('event-window').querySelector('.event-card').classList.add('rush-event-card');
+    $('event-eyebrow').textContent='STAMMKUNDEN-ANFRAGE · EILAUFTRAG';
+    $('event-title').textContent=`${order.customer} braucht kurzfristig ${order.part}`;
+    $('event-detail').textContent=`${order.qty} Teile · ${order.kind} · ${order.material} · ${order.kg} kg. Du hast bereits für diesen Kunden gearbeitet.`;
+    $('event-consequence').textContent=`Eilzuschlag: +${order.rushBonusPct||20} % (${euro(bonus)}). Lieferfrist ${order.deadlineHours} Stunden ab Zusage. Pünktlich fertig: stärkerer Vertrauensgewinn; verspätet: stärkerer Vertrauensverlust.`;
+    const timing=$('event-order-timing');timing.hidden=false;
+    timing.querySelector('#event-order-deadline-cell small').textContent='LIEFERFRIST AB ZUSAGE';
+    timing.querySelector('#event-order-processing small').textContent='BEARBEITUNGSZEIT';
+    $('event-order-deadline-cell').classList.remove('deadline-overdue');
+    $('event-order-deadline').textContent=`${order.deadlineHours} Std.`;
+    $('event-order-processing').textContent=`Ca. ${formatMinutes(processing)}`;
+    const actions=$('event-actions');actions.replaceChildren();
+    const addChoice=(label,detail,accepted,risky=false)=>{
+      const button=document.createElement('button'),small=document.createElement('small');
+      button.type='button';button.className='action event-choice'+(risky?' event-risk':'');
+      button.append(document.createTextNode(label));small.textContent=detail;button.append(small);
+      button.addEventListener('click',()=>resolveRushOrderEvent(event,accepted));actions.append(button);
+    };
+    addChoice('Eilauftrag zusagen',`+${euro(bonus)} Zuschlag · Vertrauen +2`,true);
+    addChoice('Ablehnen','Kein Zeitdruck · Kundenvertrauen −4',false,true);
+    $('event-count').textContent=state.eventQueue.length>1
+      ?`Ereignis 1 von ${state.eventQueue.length} · Das Spiel ist pausiert.`
+      :'Das Spiel ist pausiert, bis du zusagst oder ablehnst.';
+  }
   function renderEventWindow(){
     const overlay=$('event-window');
     if(!overlay)return;
     const event=state.eventQueue[0];overlay.hidden=!event;
     if(!event)return;
+    if(event.event==='rush_order'){
+      renderRushOrderEvent(event);
+      return;
+    }
+    $('event-window').querySelector('.event-card').classList.remove('rush-event-card');
+    $('event-order-timing').querySelector('#event-order-deadline-cell small').textContent='AUFTRAGSFRIST';
+    $('event-order-timing').querySelector('#event-order-processing small').textContent='BEARBEITUNG NOCH';
     const machine=machineAt(event.bay),warning=event.event==='warning',selfRepairFailed=event.selfRepairFailed===true;
     const fault=breakdownSystem.getFaultInfo(event.fault),options=breakdownSystem.getRepairOptions(state,event.bay);
     $('event-eyebrow').textContent=selfRepairFailed?'SELBSTREPARATUR GESCHEITERT':event.sudden?'PLÖTZLICHER MASCHINENCRASH':warning?'MASCHINENWARNUNG':'SCHWERER MASCHINENSCHADEN';
@@ -483,6 +524,43 @@
   }
   function resolveEventWithoutAction(){
     state.eventQueue.shift();state.paused=state.eventQueue.length>0;save();render();
+  }
+  function resolveRushOrderEvent(event,accepted){
+    if(!state.eventQueue.some(item=>item.id===event.id))return false;
+    let offer=event.order;
+    if(accepted){
+      offer={...offer,acceptedRushAt:state.gameMinutes,
+        deadlineAt:state.gameMinutes+offer.deadlineHours*60};
+      offer.expiresAt=Math.max(offer.expiresAt,offer.deadlineAt+24*60);
+      offer.offerLifetimeMinutes=offer.expiresAt-offer.createdAt;
+      const added=orderMarketSystem.acceptRushOffer(state,offer);
+      if(!added){say('Der Eilauftrag konnte nicht angenommen werden. Die Auftragsbörse ist voll.');return false;}
+      offer=added;
+      orderMarketSystem.recordRushDecision(state,offer,true);
+    }else{
+      orderMarketSystem.recordRushDecision(state,offer,false);
+    }
+    const index=state.eventQueue.findIndex(item=>item.id===event.id);
+    if(index>=0)state.eventQueue.splice(index,1);
+    state.paused=state.eventQueue.length>0;
+    save();render();
+    if(accepted){
+      if(state.eventQueue.length)return true;
+      const shortage=Math.max(0,materialSystem.requiredKg(offer)-materialSystem.available(state,offer));
+      if(shortage>1e-9){
+        state.selected=offer.id;
+        state.warehouseOrderSnapshot={...offer};
+        state.selectedMaterialType=materialSystem.typeForOrder(offer)||state.selectedMaterialType;
+        save();tab('warehouse');
+        say(`Eilauftrag zugesagt: ${offer.part} · Es fehlen ${Math.ceil(shortage)} kg ${offer.material}.`);
+      }else{
+        tab('orders');openOrderMachineChooser(offer.id);
+        say(`Eilauftrag zugesagt: ${offer.part} · Lieferfrist ${offer.deadlineHours} h · ${euro(offer.rushBonus)} Zuschlag.`);
+      }
+    }else{
+      say(`Eilauftrag von ${offer.customer} abgelehnt. Kundenvertrauen −4.`);
+    }
+    return true;
   }
   function statusFor(m){
     if(!m)return 'Freier Stellplatz';
@@ -713,6 +791,12 @@
       const estimateMinutes=setupMinutesForOrder(o)+Math.max(0,(o.qty-1)/Math.max(1,o.qty)*o.duration*6/baseMachineRate);
       const contributionPerHour=Number.isFinite(materialContribution)&&estimateMinutes>0?materialContribution/(estimateMinutes/60):null;
       card.innerHTML=`<div class="top"><span>${o.customer}</span><span>${o.kind} · #${o.id}</span></div><h3>${o.part}</h3><p>${customerType}${o.material} · ${o.qty} Teile${difficulty}</p><div class="values"><span>${o.kg} kg · Frist ${o.deadlineHours} h${o.reputationBonusPct?` · Kundenbonus ${o.reputationBonusPct>0?'+':''}${o.reputationBonusPct} %`:''}</span><b>${euro(o.reward)}</b></div><div class="order-economics${materialContribution!==null&&materialContribution<0?' loss':''}"><div class="order-economics-grid"><span>Material zum Tageskurs<strong>${materialCost===null?'—':euro(materialCost)}</strong></span><span>Nach Material<strong>${materialContribution===null?'—':euro(materialContribution)}</strong></span></div><p>${contributionPerHour===null?'':`Etwa ${euro(contributionPerHour)} je Maschinenstunde · ${formatMinutes(estimateMinutes)} Rüst- und Maschinenzeit`}</p><small>Grundmaschine, ohne Lohn, Strom und Verschleiß</small></div>`;
+      if(o.isRushOrder){
+        card.classList.add('rush-order-card');
+        const badge=document.createElement('strong');badge.className='rush-order-badge';
+        badge.textContent=`EILAUFTRAG · +${o.rushBonusPct||20} % · Lieferfrist ${o.deadlineHours} h ab Zusage`;
+        card.querySelector('.top').after(badge);
+      }
       if(Number.isFinite(o.expiresAt)){
         const countdown=document.createElement('p');countdown.className='order-countdown';countdown.dataset.expiresAt=String(o.expiresAt);card.append(countdown);
       }
@@ -1410,7 +1494,7 @@
     if(!options.automatic){closeOrderMachineChooser();state.selectedBay=m.bay;}
     if(job(m)){
       m.orderQueue.push({order:accepted,material:materialResult.consumed,
-        deadlineAt:state.gameMinutes+accepted.deadlineHours*60});
+        deadlineAt:Number.isFinite(accepted.deadlineAt)?accepted.deadlineAt:state.gameMinutes+accepted.deadlineHours*60});
       if(state.warehouseOrderSnapshot?.id===accepted.id)state.warehouseOrderSnapshot=null;
       if(!options.automatic)state.selected=null;
       save();renderOrders();renderBusiness();render();
@@ -1419,11 +1503,31 @@
     }
     m.activeId=accepted.id;m.activeOrder=accepted;m.activeOrderSource='market';m.progress=0;m.produced=0;
     const setupPlan=beginMachineSetup(m,accepted);
-    m.deadlineAt=state.gameMinutes+accepted.deadlineHours*60;
+    m.deadlineAt=Number.isFinite(accepted.deadlineAt)?accepted.deadlineAt:state.gameMinutes+accepted.deadlineHours*60;
     if(state.warehouseOrderSnapshot?.id===accepted.id)state.warehouseOrderSnapshot=null;
     if(!options.automatic)state.selected=null;
     save();renderOrders();renderBusiness();render();
     if(!options.automatic){closeDrawer();showMachine(m.bay);say(`${accepted.part} auf Platz ${m.bay} angenommen. Rüstzeit ${formatMinutes(setupPlan.totalMinutes)}${setupPlan.delayMinutes?` · Einrichtungsproblem verlängert um ${formatMinutes(setupPlan.delayMinutes)}`:''}.`);}
+    return true;
+  }
+  function maybeQueueRushOrderEvent(){
+    if(state.gameMinutes+1e-8<state.nextRushOrderAt)return false;
+    if(state.eventQueue.length){state.nextRushOrderAt=state.gameMinutes+6*60;save();return false;}
+    const eligibleMachines=state.machines.filter(machine=>{
+      const kind=catalog[machine.type]?.kind;
+      if(!kind||machineOrderBlockReason(machine,{kind}))return false;
+      const fault=breakdownSystem.getRecord(state,machine.bay);
+      return !(fault?.fault&&(fault.status==='major_failure'||fault.status==='repairing'||
+        (fault.status==='warning'&&!fault.riskyContinue&&!fault.scheduledRepair)));
+    });
+    const kinds=[...new Set(eligibleMachines.map(machine=>catalog[machine.type].kind))];
+    const order=orderMarketSystem.createRushOrder(state,kinds);
+    if(!order){state.nextRushOrderAt=state.gameMinutes+12*60;save();return false;}
+    const id=`rush:${order.id}`;
+    state.eventQueue.push({event:'rush_order',id,order,createdAt:state.gameMinutes});
+    state.nextRushOrderAt=state.gameMinutes+72*60;
+    state.paused=true;
+    save();renderEventWindow();
     return true;
   }
   function officeOpenAt(minutes){
@@ -1704,6 +1808,7 @@
       }
       orderMarketSystem.tick(state,state.gameMinutes);
       runOrderOffice();
+      maybeQueueRushOrderEvent();
       const after=dateAt(state.gameMinutes);
       if(after.getUTCMonth()!==before.getUTCMonth()||after.getUTCFullYear()!==before.getUTCFullYear()){
         serviceMonthlyCredit();
