@@ -471,7 +471,7 @@
 
   function recordRushDecision(state, order, accepted) {
     if (!order || !order.isRushOrder || typeof order.customer !== 'string') return null;
-    return changeReputation(state, order.customer, accepted ? 2 : -4);
+    return changeReputation(state, order.customer, accepted ? 6 : -10);
   }
 
   function accept(state, orderId) {

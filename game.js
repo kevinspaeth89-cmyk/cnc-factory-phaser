@@ -799,8 +799,8 @@
       button.append(document.createTextNode(label));small.textContent=detail;button.append(small);
       button.addEventListener('click',()=>resolveRushOrderEvent(event,accepted));actions.append(button);
     };
-    addChoice('Zusage – später einplanen',`+${euro(bonus)} Zuschlag · Vertrauen +2`,true);
-    addChoice('Ablehnen','Kein Zeitdruck · Kundenvertrauen −4',false,true);
+    addChoice('Zusage – später einplanen',`+${euro(bonus)} Zuschlag · Kundenzufriedenheit +6`,true);
+    addChoice('Ablehnen','Kein Zeitdruck · Kundenzufriedenheit −10',false,true);
     $('event-count').textContent=state.eventQueue.length>1
       ?`Ereignis 1 von ${state.eventQueue.length} · Das Spiel ist pausiert.`
       :'Das Spiel ist pausiert, bis du zusagst oder ablehnst.';
@@ -853,7 +853,7 @@
       const normalTiming=rushCheck
         ?'Eilauftrag fertig in '+formatEstimateMinutes(rushCheck.leadMinutes)+' · '+rushOutcome
         :'Eilfrist nicht berechenbar';
-      normalDetail.textContent=reason||(!projected.shifts.length?'Keine besetzte Schicht':materialShortage>1e-9?'Es fehlen '+Math.ceil(materialShortage)+' kg '+order.material+' · nach dem Kauf '+(activeOrder?'in die Warteschlange':'direkt')+' auf Platz '+machine.bay+' · '+euro(Number(order.rushBonus)||0)+' Zuschlag · '+normalTiming:euro(Number(order.rushBonus)||0)+' Zuschlag · '+normalTiming);
+      normalDetail.textContent=reason||(!projected.shifts.length?'Keine besetzte Schicht':materialShortage>1e-9?'Es fehlen '+Math.ceil(materialShortage)+' kg '+order.material+' · nach dem Kauf '+(activeOrder?'in die Warteschlange':'direkt')+' auf Platz '+machine.bay+' · '+euro(Number(order.rushBonus)||0)+' Zuschlag · Kundenzufriedenheit +6 · '+normalTiming:euro(Number(order.rushBonus)||0)+' Zuschlag · Kundenzufriedenheit +6 · '+normalTiming);
       normalButton.append(normalDetail);normalButton.disabled=!!reason||!projected.shifts.length;
       normalButton.addEventListener('click',()=>resolveRushOrderEvent(event,true,machine.bay,false));
       choices.append(normalButton);
@@ -878,7 +878,7 @@
             finishImpact='Vorher fertig in '+formatEstimateMinutes(activeDeadlineCheck.leadMinutes)+' · danach in '+formatEstimateMinutes(afterFinish)+' ('+delayText+').';
           }
           interruptDetail.textContent=(materialShortage>1e-9?'Es fehlen '+Math.ceil(materialShortage)+' kg '+order.material+'; nach dem Kauf wird der Eilauftrag auf Platz '+machine.bay+' zuerst gestartet. ':'')+
-            'Eilauftrag zuerst: fertig in '+(rushCheck?formatEstimateMinutes(rushCheck.leadMinutes):'nicht berechenbar')+'.\n'+
+            'Kundenzufriedenheit +6 · Eilauftrag zuerst: fertig in '+(rushCheck?formatEstimateMinutes(rushCheck.leadMinutes):'nicht berechenbar')+'.\n'+
             'Danach '+activeOrder.part+': '+finishImpact+'\n'+
             'Neue Rüstzeit '+formatMinutes(interruption.resumedSetup)+' · '+deadlineText+' · danach '+outcome+'.';
         }else interruptDetail.textContent=interruptReason||'Frist des laufenden Auftrags nicht berechenbar.';
@@ -1141,7 +1141,7 @@
         say(`Eilauftrag zugesagt: ${offer.part} · Lieferfrist ${offer.deadlineHours} h · ${euro(offer.rushBonus)} Zuschlag.`);
       }
     }else{
-      say(`Eilauftrag von ${offer.customer} abgelehnt. Kundenvertrauen −4.`);
+      say(`Eilauftrag von ${offer.customer} abgelehnt. Kundenzufriedenheit −10.`);
     }
     return true;
   }
