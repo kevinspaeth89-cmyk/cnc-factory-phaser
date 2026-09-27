@@ -823,7 +823,7 @@
       const activeOrder=job(machine);
       const activeDeadlineCheck=activeOrder?current.deadlineChecks.find(check=>check.orderId===activeOrder.id):null;
       const row=document.createElement('div'),top=document.createElement('div'),name=document.createElement('strong'),status=document.createElement('strong'),load=document.createElement('p'),window=document.createElement('p'),choices=document.createElement('div');
-      const reason=rushAssignmentBlockReason(machine,order,false);
+      const reason=rushAssignmentBlockReason(machine,order,false,true);
       const blocked=!!reason||!projected.shifts.length;
       const tight=bufferMinutes<0;
       row.className='rush-capacity-row';
@@ -859,7 +859,7 @@
       choices.append(normalButton);
       if(activeOrder){
         const interruptButton=document.createElement('button'),interruptDetail=document.createElement('small');
-        const interruptReason=rushAssignmentBlockReason(machine,order,true);
+        const interruptReason=rushAssignmentBlockReason(machine,order,true,true);
         interruptButton.type='button';interruptButton.className='action rush-machine-choice rush-interrupt-choice';
         interruptButton.append(document.createTextNode(materialShortage>1e-9?'Material kaufen & Auftrag hier einschieben':'Jetzt starten und laufenden Auftrag unterbrechen'));
         if(interruption){
@@ -1087,7 +1087,7 @@
     let offer=event.order,materialPurchaseAssignment=null;
     if(accepted){
       if(Number.isInteger(targetBay)){
-        const machine=machineAt(targetBay),reason=machine&&rushAssignmentBlockReason(machine,offer,interrupt);
+        const machine=machineAt(targetBay),reason=machine&&rushAssignmentBlockReason(machine,offer,interrupt,true);
         if(!machine||reason||!plannedMachineLoad(machine).shifts.length){
           say(reason||'Für diese Maschine ist keine besetzte Schicht geplant.');return false;
         }
@@ -1578,10 +1578,10 @@
     if(machine.maintenance<8||machine.tool<1)return 'Wartung oder Werkzeug erneuern';
     return '';
   }
-  function rushAssignmentBlockReason(machine,order,interrupt=false){
+  function rushAssignmentBlockReason(machine,order,interrupt=false,allowMaterialShortage=false){
     if(!compatible(machine,order))return `Benötigt ${order.kind}`;
     const shortage=Math.max(0,materialSystem.requiredKg(order)-materialSystem.available(state,order));
-    if(shortage>1e-9)return `Material fehlt: ${Math.ceil(shortage)} kg ${order.material}`;
+    if(shortage>1e-9&&!allowMaterialShortage)return `Material fehlt: ${Math.ceil(shortage)} kg ${order.material}`;
     if(machine.maintenanceRemainingMinutes>0)return 'Wartung läuft';
     if(machine.maintenance<8||machine.tool<1)return 'Wartung oder Werkzeug erneuern';
     const fault=breakdownSystem.getRecord(state,machine.bay);
@@ -1735,7 +1735,7 @@
     const pendingMachine=pendingRush?machineAt(pendingRush.bay):null;
     const pendingReason=pendingRush
       ?!pendingMachine?'Die ausgewählte Maschine ist nicht mehr verfügbar.'
-        :rushAssignmentBlockReason(pendingMachine,order,pendingRush.interrupt)
+        :rushAssignmentBlockReason(pendingMachine,order,pendingRush.interrupt,true)
           ||(!plannedMachineLoad(pendingMachine).shifts.length?'Für diese Maschine ist keine besetzte Schicht geplant.':'')
       :'';
     const machineReady=state.machines.some(m=>compatible(m,order)&&!machineOrderBlockReason(m,order));
@@ -1769,7 +1769,7 @@
       if(available+1e-9<required){say('Es fehlen noch '+Math.ceil(required-available)+' kg '+order.material+'.');renderWarehouseOrderContext();return;}
       const machine=machineAt(pendingRush.bay);
       if(!machine){say('Die für den Eilauftrag gewählte Maschine ist nicht mehr verfügbar.');renderWarehouseOrderContext();return;}
-      const reason=rushAssignmentBlockReason(machine,order,pendingRush.interrupt);
+      const reason=rushAssignmentBlockReason(machine,order,pendingRush.interrupt,true);
       if(reason||!plannedMachineLoad(machine).shifts.length){
         say(reason||'Für diese Maschine ist keine besetzte Schicht geplant.');renderWarehouseOrderContext();return;
       }
