@@ -5,6 +5,7 @@
   const euroExact = amount => '€ ' + amount.toLocaleString('de-DE',{minimumFractionDigits:2,maximumFractionDigits:2});
   const SAVE_KEY = 'cnc_factory_save_v3';
   const START = Date.UTC(2026, 0, 5, 6);
+  const GAME_MINUTES_PER_REAL_SECOND = 8;
   const HIRING_FEE = 150;
   const TRAINING_BASE_COST = 900;
   const PREVENTIVE_MAINTENANCE_COST = 1200;
@@ -1551,7 +1552,7 @@
   function tick(dt){
     if(state.paused)return;
     // Slice at minute boundaries so shift changes and month end are charged exactly once.
-    let left=dt*state.speed*6;
+    let left=dt*state.speed*GAME_MINUTES_PER_REAL_SECOND;
     while(left>1e-8&&!state.paused){
       const step=Math.min(left,1-(state.gameMinutes%1)||1);
       const before=dateAt(state.gameMinutes),shift=shiftAt(state.gameMinutes);
