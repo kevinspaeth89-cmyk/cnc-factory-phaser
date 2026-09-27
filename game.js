@@ -779,57 +779,79 @@
   function renderRushCapacityCheck(order,event){
     const panel=$('rush-capacity-check');panel.hidden=false;
     const heading=document.createElement('strong'),note=document.createElement('p'),rows=document.createElement('div');
-    heading.className='rush-capacity-title';heading.textContent='Kapazitätscheck bis zur Eilfrist';
+    heading.className='rush-capacity-title';heading.textContent='Fristwirkung je Maschine';
     note.className='rush-capacity-note';
-    note.textContent='Wähle direkt eine Maschine. Die Fristprognose rechnet mit den besetzten Schichten und ohne neue Störungen; beim Unterbrechen ist die neue Rüstzeit des laufenden Auftrags bereits eingerechnet.';
+    note.textContent='Grün bedeutet pünktlich, Rot bedeutet voraussichtlich verspätet. Beim Unterbrechen zeigen wir zusätzlich, wie sich die Frist des laufenden Auftrags verschiebt.';
     rows.className='rush-capacity-rows';
     const machines=state.machines.filter(machine=>compatible(machine,order));
     if(!machines.length){
-      const empty=document.createElement('p');empty.className='rush-capacity-empty';empty.textContent=`Keine passende ${order.kind}-Maschine vorhanden.`;rows.append(empty);
+      const empty=document.createElement('p');empty.className='rush-capacity-empty';empty.textContent='Keine passende '+order.kind+'-Maschine vorhanden.';rows.append(empty);
     }
     machines.forEach(machine=>{
       const current=plannedMachineLoad(machine),projected=plannedMachineLoad(machine,order),interruption=rushInterruptionForecast(machine,order);
       const rushCheck=projected.deadlineChecks.find(check=>check.orderId===order.id);
       const bufferMinutes=rushCheck?.bufferMinutes??-Infinity;
+      const activeOrder=job(machine);
+      const activeDeadlineCheck=activeOrder?current.deadlineChecks.find(check=>check.orderId===activeOrder.id):null;
       const row=document.createElement('div'),top=document.createElement('div'),name=document.createElement('strong'),status=document.createElement('strong'),load=document.createElement('p'),window=document.createElement('p'),choices=document.createElement('div');
       const reason=rushAssignmentBlockReason(machine,order,false);
-      row.className='rush-capacity-row';
       const blocked=!!reason||!projected.shifts.length;
       const tight=bufferMinutes<0;
+      row.className='rush-capacity-row';
       row.classList.toggle('over-capacity',tight||blocked);
       top.className='rush-capacity-row-head';
-      name.textContent=`Platz ${machine.bay} · ${catalog[machine.type].name}`;
+      name.textContent='Platz '+machine.bay+' · '+catalog[machine.type].name;
       status.className='rush-capacity-status';
-      status.textContent=reason||(!projected.shifts.length?'Keine Schicht':!rushCheck?'Nicht berechenbar':tight?`Vsl. ${formatEstimateMinutes(-bufferMinutes)} zu spät`:`Puffer ${formatEstimateMinutes(bufferMinutes)}`);
+      status.classList.toggle('rush-impact-late',!reason&&!!rushCheck&&tight);
+      status.classList.toggle('rush-impact-on-time',!reason&&!!rushCheck&&!tight);
+      status.textContent=reason||(!projected.shifts.length?'Keine besetzte Schicht':!rushCheck?'Zeitplan nicht berechenbar':tight?'Eilauftrag voraussichtlich verspätet':'Eilauftrag voraussichtlich pünktlich');
       top.append(name,status);
-      const percentLabel=load=>load.percent===null?'keine Schicht':Number.isFinite(load.percent)?`${Math.round(load.percent)} %`:'∞ %';
-      const currentPercent=percentLabel(current);
-      const projectedPercent=percentLabel(projected);
+      const percentLabel=load=>load.percent===null?'keine Schicht':Number.isFinite(load.percent)?Math.round(load.percent)+' %':'∞ %';
+      const currentPercent=percentLabel(current),projectedPercent=percentLabel(projected);
       load.className='rush-capacity-load';
-      load.textContent=`Fristauslastung der Planung: ${currentPercent} → ${projectedPercent}`;
+      load.textContent='Fristauslastung: ohne Eilauftrag '+currentPercent+' · mit Eilauftrag '+projectedPercent+' (über 100 % = voraussichtlich verspätet)';
       window.className='rush-capacity-window';
+      window.classList.toggle('rush-impact-late',tight);
+      const rushOutcome=bufferMinutes>=0?'Fristpuffer '+formatEstimateMinutes(bufferMinutes):'Frist voraussichtlich um '+formatEstimateMinutes(-bufferMinutes)+' überschritten';
       window.textContent=rushCheck
-        ?`${order.part}: Fertigstellung vsl. in ${formatEstimateMinutes(rushCheck.leadMinutes)} · ${bufferMinutes>=0?'Puffer':'zu spät um'} ${formatEstimateMinutes(Math.abs(bufferMinutes))}`
-        :'Eilauftrag konnte zeitlich nicht eingeplant werden.';
+        ?'Eilauftrag '+order.part+': fertig in '+formatEstimateMinutes(rushCheck.leadMinutes)+' · '+rushOutcome
+        :'Eilauftrag: Fertigstellung nicht berechenbar.';
       choices.className='rush-machine-actions';
       const normalButton=document.createElement('button'),normalDetail=document.createElement('small');
       normalButton.type='button';normalButton.className='action rush-machine-choice';
-      normalButton.append(document.createTextNode(job(machine)?'Nach laufendem Auftrag einplanen':'Direkt auf dieser Maschine starten'));
+      normalButton.append(document.createTextNode(activeOrder?'Nach laufendem Auftrag einplanen':'Direkt auf dieser Maschine starten'));
       const materialShortage=Math.max(0,materialSystem.requiredKg(order)-materialSystem.available(state,order));
-      normalDetail.textContent=reason||(!projected.shifts.length?'Keine besetzte Schicht':`${euro(Number(order.rushBonus)||0)} Zuschlag · ${rushCheck?`${rushCheck.bufferMinutes>=0?'Puffer':'vsl. zu spät um'} ${formatEstimateMinutes(Math.abs(rushCheck.bufferMinutes))}`:'Frist nicht berechenbar'}`);
+      const normalTiming=rushCheck
+        ?'Eilauftrag fertig in '+formatEstimateMinutes(rushCheck.leadMinutes)+' · '+rushOutcome
+        :'Eilfrist nicht berechenbar';
+      normalDetail.textContent=reason||(!projected.shifts.length?'Keine besetzte Schicht':euro(Number(order.rushBonus)||0)+' Zuschlag · '+normalTiming);
       normalButton.append(normalDetail);normalButton.disabled=!!reason||!projected.shifts.length||materialShortage>1e-9;
       normalButton.addEventListener('click',()=>resolveRushOrderEvent(event,true,machine.bay,false));
       choices.append(normalButton);
-      if(job(machine)){
+      if(activeOrder){
         const interruptButton=document.createElement('button'),interruptDetail=document.createElement('small');
         const interruptReason=rushAssignmentBlockReason(machine,order,true);
         interruptButton.type='button';interruptButton.className='action rush-machine-choice rush-interrupt-choice';
-        interruptButton.append(document.createTextNode('Jetzt starten & laufenden Auftrag unterbrechen'));
+        interruptButton.append(document.createTextNode('Jetzt starten und laufenden Auftrag unterbrechen'));
         if(interruption){
-          const interruptedLate=interruption.bufferMinutes<0;
-          interruptDetail.textContent=`Danach ${interruption.interrupted.part} mit neuer Rüstzeit ${formatMinutes(interruption.resumedSetup)} fortsetzen · `+
-            `${interruptedLate?'vsl. '+formatEstimateMinutes(-interruption.bufferMinutes)+' zu spät':'Fristpuffer '+formatEstimateMinutes(interruption.bufferMinutes)}`;
-        }else interruptDetail.textContent=interruptReason||'Frist des laufenden Auftrags nicht berechenbar';
+          const deadlineRemaining=interruption.deadlineAt-state.gameMinutes;
+          const deadlineText=deadlineRemaining>=0
+            ?'Frist in '+formatEstimateMinutes(deadlineRemaining)
+            :'Frist bereits '+formatEstimateMinutes(-deadlineRemaining)+' überfällig';
+          const outcome=interruption.bufferMinutes>=0
+            ?formatEstimateMinutes(interruption.bufferMinutes)+' Puffer'
+            :'voraussichtlich '+formatEstimateMinutes(-interruption.bufferMinutes)+' zu spät';
+          const afterFinish=interruption.finishAt-state.gameMinutes;
+          let finishImpact='Abschluss danach in '+formatEstimateMinutes(afterFinish)+'.';
+          if(activeDeadlineCheck){
+            const delay=interruption.finishAt-activeDeadlineCheck.finishAt;
+            const delayText=(delay>=0?'später um ':'früher um ')+formatEstimateMinutes(Math.abs(delay));
+            finishImpact='Vorher fertig in '+formatEstimateMinutes(activeDeadlineCheck.leadMinutes)+' · danach in '+formatEstimateMinutes(afterFinish)+' ('+delayText+').';
+          }
+          interruptDetail.textContent='Eilauftrag zuerst: fertig in '+(rushCheck?formatEstimateMinutes(rushCheck.leadMinutes):'nicht berechenbar')+'.\n'+
+            'Danach '+activeOrder.part+': '+finishImpact+'\n'+
+            'Neue Rüstzeit '+formatMinutes(interruption.resumedSetup)+' · '+deadlineText+' · danach '+outcome+'.';
+        }else interruptDetail.textContent=interruptReason||'Frist des laufenden Auftrags nicht berechenbar.';
         interruptButton.append(interruptDetail);
         interruptButton.disabled=!!interruptReason||!interruption||materialShortage>1e-9;
         interruptButton.addEventListener('click',()=>resolveRushOrderEvent(event,true,machine.bay,true));
