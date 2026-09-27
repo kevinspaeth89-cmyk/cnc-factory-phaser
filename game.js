@@ -592,7 +592,10 @@
     $('queued-orders').replaceChildren(...state.machines.map(renderMachineLoadCard),...state.machines.flatMap(m=>m.orderQueue.map((entry,index)=>{
       const row=document.createElement('div'),title=document.createElement('span'),controls=document.createElement('div'),cancel=document.createElement('button');
       row.className='queued-job';
-      title.textContent=`Platz ${m.bay} · Planung ${index+1}/${MAX_QUEUED_ORDERS}: ${entry.order.part} · ${entry.order.qty} Teile · Frist ${formatMinutes(entry.deadlineAt-state.gameMinutes)}`;
+      title.textContent=`Platz ${m.bay} · Planung ${index+1}/${MAX_QUEUED_ORDERS}: ${entry.order.part} · ${entry.order.qty} Teile · `;
+      const deadline=document.createElement('strong');
+      deadline.className='queue-deadline-countdown';deadline.dataset.deadlineAt=String(entry.deadlineAt);
+      title.append(deadline);
       controls.className='queue-order-controls';
       const moveUp=document.createElement('button');
       moveUp.type='button';moveUp.textContent='↑';moveUp.title='Auftrag nach oben verschieben';
@@ -710,6 +713,11 @@
   function updateOrderCountdowns(){
     document.querySelectorAll('.order-countdown').forEach(node=>{
       node.textContent=`Gültig noch ${formatMinutes(Number(node.dataset.expiresAt)-state.gameMinutes)}`;
+    });
+    document.querySelectorAll('.queue-deadline-countdown').forEach(node=>{
+      const remaining=Number(node.dataset.deadlineAt)-state.gameMinutes,overdue=remaining<0;
+      node.classList.toggle('overdue',overdue);
+      node.textContent=overdue?`Überfällig seit ${formatMinutes(-remaining)}`:`Frist ${formatMinutes(remaining)}`;
     });
   }
   let lastMarketBoardKey='';
