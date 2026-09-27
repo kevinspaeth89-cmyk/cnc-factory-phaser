@@ -504,6 +504,15 @@
     if(Number.isFinite(additionalOrder?.duration))plannedMinutes+=plannedOrderMinutes(machine,additionalOrder,factor);
     return {shifts,capacityMinutes,plannedMinutes,percent:capacityMinutes?plannedMinutes/capacityMinutes*100:null};
   }
+  function scheduledMachineMinutesUntil(machine,hours){
+    const start=state.gameMinutes,end=start+Math.max(0,Number(hours)||0)*60;
+    let available=0;
+    for(let minute=Math.floor(start);minute<end;minute++){
+      const shift=shiftAt(minute);
+      if(shift&&(machine['operator'+shift]||(shift===2&&machine.loadingRobot)))available++;
+    }
+    return available;
+  }
   const formatMinutes=min=>{
     min=Math.max(0,Math.ceil(min));
     const hours=Math.floor(min/60),mins=min%60;
@@ -589,6 +598,7 @@
     $('event-order-deadline-cell').classList.remove('deadline-overdue');
     $('event-order-deadline').textContent=`${order.deadlineHours} Std.`;
     $('event-order-processing').textContent=`Ca. ${formatMinutes(processing)}`;
+    renderRushCapacityCheck(order);
     const actions=$('event-actions');actions.replaceChildren();
     const addChoice=(label,detail,accepted,risky=false)=>{
       const button=document.createElement('button'),small=document.createElement('small');
@@ -601,6 +611,48 @@
     $('event-count').textContent=state.eventQueue.length>1
       ?`Ereignis 1 von ${state.eventQueue.length} · Das Spiel ist pausiert.`
       :'Das Spiel ist pausiert, bis du zusagst oder ablehnst.';
+  }
+  function renderRushCapacityCheck(order){
+    const card=$('event-window').querySelector('.event-card');
+    let panel=$('rush-capacity-check');
+    if(!panel){
+      panel=document.createElement('section');panel.id='rush-capacity-check';panel.className='rush-capacity-check';
+      card.insertBefore(panel,$('event-actions'));
+    }
+    panel.hidden=false;
+    const heading=document.createElement('strong'),note=document.createElement('p'),rows=document.createElement('div');
+    heading.className='rush-capacity-title';heading.textContent='Kapazitätscheck bis zur Eilfrist';
+    note.className='rush-capacity-note';
+    note.textContent='Tageslast zeigt Auftragszeit pro Werktag. Der Fristpuffer rechnet Schichtplan und Warteschlange ein. Die Frist läuft nach Zusage auch beim Materialeinkauf weiter.';
+    rows.className='rush-capacity-rows';
+    const machines=state.machines.filter(machine=>compatible(machine,order));
+    if(!machines.length){
+      const empty=document.createElement('p');empty.className='rush-capacity-empty';empty.textContent=`Keine passende ${order.kind}-Maschine vorhanden.`;rows.append(empty);
+    }
+    machines.forEach(machine=>{
+      const current=plannedMachineLoad(machine),projected=plannedMachineLoad(machine,order);
+      const availableMinutes=scheduledMachineMinutesUntil(machine,order.deadlineHours);
+      const bufferMinutes=availableMinutes-projected.plannedMinutes;
+      const row=document.createElement('div'),top=document.createElement('div'),name=document.createElement('strong'),status=document.createElement('strong'),load=document.createElement('p'),window=document.createElement('p');
+      const reason=machineOrderBlockReason(machine,order);
+      row.className='rush-capacity-row';
+      const blocked=!!reason||!projected.shifts.length;
+      const tight=bufferMinutes<0;
+      row.classList.toggle('over-capacity',tight||blocked);
+      top.className='rush-capacity-row-head';
+      name.textContent=`Platz ${machine.bay} · ${catalog[machine.type].name}`;
+      status.className='rush-capacity-status';
+      status.textContent=reason||(!projected.shifts.length?'Keine Schicht':tight?`Es fehlen ${formatMinutes(-bufferMinutes)}`:bufferMinutes<120?`Puffer ${formatMinutes(bufferMinutes)}`:`Puffer +${formatMinutes(bufferMinutes)}`);
+      top.append(name,status);
+      const currentPercent=current.percent===null?'keine Schicht':`${Math.round(current.percent)} %`;
+      const projectedPercent=projected.percent===null?'keine Schicht':`${Math.round(projected.percent)} %`;
+      load.className='rush-capacity-load';
+      load.textContent=`Tageslast: ${currentPercent} → ${projectedPercent} · ${projected.capacityMinutes/60} h Tageskapazität`;
+      window.className='rush-capacity-window';
+      window.textContent=`Bis zur Frist verfügbar: ${formatMinutes(availableMinutes)} · verplant inkl. Eilauftrag: ${formatMinutes(projected.plannedMinutes)}`;
+      row.append(top,load,window);rows.append(row);
+    });
+    panel.replaceChildren(heading,note,rows);
   }
   function addQualityChoice(label,detail,callback,cost=0,risky=false){
     const button=document.createElement('button'),small=document.createElement('small');
@@ -650,6 +702,8 @@
   function renderEventWindow(){
     const overlay=$('event-window');
     if(!overlay)return;
+    const capacityPanel=$('rush-capacity-check');
+    if(capacityPanel)capacityPanel.hidden=true;
     const event=state.eventQueue[0];overlay.hidden=!event;
     if(!event)return;
     try{
