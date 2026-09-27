@@ -66,7 +66,7 @@
     bay,type,purchasePrice:catalog[type].price,level:1,maintenance:90,maintenanceRemainingMinutes:0,tool:82,operator1:false,operator2:false,loadingRobot:false,
     activeId:null,activeOrder:null,activeOrderSource:null,progress:0,produced:0,deadlineAt:null,
     setupDurationMinutes:0,setupRemainingMinutes:0,setupDelayMinutes:0,setupPartProduced:false,
-    orderQueue:[],operatorProgramming:null,qualityReworkQueue:[],qualityInspectedOrderId:null,ncProgramPending:false
+    orderQueue:[],suspendedOrder:null,operatorProgramming:null,qualityReworkQueue:[],qualityInspectedOrderId:null,ncProgramPending:false
   });
   const defaults = () => ({
     money:14000,material:0,capacity:300,staff:{shift1:0,shift2:0},
@@ -96,6 +96,15 @@
         const hasSetupState=Object.prototype.hasOwnProperty.call(m,'setupDurationMinutes');
         const hasProgramState=Object.prototype.hasOwnProperty.call(m,'ncProgramPending');
         const machine={...freshMachine(m.bay,m.type),...m};
+        const suspended=m.suspendedOrder;
+        machine.suspendedOrder=suspended&&suspended.order&&typeof suspended.order.id==='string'
+          ?{...suspended,progress:Math.max(0,Number(suspended.progress)||0),produced:Math.max(0,Number(suspended.produced)||0),
+            deadlineAt:Number.isFinite(suspended.deadlineAt)?suspended.deadlineAt:null,
+            setupDurationMinutes:Math.max(0,Number(suspended.setupDurationMinutes)||0),
+            setupRemainingMinutes:Math.max(0,Number(suspended.setupRemainingMinutes)||0),
+            setupDelayMinutes:Math.max(0,Number(suspended.setupDelayMinutes)||0),
+            setupPartProduced:!!suspended.setupPartProduced,ncProgramPending:!!suspended.ncProgramPending,
+            qualityInspectedOrderId:typeof suspended.qualityInspectedOrderId==='string'?suspended.qualityInspectedOrderId:null}:null;
         machine.ncProgramPending=hasProgramState?!!m.ncProgramPending:false;
         machine.operatorProgramming=m.operatorProgramming&&typeof m.operatorProgramming.key==='string'&&Number.isFinite(m.operatorProgramming.remainingMinutes)?m.operatorProgramming:null;
         machine.qualityReworkQueue=Array.isArray(m.qualityReworkQueue)?m.qualityReworkQueue.filter(task=>task&&typeof task.id==='string'&&Number.isFinite(task.remainingMinutes)):[];
@@ -543,7 +552,7 @@
     const productionProgress=machine.setupPartProduced
       ?machine.progress
       :Math.max(machine.progress,100/quantity);
-    const setupRemaining=machine.setupPartProduced?0:Math.max(0,Number(machine.setupRemainingMinutes)||0);
+    const setupRemaining=Math.max(0,Number(machine.setupRemainingMinutes)||0);
     return programmingETA(order,machine)+setupRemaining+Math.max(0,(100-productionProgress)*order.duration*6/(100*factor));
   };
   const plannedOrderMinutes=(machine,order,factor)=>{
@@ -642,6 +651,25 @@
     return {shifts,plannedMinutes,deadlineChecks,critical,percent:!shifts.length?null:critical?.percent??0};
   }
 
+  function rushInterruptionForecast(machine,rushOrder){
+    const interrupted=job(machine);
+    if(!interrupted||machine.suspendedOrder||!programReady(interrupted)||machine.ncProgramPending||machine.operatorProgramming)return null;
+    const shifts=[1,2].filter(shift=>(machine['operator'+shift]&&assignedEmployee(machine,shift))||(shift===2&&machine.loadingRobot));
+    if(!shifts.length)return null;
+    const factor=shifts.reduce((sum,shift)=>sum+productionFactorForShift(machine,shift),0)/shifts.length;
+    const rush=forecastOrderOnMachine(machine,rushOrder,state.gameMinutes,factor,false);
+    const quantity=Math.max(1,Number(interrupted.qty)||1),duration=Math.max(0,Number(interrupted.duration)||0);
+    const hasProduced=machine.setupPartProduced||machine.produced>0;
+    const remainingProduction=hasProduced
+      ?Math.max(0,(100-Math.max(0,Number(machine.progress)||0))*duration*6/(100*factor))
+      :Math.max(0,(quantity-1)/quantity*duration*6/factor);
+    const resumedSetup=setupMinutesForOrder(interrupted);
+    const finishAt=scheduledWorkCompletionAt(machine,rush.finishAt,resumedSetup+remainingProduction);
+    const deadlineAt=Number.isFinite(machine.deadlineAt)?machine.deadlineAt:state.gameMinutes+Math.max(0,Number(interrupted.deadlineHours)||0)*60;
+    return {interrupted,rushFinishAt:rush.finishAt,finishAt,deadlineAt,bufferMinutes:deadlineAt-finishAt,
+      resumedSetup,hasProduced,shifts,factor};
+  }
+
   const formatMinutes=min=>{
     min=Math.max(0,Math.ceil(min));
     const hours=Math.floor(min/60),mins=min%60;
@@ -691,7 +719,10 @@
     if($('event-window'))return;
     const overlay=document.createElement('section'),card=document.createElement('article');
     const eyebrow=document.createElement('span'),title=document.createElement('h2'),detail=document.createElement('p');
-    const consequence=document.createElement('div'),orderTiming=document.createElement('div'),actions=document.createElement('div'),count=document.createElement('p');
+    const consequence=document.createElement('div'),orderTiming=document.createElement('div'),rushCapacity=document.createElement('section'),actions=document.createElement('div'),count=document.createElement('p');
+    const rushStyle=document.createElement('style');
+    rushStyle.textContent='.rush-machine-actions{display:grid;grid-template-columns:1fr;gap:5px;margin-top:6px}.rush-machine-choice{width:100%;min-height:38px;padding:6px 8px;text-align:left;font-size:10px;line-height:1.25}.rush-machine-choice small{display:block;margin-top:3px;color:#d1dcdf;font-size:9px;font-weight:600;line-height:1.3}.rush-interrupt-choice{background:#644426;border-color:#d3944d}.rush-capacity-rows{max-height:min(38vh,330px)}';
+    document.head.append(rushStyle);
     overlay.id='event-window';overlay.hidden=true;overlay.setAttribute('role','dialog');overlay.setAttribute('aria-modal','true');overlay.setAttribute('aria-labelledby','event-title');
     card.className='event-card';eyebrow.id='event-eyebrow';eyebrow.className='event-eyebrow';
     title.id='event-title';detail.id='event-detail';consequence.id='event-consequence';consequence.className='event-consequence';
@@ -702,8 +733,9 @@
     const processCell=document.createElement('div'),processLabel=document.createElement('small'),processValue=document.createElement('strong');
     processLabel.id='event-order-processing-label';processLabel.textContent='BEARBEITUNG NOCH';processValue.id='event-order-processing';
     processCell.append(processLabel,processValue);orderTiming.append(deadlineCell,processCell);
+    rushCapacity.id='rush-capacity-check';rushCapacity.className='rush-capacity-check';rushCapacity.hidden=true;
     actions.id='event-actions';actions.className='event-actions';count.id='event-count';count.className='event-count';
-    card.append(eyebrow,title,detail,consequence,orderTiming,actions,count);overlay.append(card);document.querySelector('main').append(overlay);
+    card.append(eyebrow,title,detail,consequence,orderTiming,rushCapacity,actions,count);overlay.append(card);document.querySelector('main').append(overlay);
     const selfButton=$('repair-now'),selfDetail=document.createElement('b');selfDetail.id='repair-self-detail';
     selfButton.replaceChildren(document.createTextNode('Selbst reparieren'),selfDetail);
     const technician=document.createElement('button'),technicianDetail=document.createElement('b');
@@ -728,7 +760,7 @@
     $('event-order-deadline-cell').classList.remove('deadline-overdue');
     $('event-order-deadline').textContent=`${order.deadlineHours} Std.`;
     $('event-order-processing').textContent=`Ca. ${formatMinutes(processing)}`;
-    renderRushCapacityCheck(order);
+    renderRushCapacityCheck(order,event);
     const actions=$('event-actions');actions.replaceChildren();
     const addChoice=(label,detail,accepted,risky=false)=>{
       const button=document.createElement('button'),small=document.createElement('small');
@@ -736,29 +768,29 @@
       button.append(document.createTextNode(label));small.textContent=detail;button.append(small);
       button.addEventListener('click',()=>resolveRushOrderEvent(event,accepted));actions.append(button);
     };
-    addChoice('Eilauftrag zusagen',`+${euro(bonus)} Zuschlag · Vertrauen +2`,true);
+    addChoice('Zusage – später einplanen',`+${euro(bonus)} Zuschlag · Vertrauen +2`,true);
     addChoice('Ablehnen','Kein Zeitdruck · Kundenvertrauen −4',false,true);
     $('event-count').textContent=state.eventQueue.length>1
       ?`Ereignis 1 von ${state.eventQueue.length} · Das Spiel ist pausiert.`
       :'Das Spiel ist pausiert, bis du zusagst oder ablehnst.';
   }
-  function renderRushCapacityCheck(order){
+  function renderRushCapacityCheck(order,event){
     const panel=$('rush-capacity-check');panel.hidden=false;
     const heading=document.createElement('strong'),note=document.createElement('p'),rows=document.createElement('div');
     heading.className='rush-capacity-title';heading.textContent='Kapazitätscheck bis zur Eilfrist';
     note.className='rush-capacity-note';
-    note.textContent='Die Schätzung folgt der Maschinenreihenfolge und den besetzten Schichten. 100 % heißt voraussichtlich genau zum Termin fertig; über 100 % heißt verspätet, wenn keine Störungen dazukommen.';
+    note.textContent='Wähle direkt eine Maschine. Die Fristprognose rechnet mit den besetzten Schichten und ohne neue Störungen; beim Unterbrechen ist die neue Rüstzeit des laufenden Auftrags bereits eingerechnet.';
     rows.className='rush-capacity-rows';
     const machines=state.machines.filter(machine=>compatible(machine,order));
     if(!machines.length){
       const empty=document.createElement('p');empty.className='rush-capacity-empty';empty.textContent=`Keine passende ${order.kind}-Maschine vorhanden.`;rows.append(empty);
     }
     machines.forEach(machine=>{
-      const current=plannedMachineLoad(machine),projected=plannedMachineLoad(machine,order);
+      const current=plannedMachineLoad(machine),projected=plannedMachineLoad(machine,order),interruption=rushInterruptionForecast(machine,order);
       const rushCheck=projected.deadlineChecks.find(check=>check.orderId===order.id);
       const bufferMinutes=rushCheck?.bufferMinutes??-Infinity;
-      const row=document.createElement('div'),top=document.createElement('div'),name=document.createElement('strong'),status=document.createElement('strong'),load=document.createElement('p'),window=document.createElement('p');
-      const reason=machineOrderBlockReason(machine,order);
+      const row=document.createElement('div'),top=document.createElement('div'),name=document.createElement('strong'),status=document.createElement('strong'),load=document.createElement('p'),window=document.createElement('p'),choices=document.createElement('div');
+      const reason=rushAssignmentBlockReason(machine,order,false);
       row.className='rush-capacity-row';
       const blocked=!!reason||!projected.shifts.length;
       const tight=bufferMinutes<0;
@@ -777,11 +809,34 @@
       window.textContent=rushCheck
         ?`${order.part}: Fertigstellung vsl. in ${formatEstimateMinutes(rushCheck.leadMinutes)} · ${bufferMinutes>=0?'Puffer':'zu spät um'} ${formatEstimateMinutes(Math.abs(bufferMinutes))}`
         :'Eilauftrag konnte zeitlich nicht eingeplant werden.';
-      row.append(top,load,window);rows.append(row);
+      choices.className='rush-machine-actions';
+      const normalButton=document.createElement('button'),normalDetail=document.createElement('small');
+      normalButton.type='button';normalButton.className='action rush-machine-choice';
+      normalButton.append(document.createTextNode(job(machine)?'Nach laufendem Auftrag einplanen':'Direkt auf dieser Maschine starten'));
+      const materialShortage=Math.max(0,materialSystem.requiredKg(order)-materialSystem.available(state,order));
+      normalDetail.textContent=reason||(!projected.shifts.length?'Keine besetzte Schicht':`${euro(Number(order.rushBonus)||0)} Zuschlag · ${rushCheck?`${rushCheck.bufferMinutes>=0?'Puffer':'vsl. zu spät um'} ${formatEstimateMinutes(Math.abs(rushCheck.bufferMinutes))}`:'Frist nicht berechenbar'}`);
+      normalButton.append(normalDetail);normalButton.disabled=!!reason||!projected.shifts.length||materialShortage>1e-9;
+      normalButton.addEventListener('click',()=>resolveRushOrderEvent(event,true,machine.bay,false));
+      choices.append(normalButton);
+      if(job(machine)){
+        const interruptButton=document.createElement('button'),interruptDetail=document.createElement('small');
+        const interruptReason=rushAssignmentBlockReason(machine,order,true);
+        interruptButton.type='button';interruptButton.className='action rush-machine-choice rush-interrupt-choice';
+        interruptButton.append(document.createTextNode('Jetzt starten & laufenden Auftrag unterbrechen'));
+        if(interruption){
+          const interruptedLate=interruption.bufferMinutes<0;
+          interruptDetail.textContent=`Danach ${interruption.interrupted.part} mit neuer Rüstzeit ${formatMinutes(interruption.resumedSetup)} fortsetzen · `+
+            `${interruptedLate?'vsl. '+formatEstimateMinutes(-interruption.bufferMinutes)+' zu spät':'Fristpuffer '+formatEstimateMinutes(interruption.bufferMinutes)}`;
+        }else interruptDetail.textContent=interruptReason||'Frist des laufenden Auftrags nicht berechenbar';
+        interruptButton.append(interruptDetail);
+        interruptButton.disabled=!!interruptReason||!interruption||materialShortage>1e-9;
+        interruptButton.addEventListener('click',()=>resolveRushOrderEvent(event,true,machine.bay,true));
+        choices.append(interruptButton);
+      }
+      row.append(top,load,window,choices);rows.append(row);
     });
     panel.replaceChildren(heading,note,rows);
   }
-
   function addQualityChoice(label,detail,callback,cost=0,risky=false){
     const button=document.createElement('button'),small=document.createElement('small');
     button.type='button';button.className='action event-choice quality-choice'+(risky?' event-risk':'');
@@ -937,10 +992,16 @@
   function resolveEventWithoutAction(){
     state.eventQueue.shift();state.paused=state.eventQueue.length>0;save();render();
   }
-  function resolveRushOrderEvent(event,accepted){
+  function resolveRushOrderEvent(event,accepted,targetBay=null,interrupt=false){
     if(!state.eventQueue.some(item=>item.id===event.id))return false;
     let offer=event.order;
     if(accepted){
+      if(Number.isInteger(targetBay)){
+        const machine=machineAt(targetBay),reason=machine&&rushAssignmentBlockReason(machine,offer,interrupt);
+        if(!machine||reason||!plannedMachineLoad(machine).shifts.length){
+          say(reason||'Für diese Maschine ist keine besetzte Schicht geplant.');return false;
+        }
+      }
       offer={...offer,acceptedRushAt:state.gameMinutes,
         deadlineAt:state.gameMinutes+offer.deadlineHours*60};
       offer.expiresAt=Math.max(offer.expiresAt,offer.deadlineAt+24*60);
@@ -957,6 +1018,10 @@
     state.paused=state.eventQueue.length>0;
     save();render();
     if(accepted){
+      if(Number.isInteger(targetBay)){
+        startOrder(offer.id,targetBay,{rushEvent:true,interrupt});
+        return true;
+      }
       if(state.eventQueue.length)return true;
       const shortage=Math.max(0,materialSystem.requiredKg(offer)-materialSystem.available(state,offer));
       if(shortage>1e-9){
@@ -1066,10 +1131,27 @@
         order:{...order},customer:order.customer,bay:machine.bay,defectParts:quality.defectParts,riskPct:quality.riskPct});
     }
     state.completed++;
+    const interrupted=machine.suspendedOrder&&order?.isRushOrder?machine.suspendedOrder:null;
     machine.activeId=null;machine.activeOrder=null;machine.activeOrderSource=null;machine.progress=0;machine.produced=0;machine.deadlineAt=null;
     machine.setupDurationMinutes=0;machine.setupRemainingMinutes=0;machine.setupDelayMinutes=0;machine.setupPartProduced=false;
     machine.ncProgramPending=false;machine.qualityInspectedOrderId=null;
-    const next=machine.qualityReworkQueue.length?null:machine.orderQueue.shift();
+    let resumedSetup=null,resumed=false;
+    if(interrupted){
+      const saved=interrupted,restoredOrder=saved.order,alreadyProduced=!!saved.setupPartProduced||Number(saved.produced)>0;
+      machine.suspendedOrder=null;machine.activeId=restoredOrder.id;machine.activeOrder=restoredOrder;
+      machine.activeOrderSource=saved.source||'market';machine.deadlineAt=saved.deadlineAt;
+      machine.progress=alreadyProduced?Math.max(0,Number(saved.progress)||0):0;
+      machine.produced=Math.max(0,Number(saved.produced)||0);machine.setupPartProduced=alreadyProduced;
+      machine.qualityInspectedOrderId=saved.qualityInspectedOrderId||null;
+      machine.ncProgramPending=!programReady(restoredOrder)||!!saved.ncProgramPending;
+      if(!machine.ncProgramPending){
+        resumedSetup=beginMachineSetup(machine,restoredOrder);
+        machine.progress=alreadyProduced?Math.max(0,Number(saved.progress)||0):0;
+        machine.produced=Math.max(0,Number(saved.produced)||0);machine.setupPartProduced=alreadyProduced;
+      }else scheduleActiveOrderProgramming(machine,restoredOrder);
+      reassessActiveProgrammingRoutes();resumed=true;
+    }
+    const next=resumed||machine.qualityReworkQueue.length?null:machine.orderQueue.shift();
     let nextSetup=null;
     if(next){
       machine.activeId=next.order.id;machine.activeOrder=next.order;machine.activeOrderSource='market';machine.deadlineAt=next.deadlineAt;
@@ -1078,7 +1160,7 @@
       reassessActiveProgrammingRoutes();
     }
     save();renderOrders();renderBusiness();
-    say(`${catalog[machine.type].name}: ${order.part} fertig · ${euro(payout)}${late?' (20 % Fristabzug)':''}${quality?.defectParts?' (10 % Qualitätsabzug)':''}${next?` · Nächster Auftrag gestartet${nextSetup?` · Rüstzeit ${formatMinutes(nextSetup.totalMinutes)}`:''}`:''}`);
+    say(`${catalog[machine.type].name}: ${order.part} fertig · ${euro(payout)}${late?' (20 % Fristabzug)':''}${quality?.defectParts?' (10 % Qualitätsabzug)':''}${resumed?` · ${machine.activeOrder.part} fortgesetzt · neue Rüstzeit ${formatMinutes(resumedSetup?.totalMinutes||0)}`:''}${next?` · Nächster Auftrag gestartet${nextSetup?` · Rüstzeit ${formatMinutes(nextSetup.totalMinutes)}`:''}`:''}`);
     return true;
   }
   function startNextQueuedOrder(machine){
@@ -1388,6 +1470,24 @@
     if(machine.maintenanceRemainingMinutes>0)return 'Wartung läuft';
     if(machine.orderQueue.length>=MAX_QUEUED_ORDERS)return 'Planung voll (3/3)';
     if(machine.maintenance<8||machine.tool<1)return 'Wartung oder Werkzeug erneuern';
+    return '';
+  }
+  function rushAssignmentBlockReason(machine,order,interrupt=false){
+    if(!compatible(machine,order))return `Benötigt ${order.kind}`;
+    const shortage=Math.max(0,materialSystem.requiredKg(order)-materialSystem.available(state,order));
+    if(shortage>1e-9)return `Material fehlt: ${Math.ceil(shortage)} kg ${order.material}`;
+    if(machine.maintenanceRemainingMinutes>0)return 'Wartung läuft';
+    if(machine.maintenance<8||machine.tool<1)return 'Wartung oder Werkzeug erneuern';
+    const fault=breakdownSystem.getRecord(state,machine.bay);
+    if(fault?.fault&&(fault.status==='major_failure'||fault.status==='repairing'||
+      (fault.status==='warning'&&!fault.riskyContinue&&!fault.scheduledRepair)))return 'Maschinenstörung';
+    if(interrupt){
+      if(!job(machine))return 'Kein laufender Auftrag';
+      if(machine.suspendedOrder)return 'Ein unterbrochener Auftrag wartet bereits';
+      if(job(machine).isRushOrder)return 'Eilauftrag läuft bereits';
+      if(!programReady(job(machine))||machine.ncProgramPending||machine.operatorProgramming)return 'Programmierung noch nicht abgeschlossen';
+      if(machine.qualityReworkQueue.length)return 'Nacharbeit zuerst abschließen';
+    }else if(machine.orderQueue.length>=MAX_QUEUED_ORDERS)return 'Planung voll (3/3)';
     return '';
   }
   function openOrderMachineChooser(id){
@@ -2040,7 +2140,8 @@
   function startOrder(id,bay,options={}){
     orderMarketSystem.tick(state,state.gameMinutes);
     const o=orderMarketSystem.getAvailable(state).find(order=>order.id===id),m=state.machines.find(machine=>machine.bay===Number(bay));
-    if(!o||!m||m.orderQueue.length>=MAX_QUEUED_ORDERS||state.machines.some(x=>x.activeId===id||x.orderQueue.some(entry=>entry.order.id===id))){if(!options.automatic)say('Dieses Angebot ist nicht mehr verfügbar oder die Auftragsplanung ist voll.');return false;}
+    if(!o||!m||(!options.interrupt&&m.orderQueue.length>=MAX_QUEUED_ORDERS)||state.machines.some(x=>x.activeId===id||x.orderQueue.some(entry=>entry.order.id===id))){if(!options.automatic)say('Dieses Angebot ist nicht mehr verfügbar oder die Auftragsplanung ist voll.');return false;}
+    if(options.interrupt&&(!job(m)||m.suspendedOrder)){if(!options.automatic)say('Der laufende Auftrag kann auf dieser Maschine nicht unterbrochen werden.');return false;}
     if(!compatible(m,o)){if(!options.automatic)say(`${o.part} benötigt ${o.kind}. ${catalog[m.type].name} ist für ${catalog[m.type].kind} ausgelegt.`);return false;}
     const requiredMaterial=materialSystem.requiredKg(o),availableMaterial=materialSystem.available(state,o);
     if(availableMaterial+1e-9<requiredMaterial){
@@ -2052,8 +2153,13 @@
     const accepted=orderMarketSystem.accept(state,id);
     if(!accepted){restoreOrderMaterial(materialResult.consumed);if(!options.automatic)say('Das Angebot ist inzwischen abgelaufen.');return false;}
     orderMarketSystem.tick(state,state.gameMinutes);
+    const interrupted=options.interrupt?{
+      order:m.activeOrder,source:m.activeOrderSource,progress:m.progress,produced:m.produced,deadlineAt:m.deadlineAt,
+      setupDurationMinutes:m.setupDurationMinutes,setupRemainingMinutes:m.setupRemainingMinutes,setupDelayMinutes:m.setupDelayMinutes,
+      setupPartProduced:m.setupPartProduced,ncProgramPending:m.ncProgramPending,qualityInspectedOrderId:m.qualityInspectedOrderId
+    }:null;
     if(!options.automatic){closeOrderMachineChooser();state.selectedBay=m.bay;}
-    if(job(m)||m.qualityReworkQueue.length){
+    if((job(m)&&!options.interrupt)||(!options.interrupt&&m.qualityReworkQueue.length)){
       m.orderQueue.push({order:accepted,material:materialResult.consumed,
         deadlineAt:Number.isFinite(accepted.deadlineAt)?accepted.deadlineAt:state.gameMinutes+accepted.deadlineHours*60});
       if(state.programmer.hired){enqueueNcProgram(accepted);reassessActiveProgrammingRoutes();}
@@ -2063,6 +2169,7 @@
       if(!options.automatic)say(`${accepted.part} für Platz ${m.bay} vorgemerkt (${m.orderQueue.length}/${MAX_QUEUED_ORDERS}). Material wurde reserviert.`);
       return true;
     }
+    if(interrupted)m.suspendedOrder=interrupted;
     m.activeId=accepted.id;m.activeOrder=accepted;m.activeOrderSource='market';m.progress=0;m.produced=0;
     m.ncProgramPending=!programReady(accepted);
     const setupPlan=programReady(accepted)?beginMachineSetup(m,accepted):null;
@@ -2071,7 +2178,9 @@
     if(state.warehouseOrderSnapshot?.id===accepted.id)state.warehouseOrderSnapshot=null;
     if(!options.automatic)state.selected=null;
     save();renderOrders();renderBusiness();render();
-    if(!options.automatic){closeDrawer();showMachine(m.bay);if(m.ncProgramPending)tab('machine');say(m.ncProgramPending
+    if(!options.automatic){closeDrawer();showMachine(m.bay);if(m.ncProgramPending)tab('machine');say(options.interrupt
+      ?`Eilauftrag ${accepted.part} auf Platz ${m.bay} gestartet. ${interrupted.order.part} wird danach mit neuer Rüstzeit fortgesetzt.`
+      :m.ncProgramPending
       ?`${accepted.part} auf Platz ${m.bay} angenommen. Die Programmierung wurde automatisch zugewiesen.`
       :`${accepted.part} auf Platz ${m.bay} angenommen. Rüstzeit ${formatMinutes(setupPlan.totalMinutes)}${setupPlan.delayMinutes?` · Einrichtungsproblem verlängert um ${formatMinutes(setupPlan.delayMinutes)}`:''}.`);}
     return true;
@@ -2081,7 +2190,10 @@
     if(state.eventQueue.length){state.nextRushOrderAt=state.gameMinutes+6*60;save();return false;}
     const eligibleMachines=state.machines.filter(machine=>{
       const kind=catalog[machine.type]?.kind;
-      if(!kind||machineOrderBlockReason(machine,{kind}))return false;
+      const canInterrupt=!!job(machine)&&!machine.suspendedOrder&&!job(machine).isRushOrder&&
+        !machine.operatorProgramming&&!machine.ncProgramPending&&programReady(job(machine))&&!machine.qualityReworkQueue.length;
+      if(!kind||machine.maintenanceRemainingMinutes>0||machine.maintenance<8||machine.tool<1||
+        (machine.orderQueue.length>=MAX_QUEUED_ORDERS&&!canInterrupt))return false;
       const fault=breakdownSystem.getRecord(state,machine.bay);
       return !(fault?.fault&&(fault.status==='major_failure'||fault.status==='repairing'||
         (fault.status==='warning'&&!fault.riskyContinue&&!fault.scheduledRepair)));
@@ -2339,17 +2451,20 @@
         const employee=assignedEmployee(m,shift);
         const factor=productionFactor(m);
         let productionStep=step;
-        if(!m.setupPartProduced&&m.setupRemainingMinutes>0){
+        if(m.setupRemainingMinutes>0){
           const setupStep=Math.min(step,m.setupRemainingMinutes);
           m.setupRemainingMinutes=Math.max(0,m.setupRemainingMinutes-setupStep);
           productionStep=Math.max(0,productionStep-setupStep);
           if(m.setupRemainingMinutes<=1e-8){
-            m.setupRemainingMinutes=0;m.setupPartProduced=true;
-            const firstPartProgress=100/Math.max(1,o.qty);
-            m.progress=Math.max(m.progress,firstPartProgress);
-            m.produced=Math.min(o.qty,Math.max(1,Math.floor(o.qty*m.progress/100)));
-            m.maintenance=Math.max(0,m.maintenance-firstPartProgress*.12);
-            m.tool=Math.max(0,m.tool-firstPartProgress*.18*recruitmentSystem.toolWearMultiplier(employee));
+            m.setupRemainingMinutes=0;
+            if(!m.setupPartProduced){
+              m.setupPartProduced=true;
+              const firstPartProgress=100/Math.max(1,o.qty);
+              m.progress=Math.max(m.progress,firstPartProgress);
+              m.produced=Math.min(o.qty,Math.max(1,Math.floor(o.qty*m.progress/100)));
+              m.maintenance=Math.max(0,m.maintenance-firstPartProgress*.12);
+              m.tool=Math.max(0,m.tool-firstPartProgress*.18*recruitmentSystem.toolWearMultiplier(employee));
+            }
           }
         }
         if(productionStep>1e-8){
