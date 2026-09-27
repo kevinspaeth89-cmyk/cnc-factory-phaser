@@ -347,12 +347,19 @@
     if($('event-window'))return;
     const overlay=document.createElement('section'),card=document.createElement('article');
     const eyebrow=document.createElement('span'),title=document.createElement('h2'),detail=document.createElement('p');
-    const consequence=document.createElement('div'),actions=document.createElement('div'),count=document.createElement('p');
+    const consequence=document.createElement('div'),orderTiming=document.createElement('div'),actions=document.createElement('div'),count=document.createElement('p');
     overlay.id='event-window';overlay.hidden=true;overlay.setAttribute('role','dialog');overlay.setAttribute('aria-modal','true');overlay.setAttribute('aria-labelledby','event-title');
     card.className='event-card';eyebrow.id='event-eyebrow';eyebrow.className='event-eyebrow';
     title.id='event-title';detail.id='event-detail';consequence.id='event-consequence';consequence.className='event-consequence';
+    orderTiming.id='event-order-timing';orderTiming.className='event-order-timing';
+    const deadlineCell=document.createElement('div'),deadlineLabel=document.createElement('small'),deadlineValue=document.createElement('strong');
+    deadlineCell.id='event-order-deadline-cell';deadlineLabel.textContent='AUFTRAGSFRIST';deadlineValue.id='event-order-deadline';
+    deadlineCell.append(deadlineLabel,deadlineValue);
+    const processCell=document.createElement('div'),processLabel=document.createElement('small'),processValue=document.createElement('strong');
+    processLabel.textContent='BEARBEITUNG NOCH';processValue.id='event-order-processing';
+    processCell.append(processLabel,processValue);orderTiming.append(deadlineCell,processCell);
     actions.id='event-actions';actions.className='event-actions';count.id='event-count';count.className='event-count';
-    card.append(eyebrow,title,detail,consequence,actions,count);overlay.append(card);document.querySelector('main').append(overlay);
+    card.append(eyebrow,title,detail,consequence,orderTiming,actions,count);overlay.append(card);document.querySelector('main').append(overlay);
     const selfButton=$('repair-now'),selfDetail=document.createElement('b');selfDetail.id='repair-self-detail';
     selfButton.replaceChildren(document.createTextNode('Selbst reparieren'),selfDetail);
     const technician=document.createElement('button'),technicianDetail=document.createElement('b');
@@ -377,11 +384,19 @@
       ?'Die Maschine ist ohne vorherige Warnung ausgefallen. Die Produktion auf diesem Platz steht.'
       :warning?'Die Maschine meldet eine Störung. Entscheide jetzt, wie der Betrieb weitergeht.':'Ein schwerer Maschinenschaden hat die Produktion gestoppt.';
     const effects=[];
-    if(machine&&job(machine))effects.push(`Laufender Auftrag: ${job(machine).part} · ${machine.produced}/${job(machine).qty} Teile`);
+    const activeOrder=machine&&job(machine);
+    if(activeOrder)effects.push(`Laufender Auftrag: ${activeOrder.part} · ${machine.produced}/${activeOrder.qty} Teile`);
     if(event.scrapParts)effects.push(`${event.scrapParts} Teil${event.scrapParts===1?'':'e'} Ausschuss`);
     if(event.cost)effects.push(`Schadenskosten bereits gebucht: ${euro(event.cost)}`);
     if(event.downtime)effects.push(`Grundausfallzeit: ${formatMinutes(event.downtime)}`);
     $('event-consequence').textContent=effects.length?effects.join(' · '):'Die Maschine bleibt bis zur Entscheidung angehalten.';
+    const timing=$('event-order-timing'),deadlineLeft=machine&&Number.isFinite(machine.deadlineAt)?machine.deadlineAt-state.gameMinutes:null;
+    timing.hidden=!activeOrder;
+    if(activeOrder){
+      $('event-order-deadline-cell').classList.toggle('deadline-overdue',deadlineLeft!==null&&deadlineLeft<0);
+      $('event-order-deadline').textContent=deadlineLeft===null?'Keine Frist':deadlineLeft<0?`${formatMinutes(-deadlineLeft)} überfällig`:`Noch ${formatMinutes(deadlineLeft)}`;
+      $('event-order-processing').textContent=`Noch ${formatMinutes(remainingMinutes(machine,activeOrder))}`;
+    }
     const actions=$('event-actions');actions.replaceChildren();
     const addChoice=(label,detailText,action,cost=0,risky=false)=>{
       const button=document.createElement('button'),small=document.createElement('small');
