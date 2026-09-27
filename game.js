@@ -26,6 +26,8 @@
   const ORDER_OFFICE_SETUP_COST = 12000;
   const ORDER_OFFICE_HOURLY_WAGE = 36;
   const ORDER_OFFICE_REVIEW_MINUTES = 30;
+  const ORDER_OFFICE_MIN_DEADLINE_BUFFER_MINUTES = 30;
+  const ORDER_OFFICE_DEADLINE_BUFFER_RATIO = 0.1;
   const PROGRAMMER_HIRING_FEE = 4500;
   const PROGRAMMER_HOURLY_WAGE = 42;
   const economySystem = globalThis.CNCModules && globalThis.CNCModules.economy;
@@ -1691,7 +1693,7 @@
     if(!panel){
       panel=document.createElement('section');panel.id='order-office-panel';panel.className='office-panel';
       const title=document.createElement('h3');title.textContent='Auftragsbüro';
-      const intro=document.createElement('p');intro.className='hint';intro.textContent='Ein Disponent prüft passende Aufträge und Materialpreise. Die festen Grenzen bestimmst du.';
+      const intro=document.createElement('p');intro.className='hint';intro.textContent='Der Disponent prüft Preise und Maschinenauslastung. Er nimmt nur Aufträge mit passender Schicht und mindestens 30 Minuten sowie 10 % Fristpuffer an. Deine Einkaufs- und Auftragsgrenzen gelten weiterhin.';
       const status=document.createElement('p');status.id='order-office-status';status.className='hint';
       const hire=document.createElement('button');hire.id='hire-order-office';hire.type='button';hire.className='action full-action';
       hire.addEventListener('click',hireOrderOffice);
@@ -2235,8 +2237,12 @@
         return compatible(machine,order)&&machine.maintenanceRemainingMinutes<=0&&machine.maintenance>=8&&machine.tool>=1&&!faultBlocks&&
         !machine.qualityReworkQueue.length&&machine.orderQueue.length<MAX_QUEUED_ORDERS&&(!job(machine)||machine.orderQueue.length<office.queueLimit);
       })
-        .sort((a,b)=>Number(!!job(a))-Number(!!job(b))||a.orderQueue.length-b.orderQueue.length||a.bay-b.bay);
-      const machine=candidates[0];if(!machine)continue;
+        .map(machine=>({machine,projection:plannedMachineLoad(machine,order)}))
+        .filter(({projection})=>projection.shifts.length>0&&projection.deadlineChecks.length>0&&
+          projection.deadlineChecks.every(check=>check.bufferMinutes>=Math.max(ORDER_OFFICE_MIN_DEADLINE_BUFFER_MINUTES,check.leadMinutes*ORDER_OFFICE_DEADLINE_BUFFER_RATIO)))
+        .sort((a,b)=>a.projection.percent-b.projection.percent||
+          (b.projection.critical?.bufferMinutes||0)-(a.projection.critical?.bufferMinutes||0)||a.machine.bay-b.machine.bay);
+      const machine=candidates[0]?.machine;if(!machine)continue;
       const shortage=Math.max(0,required-materialSystem.available(state,order));
       if(shortage>1e-9){
         if(!office.autoPurchase||state.material+shortage>state.capacity+1e-9)continue;
