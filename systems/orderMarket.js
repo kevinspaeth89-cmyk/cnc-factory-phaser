@@ -502,7 +502,7 @@
     const profile = profiles.find(item => item.key === order.customerProfile) ||
       profiles.find(item => item.customer === customer);
     const chance = clamp(finite(order.followUpChance, profile ? profile.followUpChance : 0.18) +
-      ((reputation[customer] ?? 50) - 50) * .004, 0, 1);
+      ((ensureReputation(state)[customer] ?? 50) - 50) * .004, 0, 1);
     if (random(market) >= chance) {
       return { processed: true, followUpScheduled: false, followUpOrder: null };
     }

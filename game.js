@@ -324,6 +324,38 @@
     const base=programmingQuality.programmingMinutes(order,state.programmer?.hired?'programmer':'operator');
     return elapsed+base;
   }
+  function scheduledProgrammingETA(workMinutes,canWorkAt){
+    let remaining=Math.max(0,Number(workMinutes)||0);
+    if(remaining<=0)return 0;
+    const start=Math.floor(state.gameMinutes),limit=start+366*24*60;
+    for(let minute=start;minute<limit;minute++){
+      if(canWorkAt(minute)){
+        remaining--;
+        if(remaining<=1e-8)return minute+1-start;
+      }
+    }
+    return Infinity;
+  }
+  function programmerCompletionETA(order){
+    const key=programKey(order);let workload=0,found=false;
+    for(const task of [state.programmer?.active,...(state.programmer?.queue||[])].filter(Boolean)){
+      workload+=Math.max(0,Number(task.remainingMinutes)||0);
+      if(task.key===key){found=true;break;}
+    }
+    if(!found)workload+=programmingQuality.programmingMinutes(order,'programmer');
+    return scheduledProgrammingETA(workload,minute=>shiftAt(minute)===1);
+  }
+  function operatorCompletionETA(machine,order){
+    const key=programKey(order),existing=machine.operatorProgramming;
+    const workload=existing?.key===key
+      ?Math.max(0,Number(existing.remainingMinutes)||0)
+      :programmingQuality.programmingMinutes(order,'operator');
+    if(![1,2].some(shift=>machine['operator'+shift]&&assignedEmployee(machine,shift)))return Infinity;
+    return scheduledProgrammingETA(workload,minute=>{
+      const shift=shiftAt(minute);
+      return !!shift&&!!machine['operator'+shift]&&!!assignedEmployee(machine,shift)&&breakdownSystem.canContinueProduction(state,machine.bay);
+    });
+  }
   function enqueueNcProgram(order){
     if(!state.programmer?.hired||!order||programReady(order))return false;
     const key=programKey(order);
@@ -332,16 +364,56 @@
     state.programmer.queue.push({key,part:order.part,kind:order.kind,orderId:order.id,totalMinutes,remainingMinutes:totalMinutes});
     return true;
   }
+  function cancelProgrammerTask(key){
+    if(state.programmer?.active?.key===key)state.programmer.active=null;
+    if(state.programmer?.queue)state.programmer.queue=state.programmer.queue.filter(task=>task.key!==key);
+  }
+  function beginOperatorProgramming(machine,order){
+    if(!machine||!order||programReady(order)||machine.operatorProgramming)return false;
+    const key=programKey(order);
+    if(!key)return false;
+    const totalMinutes=programmingQuality.programmingMinutes(order,'operator');
+    machine.operatorProgramming={key,part:order.part,kind:order.kind,orderId:order.id,totalMinutes,remainingMinutes:totalMinutes};
+    machine.ncProgramPending=true;
+    save();
+    return true;
+  }
+  function scheduleActiveOrderProgramming(machine,order){
+    if(!machine||!order||programReady(order)||machine.operatorProgramming)return false;
+    const key=programKey(order);
+    if(!key)return false;
+    if(state.programmer?.active?.key===key)return false;
+    const programmerHasTask=!!programTaskFor(key);
+    const programmerETA=state.programmer?.hired?programmerCompletionETA(order):Infinity;
+    const operatorETA=operatorCompletionETA(machine,order);
+    if(!state.programmer?.hired||operatorETA<programmerETA){
+      if(programmerHasTask)cancelProgrammerTask(key);
+      return beginOperatorProgramming(machine,order);
+    }
+    return enqueueNcProgram(order);
+  }
+  function reassessActiveProgrammingRoutes(){
+    let changed=false;
+    for(const machine of state.machines){
+      const active=job(machine);
+      if(active&&!programReady(active)&&!machine.operatorProgramming)
+        changed=scheduleActiveOrderProgramming(machine,active)||changed;
+    }
+    return changed;
+  }
   function schedulePlannedPrograms(){
     let changed=false;
     for(const machine of state.machines){
       const active=job(machine);
-      if(active&&!programReady(active))changed=enqueueNcProgram(active)||changed;
-      for(const entry of machine.orderQueue||[])if(!programReady(entry.order))changed=enqueueNcProgram(entry.order)||changed;
+      if(active&&!programReady(active))changed=scheduleActiveOrderProgramming(machine,active)||changed;
     }
+    if(state.programmer?.hired)for(const machine of state.machines)
+      for(const entry of machine.orderQueue||[])if(!programReady(entry.order))changed=enqueueNcProgram(entry.order)||changed;
+    changed=reassessActiveProgrammingRoutes()||changed;
     if(changed)save();
     return changed;
   }
+
   function completeNcProgram(task,method){
     if(!task?.key)return;
     state.ncPrograms[task.key]={part:task.part,kind:task.kind,completedAt:state.gameMinutes,method};
@@ -360,18 +432,6 @@
     save();renderBusiness();render();
     say(`NC-Programmierer eingestellt · ${euro(PROGRAMMER_HOURLY_WAGE)} je Frühschichtstunde. Eingeplante Neuteile kommen in die Programmierwarteschlange.`);
   }
-  function startOperatorProgramming(){
-    const machine=selectedMachine(),order=job(machine),shift=shiftAt(state.gameMinutes),employee=machine&&shift?assignedEmployee(machine,shift):null;
-    if(!machine||!order||programReady(order)||machine.operatorProgramming)return;
-    const key=programKey(order),existing=programTaskFor(key);
-    if(existing){say(`Der NC-Programmierer bearbeitet ${order.part} bereits (${formatMinutes(programmingETA(order,machine))} Rest).`);return;}
-    if(!employee){say(`Für die Bediener-Programmierung braucht ${catalog[machine.type].name} jetzt einen zugewiesenen Bediener in der passenden Schicht.`);return;}
-    const totalMinutes=programmingQuality.programmingMinutes(order,'operator');
-    machine.operatorProgramming={key,part:order.part,kind:order.kind,orderId:order.id,totalMinutes,remainingMinutes:totalMinutes};
-    machine.ncProgramPending=true;
-    save();render();
-    say(`${employee.name} programmiert ${order.part} an Platz ${machine.bay}. Die Maschine pausiert für etwa ${formatMinutes(totalMinutes)}.`);
-  }
   function tickProgrammer(step,shift){
     if(!state.programmer?.hired||shift!==1)return;
     if(!state.programmer.active)state.programmer.active=state.programmer.queue.shift()||null;
@@ -381,6 +441,7 @@
     if(task.remainingMinutes>1e-8)return;
     completeNcProgram(task,'programmer');
     state.programmer.active=null;
+    reassessActiveProgrammingRoutes();
     say(`NC-Programm für ${task.part} fertig. Eingeplante passende Aufträge können jetzt starten.`);
     save();
   }
@@ -401,14 +462,15 @@
     panel.hidden=!needsProgram;
     if(!needsProgram)return;
     const task=programTaskFor(programKey(order)),shift=shiftAt(state.gameMinutes),employee=shift?assignedEmployee(machine,shift):null;
+    const operatorAvailable=[1,2].some(assignedShift=>machine['operator'+assignedShift]&&assignedEmployee(machine,assignedShift));
     const eta=programmingETA(order,machine),tolerance=programmingQuality.toleranceClass(order);
     $('nc-program-info').textContent=machine.operatorProgramming
-      ?`Bediener-Programmierung läuft · ${formatMinutes(machine.operatorProgramming.remainingMinutes)} verbleibend. Die Maschine produziert währenddessen nicht.`
+      ?`${employee?'Bediener-Programmierung läuft':'Wartet auf zugewiesenen Bediener'} · ${formatMinutes(machine.operatorProgramming.remainingMinutes)} verbleibend. Während der Programmierung steht diese Maschine.`
       :task?`Der Programmierer bereitet ${order.part} vor · ca. ${formatMinutes(eta)} bis zur Fertigstellung. ${tolerance} Toleranz.`
-      :`Neuteil ${order.part} braucht erst ein CNC-Programm. Aufwand: ${formatMinutes(eta)} · ${tolerance} Toleranz. Ein zugewiesener Bediener kann jetzt an der Maschine programmieren.`;
-    button.textContent=machine.operatorProgramming?'Bediener programmiert gerade':task?'Programmierer ist eingeplant':`Mit Bediener programmieren · ${formatMinutes(programmingQuality.programmingMinutes(order,'operator'))}`;
-    button.disabled=!!machine.operatorProgramming||!!task||!employee||machine.maintenanceRemainingMinutes>0||state.paused;
+      :`Neuteil ${order.part} braucht ein CNC-Programm. Es wird automatisch ${state.programmer.hired&&operatorAvailable?'dem Programmierer oder bei Überlast dem Bediener':state.programmer.hired?'dem Programmierer':'vom Bediener'} zugewiesen. ${tolerance} Toleranz.`;
+    button.hidden=true;button.disabled=true;
   }
+
   function qualityRiskFor(machine,order){
     const shifts=[1,2].filter(shift=>machine['operator'+shift]);
     const employees=shifts.map(shift=>assignedEmployee(machine,shift)).filter(Boolean);
@@ -946,7 +1008,8 @@
     if(next){
       machine.activeId=next.order.id;machine.activeOrder=next.order;machine.activeOrderSource='market';machine.deadlineAt=next.deadlineAt;
       machine.progress=0;machine.produced=0;machine.ncProgramPending=!programReady(next.order);
-      if(programReady(next.order))nextSetup=beginMachineSetup(machine,next.order);else enqueueNcProgram(next.order);
+      if(programReady(next.order))nextSetup=beginMachineSetup(machine,next.order);else scheduleActiveOrderProgramming(machine,next.order);
+      reassessActiveProgrammingRoutes();
     }
     save();renderOrders();renderBusiness();
     say(`${catalog[machine.type].name}: ${order.part} fertig · ${euro(payout)}${late?' (20 % Fristabzug)':''}${quality?.defectParts?' (10 % Qualitätsabzug)':''}${next?` · Nächster Auftrag gestartet${nextSetup?` · Rüstzeit ${formatMinutes(nextSetup.totalMinutes)}`:''}`:''}`);
@@ -957,7 +1020,8 @@
     const next=machine.orderQueue.shift();
     machine.activeId=next.order.id;machine.activeOrder=next.order;machine.activeOrderSource='market';machine.deadlineAt=next.deadlineAt;
     machine.progress=0;machine.produced=0;machine.qualityInspectedOrderId=null;machine.ncProgramPending=!programReady(next.order);
-    if(programReady(next.order))beginMachineSetup(machine,next.order);else enqueueNcProgram(next.order);
+    if(programReady(next.order))beginMachineSetup(machine,next.order);else scheduleActiveOrderProgramming(machine,next.order);
+    reassessActiveProgrammingRoutes();
     save();renderOrders();return true;
   }
   function processQualityRework(machine,step,shift){
@@ -1221,7 +1285,7 @@
         const task=programTaskFor(programKey(o));
         badge.textContent=task
           ?`NEUTEIL · PROGRAMMIERUNG EINGEPLANT · ca. ${formatMinutes(programmingETA(o))}`
-          :state.programmer.hired?'NEUTEIL · NC-PROGRAMM WIRD BENÖTIGT':'NEUTEIL · NC-PROGRAMM FEHLT';
+          :state.programmer.hired?'NEUTEIL · AUTOMATISCHE ZUWEISUNG':'NEUTEIL · BEDIENER PROGRAMMIERT AUTOMATISCH';
         card.querySelector('.top').after(badge);
       }
       if(Number.isFinite(o.expiresAt)){
@@ -1924,7 +1988,7 @@
     if(job(m)||m.qualityReworkQueue.length){
       m.orderQueue.push({order:accepted,material:materialResult.consumed,
         deadlineAt:Number.isFinite(accepted.deadlineAt)?accepted.deadlineAt:state.gameMinutes+accepted.deadlineHours*60});
-      enqueueNcProgram(accepted);
+      if(state.programmer.hired){enqueueNcProgram(accepted);reassessActiveProgrammingRoutes();}
       if(state.warehouseOrderSnapshot?.id===accepted.id)state.warehouseOrderSnapshot=null;
       if(!options.automatic)state.selected=null;
       save();renderOrders();renderBusiness();render();
@@ -1934,13 +1998,13 @@
     m.activeId=accepted.id;m.activeOrder=accepted;m.activeOrderSource='market';m.progress=0;m.produced=0;
     m.ncProgramPending=!programReady(accepted);
     const setupPlan=programReady(accepted)?beginMachineSetup(m,accepted):null;
-    if(m.ncProgramPending)enqueueNcProgram(accepted);
+    if(m.ncProgramPending){scheduleActiveOrderProgramming(m,accepted);reassessActiveProgrammingRoutes();}
     m.deadlineAt=Number.isFinite(accepted.deadlineAt)?accepted.deadlineAt:state.gameMinutes+accepted.deadlineHours*60;
     if(state.warehouseOrderSnapshot?.id===accepted.id)state.warehouseOrderSnapshot=null;
     if(!options.automatic)state.selected=null;
     save();renderOrders();renderBusiness();render();
     if(!options.automatic){closeDrawer();showMachine(m.bay);if(m.ncProgramPending)tab('machine');say(m.ncProgramPending
-      ?`${accepted.part} auf Platz ${m.bay} angenommen. Das NC-Programm fehlt noch${state.programmer.hired?' und wurde beim Programmierer eingeplant.':' – programmiere es mit einem Bediener an der Maschine.'}`
+      ?`${accepted.part} auf Platz ${m.bay} angenommen. Die Programmierung wurde automatisch zugewiesen.`
       :`${accepted.part} auf Platz ${m.bay} angenommen. Rüstzeit ${formatMinutes(setupPlan.totalMinutes)}${setupPlan.delayMinutes?` · Einrichtungsproblem verlängert um ${formatMinutes(setupPlan.delayMinutes)}`:''}.`);}
     return true;
   }
@@ -2195,7 +2259,7 @@
         const o=job(m);
         if(!o)continue;
         if(!programReady(o)){
-          enqueueNcProgram(o);
+          if(!m.operatorProgramming&&!programTaskFor(programKey(o)))scheduleActiveOrderProgramming(m,o);
           continue;
         }
         if(!m.setupPartProduced&&m.setupRemainingMinutes<=0)beginMachineSetup(m,o);
@@ -2411,7 +2475,6 @@
   $('take-loan').addEventListener('click',takeCredit);
   $('repay-credit').addEventListener('click',repayCredit);
   $('repair-now').addEventListener('click',()=>chooseBreakdown('repairSelf'));
-  $('program-active-order').addEventListener('click',startOperatorProgramming);
   $('hire-programmer').addEventListener('click',hireProgrammer);
   $('continue-risky').addEventListener('click',()=>chooseBreakdown('continueRisky'));
   $('schedule-repair').addEventListener('click',()=>chooseBreakdown('scheduleRepair'));
@@ -2698,7 +2761,15 @@
   let previous=performance.now(),accumulator=0;
   function frame(now){
     accumulator+=Math.min((now-previous)/1000,.25);previous=now;
-    if(accumulator>=.1){tick(accumulator);accumulator=0;}
+    if(accumulator>=.1){
+      const elapsed=accumulator;accumulator=0;
+      try{tick(elapsed);}catch(error){
+        console.error('Simulationsschritt fehlgeschlagen; Spielstand wird pausiert gesichert.',error);
+        state.paused=true;
+        try{save();render();}catch(recoveryError){console.error('Spielstand konnte nach dem Fehler nicht dargestellt werden.',recoveryError);}
+        say('Technischer Fehler im Spielablauf. Spielstand wurde gesichert; bitte die Seite neu laden.');
+      }
+    }
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
