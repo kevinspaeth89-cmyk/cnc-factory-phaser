@@ -53,11 +53,10 @@
     mill3: {name:'Veltron VX-500',kind:'Fräsen',price:38000,rate:1.12},
     mill5: {name:'Orionis OM-650X',kind:'Fräsen',price:58000,rate:1.38}
   };
-  const turningHallArtwork='hall-four-machines.webp?v=1';
   const turningMachineArtwork = {
-    standard:'assets/nexora-nx350-hall-v2.png?v=1',
-    rapid:'assets/nexora-nx420-hall-v2.png?v=1',
-    premium:'assets/aurex-at600-hall-v2.png?v=1'
+    standard:'assets/nexora-nx350-hall-v2.png?v=2',
+    rapid:'assets/nexora-nx420-hall-v2.png?v=2',
+    premium:'assets/aurex-at600-hall-v2.png?v=2'
   };
   const hallMachineArtwork = {
     mill3:'assets/veltron-vx500-hall-front.png?v=1',
@@ -898,21 +897,20 @@
   function renderRushCapacityCheck(order,event){
     const panel=$('rush-capacity-check');panel.hidden=false;
     const heading=document.createElement('strong'),note=document.createElement('p'),rows=document.createElement('div');
-    heading.className='rush-capacity-title';heading.textContent='Fristwirkung je Maschine';
+    heading.className='rush-capacity-title';heading.textContent='Maschine für den Eilauftrag';
     note.className='rush-capacity-note';
-    note.textContent='Grün bedeutet pünktlich, Rot bedeutet voraussichtlich verspätet. Beim Unterbrechen zeigen wir zusätzlich, wie sich die Frist des laufenden Auftrags verschiebt.';
+    note.textContent='Grün: pünktlich. Rot: Frist verpasst.';
     rows.className='rush-capacity-rows';
     const machines=state.machines.filter(machine=>compatible(machine,order));
     if(!machines.length){
       const empty=document.createElement('p');empty.className='rush-capacity-empty';empty.textContent='Keine passende '+order.kind+'-Maschine vorhanden.';rows.append(empty);
     }
     machines.forEach(machine=>{
-      const current=plannedMachineLoad(machine),projected=plannedMachineLoad(machine,order),interruption=rushInterruptionForecast(machine,order);
+      const projected=plannedMachineLoad(machine,order),interruption=rushInterruptionForecast(machine,order);
       const rushCheck=projected.deadlineChecks.find(check=>check.orderId===order.id);
       const bufferMinutes=rushCheck?.bufferMinutes??-Infinity;
       const activeOrder=job(machine);
-      const activeDeadlineCheck=activeOrder?current.deadlineChecks.find(check=>check.orderId===activeOrder.id):null;
-      const row=document.createElement('div'),top=document.createElement('div'),name=document.createElement('strong'),status=document.createElement('strong'),load=document.createElement('p'),window=document.createElement('p'),choices=document.createElement('div');
+      const row=document.createElement('div'),top=document.createElement('div'),name=document.createElement('strong'),status=document.createElement('strong'),window=document.createElement('p'),choices=document.createElement('div');
       const reason=rushAssignmentBlockReason(machine,order,false,true);
       const blocked=!!reason||!projected.shifts.length;
       const tight=bufferMinutes<0;
@@ -923,27 +921,20 @@
       status.className='rush-capacity-status';
       status.classList.toggle('rush-impact-late',!reason&&!!rushCheck&&tight);
       status.classList.toggle('rush-impact-on-time',!reason&&!!rushCheck&&!tight);
-      status.textContent=reason||(!projected.shifts.length?'Keine besetzte Schicht':!rushCheck?'Zeitplan nicht berechenbar':tight?'Eilauftrag voraussichtlich verspätet':'Eilauftrag voraussichtlich pünktlich');
+      status.textContent=reason||(!projected.shifts.length?'Keine besetzte Schicht':!rushCheck?'Zeitplan nicht berechenbar':tight?formatEstimateMinutes(-bufferMinutes)+' zu spät':'Pünktlich');
       top.append(name,status);
-      const percentLabel=load=>load.percent===null?'keine Schicht':Number.isFinite(load.percent)?Math.round(load.percent)+' %':'∞ %';
-      const currentPercent=percentLabel(current),projectedPercent=percentLabel(projected);
-      load.className='rush-capacity-load';
-      load.textContent='Fristauslastung: ohne Eilauftrag '+currentPercent+' · mit Eilauftrag '+projectedPercent+' (über 100 % = voraussichtlich verspätet)';
       window.className='rush-capacity-window';
       window.classList.toggle('rush-impact-late',tight);
-      const rushOutcome=bufferMinutes>=0?'Fristpuffer '+formatEstimateMinutes(bufferMinutes):'Frist voraussichtlich um '+formatEstimateMinutes(-bufferMinutes)+' überschritten';
       window.textContent=rushCheck
-        ?'Eilauftrag '+order.part+': fertig in '+formatEstimateMinutes(rushCheck.leadMinutes)+' · '+rushOutcome
-        :'Eilauftrag: Fertigstellung nicht berechenbar.';
+        ?order.part+': fertig in '+formatEstimateMinutes(rushCheck.leadMinutes)+' · '+(bufferMinutes>=0?'Bis zur Frist bleiben dann '+formatEstimateMinutes(bufferMinutes):'Zu spät um '+formatEstimateMinutes(-bufferMinutes))
+        :'Eilauftrag: Fertigstellungszeit nicht berechenbar.';
       choices.className='rush-machine-actions';
       const normalButton=document.createElement('button'),normalDetail=document.createElement('small');
       normalButton.type='button';normalButton.className='action rush-machine-choice';
       const materialShortage=Math.max(0,materialSystem.requiredKg(order)-materialSystem.available(state,order));
       normalButton.append(document.createTextNode(materialShortage>1e-9?'Material kaufen & hier einplanen':activeOrder?'Nach laufendem Auftrag einplanen':'Direkt auf dieser Maschine starten'));
-      const normalTiming=rushCheck
-        ?'Eilauftrag fertig in '+formatEstimateMinutes(rushCheck.leadMinutes)+' · '+rushOutcome
-        :'Eilfrist nicht berechenbar';
-      normalDetail.textContent=reason||(!projected.shifts.length?'Keine besetzte Schicht':materialShortage>1e-9?'Es fehlen '+Math.ceil(materialShortage)+' kg '+order.material+' · nach dem Kauf '+(activeOrder?'in die Warteschlange':'direkt')+' auf Platz '+machine.bay+' · '+euro(Number(order.rushBonus)||0)+' Zuschlag · Kundenzufriedenheit +6 · '+normalTiming:euro(Number(order.rushBonus)||0)+' Zuschlag · Kundenzufriedenheit +6 · '+normalTiming);
+      normalDetail.textContent=reason||(!projected.shifts.length?'Keine Schicht':materialShortage>1e-9?'Material fehlt: '+Math.ceil(materialShortage)+' kg '+order.material+'.':'');
+      normalDetail.hidden=!normalDetail.textContent;
       normalButton.append(normalDetail);normalButton.disabled=!!reason||!projected.shifts.length;
       normalButton.addEventListener('click',()=>resolveRushOrderEvent(event,true,machine.bay,false));
       choices.append(normalButton);
@@ -953,31 +944,20 @@
         interruptButton.type='button';interruptButton.className='action rush-machine-choice rush-interrupt-choice';
         interruptButton.append(document.createTextNode(materialShortage>1e-9?'Material kaufen & Auftrag hier einschieben':'Jetzt starten und laufenden Auftrag unterbrechen'));
         if(interruption){
-          const deadlineRemaining=interruption.deadlineAt-state.gameMinutes;
-          const deadlineText=deadlineRemaining>=0
-            ?'Frist in '+formatEstimateMinutes(deadlineRemaining)
-            :'Frist bereits '+formatEstimateMinutes(-deadlineRemaining)+' überfällig';
-          const outcome=interruption.bufferMinutes>=0
-            ?formatEstimateMinutes(interruption.bufferMinutes)+' Puffer'
-            :'voraussichtlich '+formatEstimateMinutes(-interruption.bufferMinutes)+' zu spät';
           const afterFinish=interruption.finishAt-state.gameMinutes;
-          let finishImpact='Abschluss danach in '+formatEstimateMinutes(afterFinish)+'.';
-          if(activeDeadlineCheck){
-            const delay=interruption.finishAt-activeDeadlineCheck.finishAt;
-            const delayText=(delay>=0?'später um ':'früher um ')+formatEstimateMinutes(Math.abs(delay));
-            finishImpact='Vorher fertig in '+formatEstimateMinutes(activeDeadlineCheck.leadMinutes)+' · danach in '+formatEstimateMinutes(afterFinish)+' ('+delayText+').';
-          }
-          interruptDetail.textContent=(materialShortage>1e-9?'Es fehlen '+Math.ceil(materialShortage)+' kg '+order.material+'; nach dem Kauf wird der Eilauftrag auf Platz '+machine.bay+' zuerst gestartet. ':'')+
-            'Kundenzufriedenheit +6 · Eilauftrag zuerst: fertig in '+(rushCheck?formatEstimateMinutes(rushCheck.leadMinutes):'nicht berechenbar')+'.\n'+
-            'Danach '+activeOrder.part+': '+finishImpact+'\n'+
-            'Neue Rüstzeit '+formatMinutes(interruption.resumedSetup)+' · '+deadlineText+' · danach '+outcome+'.';
+          const deadlineImpact=interruption.bufferMinutes>=0
+            ?'Danach bleiben bis zur Frist: '+formatEstimateMinutes(interruption.bufferMinutes)+'.'
+            :'Danach voraussichtlich '+formatEstimateMinutes(-interruption.bufferMinutes)+' zu spät.';
+          interruptDetail.textContent=(materialShortage>1e-9?'Material fehlt: '+Math.ceil(materialShortage)+' kg '+order.material+'. Nach dem Kauf startet der Eilauftrag zuerst.\n':'')+
+            'Laufender Auftrag nach dem Einschieben: fertig in '+formatEstimateMinutes(afterFinish)+'.\n'+
+            deadlineImpact+' Rüstzeit beim Neustart: '+formatMinutes(interruption.resumedSetup)+'.';
         }else interruptDetail.textContent=interruptReason||'Frist des laufenden Auftrags nicht berechenbar.';
         interruptButton.append(interruptDetail);
         interruptButton.disabled=!!interruptReason||!interruption;
         interruptButton.addEventListener('click',()=>resolveRushOrderEvent(event,true,machine.bay,true));
         choices.append(interruptButton);
       }
-      row.append(top,load,window,choices);rows.append(row);
+      row.append(top,window,choices);rows.append(row);
     });
     panel.replaceChildren(heading,note,rows);
   }
@@ -2570,7 +2550,7 @@
       let machineArt=b.querySelector('.bay-machine');
       let turningFrame=b.querySelector('.bay-turning-frame');
 
-      if(turning&&layout.level===2){
+      if(turning){
         if(!machineArt){
           machineArt=document.createElement('img');
           machineArt.className='bay-machine';
@@ -2581,19 +2561,6 @@
         if(machineArt.getAttribute('src')!==src)machineArt.src=src;
         machineArt.hidden=false;
         if(turningFrame)turningFrame.hidden=true;
-      }else if(turning){
-        if(!turningFrame){
-          turningFrame=document.createElement('div');
-          turningFrame.className='bay-turning-frame';
-          const turningArt=document.createElement('img');
-          turningArt.className='bay-turning-art';
-          turningArt.alt='';
-          turningArt.src=turningHallArtwork;
-          turningFrame.append(turningArt);
-          b.prepend(turningFrame);
-        }
-        turningFrame.hidden=false;
-        if(machineArt)machineArt.hidden=true;
       }else if(turningFrame){
         turningFrame.hidden=true;
       }
@@ -2608,7 +2575,7 @@
         const src=hallMachineArtwork[machine.type];
         if(machineArt.getAttribute('src')!==src)machineArt.src=src;
         machineArt.hidden=false;
-      }else if(machineArt&&!(turning&&layout.level===2)){
+      }else if(machineArt&&!turning){
         machineArt.hidden=true;
       }
       let robotArt=b.querySelector('.bay-robot');
