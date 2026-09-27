@@ -652,19 +652,20 @@
     if(!overlay)return;
     const event=state.eventQueue[0];overlay.hidden=!event;
     if(!event)return;
-    if(event.event==='rush_order'){
-      renderRushOrderEvent(event);
-      return;
-    }
-    $('event-window').querySelector('.event-card').classList.remove('rush-event-card');
-    if(event.event==='quality_issue'){
-      renderQualityIssueEvent(event);
-      return;
-    }
-    if(event.event==='quality_complaint'){
-      renderQualityComplaintEvent(event);
-      return;
-    }
+    try{
+      if(event.event==='rush_order'){
+        renderRushOrderEvent(event);
+        return;
+      }
+      $('event-window').querySelector('.event-card').classList.remove('rush-event-card');
+      if(event.event==='quality_issue'){
+        renderQualityIssueEvent(event);
+        return;
+      }
+      if(event.event==='quality_complaint'){
+        renderQualityComplaintEvent(event);
+        return;
+      }
     $('event-window').querySelector('.event-card').classList.remove('quality-event-card');
     $('event-order-timing').querySelector('#event-order-deadline-cell small').textContent='AUFTRAGSFRIST';
     $('event-order-timing').querySelector('#event-order-processing small').textContent='BEARBEITUNG NOCH';
@@ -713,7 +714,43 @@
     defer.textContent='Später entscheiden';
     const deferHint=document.createElement('small');deferHint.textContent='Diese Maschine bleibt stehen.';defer.append(deferHint);
     defer.addEventListener('click',()=>resolveEventWithoutAction());actions.append(defer);
-    $('event-count').textContent=state.eventQueue.length>1?`Ereignis 1 von ${state.eventQueue.length} · Das Spiel ist pausiert.`:'Das Spiel ist pausiert, bis du eine Entscheidung triffst.';
+      $('event-count').textContent=state.eventQueue.length>1?`Ereignis 1 von ${state.eventQueue.length} · Das Spiel ist pausiert.`:'Das Spiel ist pausiert, bis du eine Entscheidung triffst.';
+    }catch(error){
+      console.error('Ereignisfenster konnte nicht dargestellt werden.',error);
+      const card=overlay.querySelector('.event-card');
+      if(!card)return;
+      card.classList.remove('rush-event-card','quality-event-card');
+      $('event-eyebrow').textContent='SPIELMELDUNG';
+      $('event-title').textContent='Diese Meldung konnte nicht geladen werden';
+      $('event-detail').textContent='Der Spielstand bleibt erhalten. Schließe die fehlerhafte Meldung, um fortzufahren.';
+      $('event-consequence').textContent='Falls eine Maschine gestört ist, bleibt sie stehen und kann anschließend im Maschinenmenü repariert werden.';
+      $('event-order-timing').hidden=true;
+      const actions=$('event-actions');actions.replaceChildren();
+      const dismiss=document.createElement('button');dismiss.type='button';dismiss.className='action event-choice';
+      dismiss.textContent='Meldung schließen & fortfahren';
+      dismiss.addEventListener('click',()=>dismissUnrenderableEvent(event));
+      actions.append(dismiss);
+      $('event-count').textContent='Das betroffene Ereignis wird beim Schließen verworfen.';
+      state.paused=true;
+    }
+  }
+  function dismissUnrenderableEvent(event){
+    const index=state.eventQueue.findIndex(item=>item.id===event?.id);
+    if(index<0)return false;
+    const [discarded]=state.eventQueue.splice(index,1);
+    if(discarded.event==='rush_order'&&discarded.order)orderMarketSystem.recordRushDecision(state,discarded.order,false);
+    state.paused=state.eventQueue.length>0;
+    save();render();
+    if(discarded.event==='quality_issue'){
+      const machine=machineAt(discarded.bay),order=machine&&job(machine);
+      if(machine&&order&&order.id===discarded.order?.id&&Number.isInteger(discarded.defectParts)&&discarded.defectParts>0){
+        finishOrder(machine,order,{defectParts:discarded.defectParts,riskPct:discarded.riskPct},state.gameMinutes);
+        say('Die fehlerhafte Meldung wurde geschlossen; die betroffenen Teile wurden mit dem üblichen Preisabschlag ausgeliefert.');
+        return true;
+      }
+    }
+    say('Die Meldung wurde geschlossen. Der Spielstand bleibt erhalten; eine betroffene Maschine kann im Maschinenmenü geprüft werden.');
+    return true;
   }
   function resolveEventWithoutAction(){
     state.eventQueue.shift();state.paused=state.eventQueue.length>0;save();render();
