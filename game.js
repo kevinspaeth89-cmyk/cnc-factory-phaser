@@ -843,7 +843,7 @@
     const button=document.createElement('button'),small=document.createElement('small');
     button.type='button';button.className='action event-choice quality-choice'+(risky?' event-risk':'');
     button.append(document.createTextNode(label));small.textContent=detail;button.append(small);
-    button.disabled=cost>state.money+1e-9;button.addEventListener('click',callback);
+    button.disabled=cost>0&&cost>state.money+1e-9;button.addEventListener('click',callback);
     $('event-actions').append(button);return button;
   }
   function renderQualityIssueEvent(event){
