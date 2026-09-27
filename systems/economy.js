@@ -14,7 +14,7 @@
   const DEFAULT_MATERIALS = Object.freeze({ steel: 0, stainless: 0, aluminium: 0, castiron: 0 });
   const DEFAULT_TOOLS = Object.freeze({ turningInsert: 0, millingInsert: 0 });
   const CATEGORIES = Object.freeze([
-    'income', 'material', 'wages', 'energy', 'tools', 'maintenance', 'repairs',
+    'income', 'material', 'wages', 'energy', 'tools', 'maintenance', 'repairs', 'quality',
     'storage', 'machine_purchase', 'machine_sale', 'factory_expansion', 'loan_drawdown',
     'loan_repayment', 'loan_interest', 'other'
   ]);

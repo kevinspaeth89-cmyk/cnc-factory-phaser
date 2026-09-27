@@ -1,6 +1,6 @@
 # Balance- und Bedienungsstand
 
-Stand: 27. September 2026. Der Spielcode liegt lokal auf `main`, synchron mit `origin/main` bei `01fc64a` („Give orders a more deliberate pace“). Dieses Backlog-Update ändert keine Spielmechanik.
+Stand: 27. September 2026. Der Arbeitsstand enthält jetzt die erste spielbare Stufe der drei priorisierten Ideen. Die nächsten Anpassungen richten sich nach dem Spieltest.
 
 ## Im aktuellen Spielstand enthalten
 
@@ -20,11 +20,11 @@ Die erste Umsetzungsstufe ist jetzt im Spielcode enthalten: Ein gemeinsames Erei
 
 ### 2. Neuteile programmieren
 
-Neue Teile brauchen vor dem Fertigungsstart ein Programm; der Aufwand richtet sich nach der Komplexität. Der Bediener kann das Programm an seiner Maschine erstellen, währenddessen pausiert dort die Produktion. Ein eingestellter Programmierer kann ein bereits eingeplantes Teil vorab programmieren; dafür bekommt das Programm eine aufwandsabhängige Vorlaufzeit, während die Maschine weiterarbeitet.
+**Erste Stufe umgesetzt:** Ein neues Teil benötigt vor der Fertigung ein CNC-Programm. Die Auftragskarte nennt den fehlenden Programmschritt. Ein zugewiesener Bediener kann es an der Maschine erstellen; während der aufwandsabhängigen Programmierzeit steht diese Maschine. Alternativ kann ein angestellter Programmierer bereits angenommene und eingeplante neue Teile vorprogrammieren, während die Maschine weiterarbeitet. Programme bleiben für spätere Aufträge desselben Teils verfügbar. Der Programmierer kostet einmalig 4.500 € und 42 € je Frühschichtstunde.
 
 ### 3. Qualitätssicherung und Reklamationen
 
-Qualifikation, Maschinen- und Werkzeugzustand, Toleranz und Zeitdruck beeinflussen das Fehlerrisiko. Prüfungen können Fehler vor der Lieferung erkennen. Bei einer Reklamation folgen je nach Schwere Nacharbeit, Neuproduktion oder Ausschuss sowie Kosten- und Rufauswirkungen. Das Ereignisfenster aus Priorität 1 kann diese Fälle ebenfalls tragen.
+**Erste Stufe umgesetzt:** Toleranzklasse, Bedienerpräzision und -erfahrung, Maschinen- und Werkzeugzustand sowie Zeitdruck beeinflussen das angezeigte Qualitätsrisiko. Eine Endkontrolle kann Teilefehler vor dem Versand aufdecken und pausiert dann das Spiel: nacharbeiten und Ersatzteile fertigen oder mit Preisabzug ausliefern. Nach einer fehlerhaften Lieferung kann der Kunde später reklamieren; zur Wahl stehen Ersatzcharge, Gutschrift oder Ablehnung. Kosten und Kundenvertrauen werden verbucht.
 
 ## Weitere vorgemerkte Themen
 
@@ -33,4 +33,4 @@ Qualifikation, Maschinen- und Werkzeugzustand, Toleranz und Zeitdruck beeinfluss
 - Hallenausbau mit Messbereich, Recycling und detaillierteren Kennzahlen.
 - Weitere Betriebsverbesserungen wie CAM, Werkzeugvoreinstellung und Prozessüberwachung.
 
-Die beiden folgenden Ideen bleiben die nächsten Ausbauziele. Die Umsetzung erfolgt schrittweise, damit jede Stufe erst gespielt und abgestimmt werden kann.
+Diese ersten Stufen sind jetzt zum Spielen bereit. Noch offen sind feinere Programmierplanung, unterschiedliche Prüf- und Ausschusswege sowie die Balance von Programmieraufwand, Qualitätsrisiko und Reklamationskosten.

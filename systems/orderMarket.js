@@ -540,6 +540,7 @@
     acceptRushOffer,
     recordRushDecision,
     onCompleted,
+    adjustReputation: (state, customer, delta) => changeReputation(state, customer, delta),
     getReputation: state => ({ ...ensureReputation(state) }),
     limits: Object.freeze({ minOffers: MIN_OFFERS, startOffers: START_OFFERS, maxOffers: MAX_OFFERS })
   });
