@@ -623,7 +623,8 @@
   let lastOrdersRenderKey='';
   function ordersRenderKey(){
     const offers=orderMarketSystem.getAvailable(state);
-    return [offers.map(o=>o.id).join(','),JSON.stringify(state.inventory.rawMaterial)].join('::');
+    const marketDay=Math.floor(state.gameMinutes/1440);
+    return [offers.map(o=>o.id).join(','),JSON.stringify(state.inventory.rawMaterial),marketDay].join('::');
   }
   let pendingOrderAssignmentId=null;
   function renderMachineLoadCard(machine){
@@ -704,7 +705,14 @@
       card.className='card'+(state.selected===o.id?' selected':'')+(running?' running':'')+(!compatibleMachines.length&&!running?' incompatible':'');
       const customerType=o.customerType?`${o.customerType} · `:'';
       const difficulty=Number.isFinite(o.difficulty)?` · Schwierigkeit ${o.difficulty}/5`:'';
-      card.innerHTML=`<div class="top"><span>${o.customer}</span><span>${o.kind} · #${o.id}</span></div><h3>${o.part}</h3><p>${customerType}${o.material} · ${o.qty} Teile${difficulty}</p><div class="values"><span>${o.kg} kg · Frist ${o.deadlineHours} h${o.reputationBonusPct?` · Kundenbonus ${o.reputationBonusPct>0?'+':''}${o.reputationBonusPct} %`:''}</span><b>${euro(o.reward)}</b></div>`;
+      const materialType=materialSystem.typeForOrder(o),materialKg=materialSystem.requiredKg(o);
+      const materialPrice=materialType?materialSystem.pricePerKg(materialType,state.gameMinutes):null;
+      const materialCost=Number.isFinite(materialPrice)&&Number.isFinite(materialKg)?materialPrice*materialKg:null;
+      const materialContribution=Number.isFinite(materialCost)?o.reward-materialCost:null;
+      const baseMachineRate=o.kind==='Fräsen'?catalog.mill3.rate:catalog.standard.rate;
+      const estimateMinutes=setupMinutesForOrder(o)+Math.max(0,(o.qty-1)/Math.max(1,o.qty)*o.duration*6/baseMachineRate);
+      const contributionPerHour=Number.isFinite(materialContribution)&&estimateMinutes>0?materialContribution/(estimateMinutes/60):null;
+      card.innerHTML=`<div class="top"><span>${o.customer}</span><span>${o.kind} · #${o.id}</span></div><h3>${o.part}</h3><p>${customerType}${o.material} · ${o.qty} Teile${difficulty}</p><div class="values"><span>${o.kg} kg · Frist ${o.deadlineHours} h${o.reputationBonusPct?` · Kundenbonus ${o.reputationBonusPct>0?'+':''}${o.reputationBonusPct} %`:''}</span><b>${euro(o.reward)}</b></div><div class="order-economics${materialContribution!==null&&materialContribution<0?' loss':''}"><div class="order-economics-grid"><span>Material zum Tageskurs<strong>${materialCost===null?'—':euro(materialCost)}</strong></span><span>Nach Material<strong>${materialContribution===null?'—':euro(materialContribution)}</strong></span></div><p>${contributionPerHour===null?'':`Etwa ${euro(contributionPerHour)} je Maschinenstunde · ${formatMinutes(estimateMinutes)} Rüst- und Maschinenzeit`}</p><small>Grundmaschine, ohne Lohn, Strom und Verschleiß</small></div>`;
       if(Number.isFinite(o.expiresAt)){
         const countdown=document.createElement('p');countdown.className='order-countdown';countdown.dataset.expiresAt=String(o.expiresAt);card.append(countdown);
       }

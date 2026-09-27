@@ -10,13 +10,13 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function createOrderMarket() {
   'use strict';
 
-  const VERSION = 2;
+  const VERSION = 3;
   const MIN_OFFERS = 3;
   const START_OFFERS = 4;
   const MAX_OFFERS = 6;
-  const REFRESH_MINUTES = [240, 360];
-  const FOLLOW_UP_DELAY_MIN = 120;
-  const FOLLOW_UP_DELAY_MAX = 360;
+  const REFRESH_MINUTES = [720, 1080];
+  const FOLLOW_UP_DELAY_MIN = 360;
+  const FOLLOW_UP_DELAY_MAX = 720;
   const FOLLOW_UP_RETRY_MINUTES = 60;
   const MAX_COMPLETED_IDS = 500;
   const KINDS = ['Drehen', 'Fräsen'];
@@ -24,23 +24,23 @@
   const profiles = [
     {
       key: 'standard', customer: 'Veltraxis Mobility', label: 'Standardkunde', weight: 42,
-      qty: [25, 55], rewardPerPart: [135, 185], duration: [50, 82], deadline: [14, 24],
-      difficulty: [1, 3], lifetime: [1680, 2880], followUpChance: 0.18
+      qty: [25, 55], rewardPerPart: [135, 185], duration: [100, 164], deadline: [28, 48],
+      difficulty: [1, 3], lifetime: [2880, 4320], followUpChance: 0.18
     },
     {
       key: 'premium', customer: 'Orionis Fluidics', label: 'Premiumkunde', weight: 22,
-      qty: [20, 45], rewardPerPart: [185, 255], duration: [62, 100], deadline: [20, 34],
-      difficulty: [3, 5], lifetime: [1440, 2520], followUpChance: 0.30
+      qty: [20, 45], rewardPerPart: [185, 255], duration: [124, 200], deadline: [40, 68],
+      difficulty: [3, 5], lifetime: [2520, 4320], followUpChance: 0.30
     },
     {
       key: 'series', customer: 'Kaeldor Components', label: 'Serienkunde', weight: 21,
-      qty: [60, 100], rewardPerPart: [85, 125], duration: [62, 105], deadline: [30, 48],
-      difficulty: [2, 4], lifetime: [2160, 3600], followUpChance: 0.34
+      qty: [60, 100], rewardPerPart: [85, 125], duration: [124, 210], deadline: [60, 96],
+      difficulty: [2, 4], lifetime: [3600, 5760], followUpChance: 0.34
     },
     {
       key: 'express', customer: 'Asteron Robotics', label: 'Expresskunde', weight: 15,
-      qty: [15, 32], rewardPerPart: [220, 300], duration: [44, 70], deadline: [10, 17],
-      difficulty: [2, 4], lifetime: [960, 1680], followUpChance: 0.16
+      qty: [15, 32], rewardPerPart: [220, 300], duration: [88, 140], deadline: [20, 34],
+      difficulty: [2, 4], lifetime: [1680, 2880], followUpChance: 0.16
     }
   ];
 

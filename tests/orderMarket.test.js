@@ -33,11 +33,11 @@ test('slows the offer cycle while keeping several choices visible', () => {
   const state = newState(32123);
   assert.equal(orderMarket.limits.minOffers, 3);
   assert.equal(orderMarket.limits.maxOffers, 6);
-  assert.ok(state.orderMarket.nextRefreshAt >= 240);
-  assert.ok(state.orderMarket.nextRefreshAt <= 360);
+  assert.ok(state.orderMarket.nextRefreshAt >= 720);
+  assert.ok(state.orderMarket.nextRefreshAt <= 1080);
   for (const order of orderMarket.getAvailable(state)) {
-    assert.ok(order.duration >= 44);
-    assert.ok(order.expiresAt - order.createdAt >= 960);
+    assert.ok(order.duration >= 66);
+    assert.ok(order.expiresAt - order.createdAt >= 1680);
   }
 });
 
@@ -58,7 +58,7 @@ test('migrates offers from older saves to the slower, lower reward balance', () 
 
   orderMarket.init(state);
 
-  assert.equal(state.orderMarket.version, 2);
+  assert.equal(state.orderMarket.version, 3);
   assert.deepEqual(orderMarket.getAvailable(state).map(order => order.id), before.map(order => order.id));
   for (const order of orderMarket.getAvailable(state)) {
     assert.ok(order.duration >= 44);
@@ -66,7 +66,7 @@ test('migrates offers from older saves to the slower, lower reward balance', () 
     assert.ok(order.reward < before.find(previous => previous.id === order.id).reward);
     assert.ok(order.expiresAt > state.gameMinutes);
   }
-  assert.ok(state.orderMarket.nextRefreshAt >= state.gameMinutes + 240);
+  assert.ok(state.orderMarket.nextRefreshAt >= state.gameMinutes + 720);
 });
 
 test('expires offers over time and supplies new orders while retaining several choices', () => {
