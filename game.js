@@ -1680,7 +1680,6 @@
             m.deadlineAt=next.deadlineAt;
             nextSetup=beginMachineSetup(m,next.order);
           }
-          state.speed=1;
           save();renderOrders();
           say(`${catalog[m.type].name}: ${o.part} fertig · ${euro(payout)}${late?' (20 % Fristabzug)':''}${next?` · Nächster Auftrag gestartet · Rüstzeit ${formatMinutes(nextSetup.totalMinutes)}${nextSetup.delayMinutes?` · Einrichtungsproblem +${formatMinutes(nextSetup.delayMinutes)}`:''}`:''}`);
         }
@@ -1734,6 +1733,7 @@
       }
     }
     if(event.event==='warning'||event.event==='major_failure'){
+      state.speed=1;
       state.eventQueue=Array.isArray(state.eventQueue)?state.eventQueue:[];
       const id=event.id||`${event.event}:${event.bay}:${event.since??state.gameMinutes}`;
       if(!state.eventQueue.some(item=>item.id===id))state.eventQueue.push({...event,id});
