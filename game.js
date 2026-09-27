@@ -7,6 +7,8 @@
   const START = Date.UTC(2026, 0, 5, 6);
   const HIRING_FEE = 150;
   const TRAINING_BASE_COST = 900;
+  const PREVENTIVE_MAINTENANCE_COST = 1200;
+  const PREVENTIVE_MAINTENANCE_MINUTES = 60;
   const CREDIT_AMOUNTS = [10000,25000,50000,100000];
   const CREDIT_RATE_BY_AMOUNT = Object.freeze({10000:.09,25000:.10,50000:.11,100000:.12});
   const CREDIT_ANNUAL_RATE = .12;
@@ -57,7 +59,7 @@
     {id:'P09',kind:'Fräsen',customer:'Orionis Fluidics',part:'Pumpengehäuse P09',material:'EN-GJS-400',kg:88,qty:24,reward:13900,duration:78,deadlineHours:11}
   ];
   const freshMachine = (bay, type='standard') => ({
-    bay,type,purchasePrice:catalog[type].price,level:1,maintenance:90,tool:82,operator1:false,operator2:false,loadingRobot:false,
+    bay,type,purchasePrice:catalog[type].price,level:1,maintenance:90,maintenanceRemainingMinutes:0,tool:82,operator1:false,operator2:false,loadingRobot:false,
     activeId:null,activeOrder:null,activeOrderSource:null,progress:0,produced:0,deadlineAt:null,
     orderQueue:[]
   });
@@ -120,6 +122,7 @@
   if(state.eventQueue.length)state.paused=true;
   state.machines.forEach(m=>{
     m.loadingRobot=!!m.loadingRobot;
+    m.maintenanceRemainingMinutes=Math.max(0,Number(m.maintenanceRemainingMinutes)||0);
     if(m.loadingRobot)m.operator2=false;
     if(m.activeId&&!m.activeOrder){
       const legacyOrder=legacyOrders.find(order=>order.id===m.activeId);
@@ -312,7 +315,7 @@
     const time=`${String(d.getUTCHours()).padStart(2,'0')}:${String(d.getUTCMinutes()).padStart(2,'0')}`;
     return `${day} ${date} · ${time}`;
   };
-  const readyToRun=m=>!!job(m)&&!state.paused&&!!shiftAt(state.gameMinutes)&&
+  const readyToRun=m=>!!job(m)&&!state.paused&&!(m.maintenanceRemainingMinutes>0)&&!!shiftAt(state.gameMinutes)&&
     !!(m['operator'+shiftAt(state.gameMinutes)]||(shiftAt(state.gameMinutes)===2&&m.loadingRobot))&&m.tool>=1&&m.maintenance>=8;
   const operating=m=>readyToRun(m)&&breakdownSystem.canContinueProduction(state,m.bay);
   const spareToolCount=m=>m?Math.max(0,Number(state.inventory?.tools?.[m.type])||0):0;
@@ -331,7 +334,8 @@
     const usage=inventorySystem.getUsage(state);
     return !!usage.ok&&usage.remaining.tools>=1;
   };
-  const canMaintain=m=>!!m&&state.money>=1200&&m.maintenance<99&&(!job(m)||m.maintenance<8);
+  const canMaintain=m=>!!m&&state.money>=PREVENTIVE_MAINTENANCE_COST&&m.maintenance<99&&
+    !(m.maintenanceRemainingMinutes>0)&&breakdownSystem.getStatus(state,m.bay)==='ok';
   const conditionLabel=value=>value>0&&value<1?'<1 %':Math.round(value)+' %';
   let visual=null, currentPanel=null, businessSection='factory', messageTimer, zoomTimer, phaserGame=null, hallPreviewBay=null;
   function say(message){
@@ -408,6 +412,7 @@
   function statusFor(m){
     if(!m)return 'Freier Stellplatz';
     if(state.paused)return 'Pausiert';
+    if(m.maintenanceRemainingMinutes>0)return `Wartung läuft · ${formatMinutes(m.maintenanceRemainingMinutes)}`;
     const fault=breakdownSystem.getRecord(state,m.bay);
     if(fault?.status==='major_failure')return 'Schwerer Maschinenschaden';
     if(fault?.status==='repairing')return `Reparatur · ${formatMinutes(fault.repairRemainingMinutes)}`;
@@ -489,7 +494,7 @@
     const deadlineLeft=order&&Number.isFinite(machine.deadlineAt)?machine.deadlineAt-state.gameMinutes:null;
     $('hall-preview-time').hidden=!order;
     $('hall-preview-time').textContent=order?`Rest ${formatMinutes(remainingMinutes(machine,order))}${deadlineLeft===null?'':` · Frist ${deadlineLeft<0?`${formatMinutes(-deadlineLeft)} überfällig`:formatMinutes(deadlineLeft)}`}`:'';
-    $('hall-preview-condition').textContent=`Werkzeug ${conditionLabel(machine.tool)} · Wartung ${Math.round(machine.maintenance)} % · Geplant ${machine.orderQueue.length}/${MAX_QUEUED_ORDERS}`;
+    $('hall-preview-condition').textContent=`Werkzeug ${conditionLabel(machine.tool)} · Wartung ${Math.round(machine.maintenance)} %${machine.maintenanceRemainingMinutes>0?` · Wartung läuft ${formatMinutes(machine.maintenanceRemainingMinutes)}`:''} · Geplant ${machine.orderQueue.length}/${MAX_QUEUED_ORDERS}`;
     $('hall-preview-operators').textContent=`Bediener S1 ${machine.operator1?'✓':'–'} · S2 ${machine.loadingRobot?'Roboter':machine.operator2?'✓':'–'}`;
     const slot=expansionSystem.getBayLayout(state).find(item=>item.bay===machine.bay);
     const hall=$('hall-map'),width=hall.clientWidth,height=hall.clientHeight;
@@ -653,6 +658,7 @@
   }
   function machineOrderBlockReason(machine,order){
     if(!compatible(machine,order))return `Benötigt ${order.kind}`;
+    if(machine.maintenanceRemainingMinutes>0)return 'Wartung läuft';
     if(machine.orderQueue.length>=MAX_QUEUED_ORDERS)return 'Planung voll (3/3)';
     if(machine.maintenance<8||machine.tool<1)return 'Wartung oder Werkzeug erneuern';
     return '';
@@ -1075,7 +1081,7 @@
     $('buy-robot').textContent=m?.loadingRobot?'Laderoboter installiert':`Laderoboter kaufen · ${euro(LOADING_ROBOT_COST)}`;
     $('buy-robot').disabled=!m||m.loadingRobot||state.money<LOADING_ROBOT_COST;
     $('sell-machine-value').textContent=m?euro(resaleValue(m)):'—';
-    $('sell-machine').disabled=!m||!!job(m)||!!m.orderQueue.length;
+    $('sell-machine').disabled=!m||!!job(m)||!!m.orderQueue.length||m.maintenanceRemainingMinutes>0;
     for(const shift of [1,2]){
       const assigned=state.machines.filter(x=>x['operator'+shift]).length;
       $('operator-'+shift).disabled=!m||(shift===2&&m.loadingRobot)||(!m['operator'+shift]&&assigned>=state.staff['shift'+shift]);
@@ -1184,6 +1190,11 @@
     $('spare-tool-price').textContent=!m?'Maschine auswählen':toolUsage.ok&&toolUsage.remaining.tools>=1?'€ 650 · passend für diese Maschine':'Werkzeuglager voll';
     $('maintenance-label').textContent=m?Math.round(m.maintenance)+' %':'—';
     $('maintenance-meter').style.width=m?Math.max(0,m.maintenance)+'%':'0%';
+    const maintenanceRemaining=Math.max(0,Number(m?.maintenanceRemainingMinutes)||0);
+    $('maintenance-title').textContent=maintenanceRemaining>0?'Wartung läuft':'Vorbeugende Wartung starten';
+    $('maintenance-detail').textContent=maintenanceRemaining>0
+      ?`${formatMinutes(maintenanceRemaining)} verbleibend · Produktion pausiert`
+      :`${euro(PREVENTIVE_MAINTENANCE_COST)} · ${formatMinutes(PREVENTIVE_MAINTENANCE_MINUTES)} Stillstand`;
 
     const hudOrder=o?(o.part+' · #'+o.id):'Kein Auftrag';
     const deadlineLeft=o&&m&&m.deadlineAt!==null?m.deadlineAt-state.gameMinutes:null;
@@ -1203,7 +1214,7 @@
     $('maintenance').disabled=!canMaintain(m);
     $('upgrade').disabled=!m||state.money<9000*m.level;
     $('sell-machine-value').textContent=m?euro(resaleValue(m)):'—';
-    $('sell-machine').disabled=!m||!!o||!!m.orderQueue.length;
+    $('sell-machine').disabled=!m||!!o||!!m.orderQueue.length||maintenanceRemaining>0;
     for(let bay=1;bay<=8;bay++){
       const b=$('bay-'+bay),machine=machineAt(bay);
       const slot=layout.bays.find(entry=>entry.bay===bay);
@@ -1350,7 +1361,7 @@
         const fault=breakdownSystem.getRecord(state,machine.bay);
         const faultBlocks=fault?.fault&&(fault.status==='major_failure'||fault.status==='repairing'||
           (fault.status==='warning'&&!fault.riskyContinue&&!fault.scheduledRepair));
-        return compatible(machine,order)&&machine.maintenance>=8&&machine.tool>=1&&!faultBlocks&&
+        return compatible(machine,order)&&machine.maintenanceRemainingMinutes<=0&&machine.maintenance>=8&&machine.tool>=1&&!faultBlocks&&
         machine.orderQueue.length<MAX_QUEUED_ORDERS&&(!job(machine)||machine.orderQueue.length<office.queueLimit);
       })
         .sort((a,b)=>Number(!!job(a))-Number(!!job(b))||a.orderQueue.length-b.orderQueue.length||a.bay-b.bay);
@@ -1401,6 +1412,7 @@
   function sellMachine(){
     const m=selectedMachine();
     if(!m)return;
+    if(m.maintenanceRemainingMinutes>0){say('Maschine erst nach Abschluss der Wartung verkaufen.');return;}
     if(job(m)||m.orderQueue.length){say('Laufenden oder vorgemerkten Auftrag zuerst abschließen.');return;}
     const name=catalog[m.type].name,value=resaleValue(m),oldBay=m.bay;
     if(!book('machine_sale',value,`${name} verkauft`,{type:m.type,bay:oldBay,purchasePrice:Number.isFinite(m.purchasePrice)?m.purchasePrice:LEGACY_MACHINE_PRICES[m.type]}).ok)return;
@@ -1575,6 +1587,15 @@
         }
       }
       state.gameMinutes+=step;left-=step;
+      for(const m of state.machines){
+        if(!(m.maintenanceRemainingMinutes>0))continue;
+        m.maintenanceRemainingMinutes=Math.max(0,m.maintenanceRemainingMinutes-step);
+        if(m.maintenanceRemainingMinutes===0){
+          m.maintenance=100;
+          save();
+          say(`Platz ${m.bay}: vorbeugende Wartung abgeschlossen.`);
+        }
+      }
       orderMarketSystem.tick(state,state.gameMinutes);
       runOrderOffice();
       const after=dateAt(state.gameMinutes);
@@ -1715,8 +1736,9 @@
   });
   $('maintenance').addEventListener('click',()=>{
     const m=selectedMachine();if(!canMaintain(m))return;
-    if(!book('maintenance',-1200,'Wartung abgeschlossen',{bay:m.bay,type:m.type}).ok)return;
-    m.maintenance=100;save();render();say('Wartung abgeschlossen.');
+    if(!book('maintenance',-PREVENTIVE_MAINTENANCE_COST,'Vorbeugende Wartung gestartet',{bay:m.bay,type:m.type,durationMinutes:PREVENTIVE_MAINTENANCE_MINUTES}).ok)return;
+    m.maintenanceRemainingMinutes=PREVENTIVE_MAINTENANCE_MINUTES;
+    save();render();say(`${catalog[m.type].name}: vorbeugende Wartung gestartet · ${formatMinutes(PREVENTIVE_MAINTENANCE_MINUTES)} Stillstand.`);
   });
   $('upgrade').addEventListener('click',()=>{
     const m=selectedMachine();if(!m)return;const cost=9000*m.level;if(state.money<cost)return;
