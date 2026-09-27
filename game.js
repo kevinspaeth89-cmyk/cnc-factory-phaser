@@ -558,10 +558,10 @@
     title.id='event-title';detail.id='event-detail';consequence.id='event-consequence';consequence.className='event-consequence';
     orderTiming.id='event-order-timing';orderTiming.className='event-order-timing';
     const deadlineCell=document.createElement('div'),deadlineLabel=document.createElement('small'),deadlineValue=document.createElement('strong');
-    deadlineCell.id='event-order-deadline-cell';deadlineLabel.textContent='AUFTRAGSFRIST';deadlineValue.id='event-order-deadline';
+    deadlineCell.id='event-order-deadline-cell';deadlineLabel.id='event-order-deadline-label';deadlineLabel.textContent='AUFTRAGSFRIST';deadlineValue.id='event-order-deadline';
     deadlineCell.append(deadlineLabel,deadlineValue);
     const processCell=document.createElement('div'),processLabel=document.createElement('small'),processValue=document.createElement('strong');
-    processLabel.textContent='BEARBEITUNG NOCH';processValue.id='event-order-processing';
+    processLabel.id='event-order-processing-label';processLabel.textContent='BEARBEITUNG NOCH';processValue.id='event-order-processing';
     processCell.append(processLabel,processValue);orderTiming.append(deadlineCell,processCell);
     actions.id='event-actions';actions.className='event-actions';count.id='event-count';count.className='event-count';
     card.append(eyebrow,title,detail,consequence,orderTiming,actions,count);overlay.append(card);document.querySelector('main').append(overlay);
@@ -584,8 +584,8 @@
     $('event-detail').textContent=`${order.qty} Teile · ${order.kind} · ${order.material} · ${order.kg} kg. Du hast bereits für diesen Kunden gearbeitet.`;
     $('event-consequence').textContent=`Eilzuschlag: +${order.rushBonusPct||20} % (${euro(bonus)}). Lieferfrist ${order.deadlineHours} Stunden ab Zusage. Pünktlich fertig: stärkerer Vertrauensgewinn; verspätet: stärkerer Vertrauensverlust.`;
     const timing=$('event-order-timing');timing.hidden=false;
-    timing.querySelector('#event-order-deadline-cell small').textContent='LIEFERFRIST AB ZUSAGE';
-    timing.querySelector('#event-order-processing small').textContent='BEARBEITUNGSZEIT';
+    $('event-order-deadline-label').textContent='LIEFERFRIST AB ZUSAGE';
+    $('event-order-processing-label').textContent='BEARBEITUNGSZEIT';
     $('event-order-deadline-cell').classList.remove('deadline-overdue');
     $('event-order-deadline').textContent=`${order.deadlineHours} Std.`;
     $('event-order-processing').textContent=`Ca. ${formatMinutes(processing)}`;
@@ -619,8 +619,8 @@
     $('event-detail').textContent=`${event.defectParts} von ${order.qty} Teilen liegen außerhalb der ${programmingQuality.toleranceClass(order)}-Toleranz. Die Prüfung hat den Fehler vor der Auslieferung entdeckt.`;
     $('event-consequence').textContent=`Maschinenzustand ${Math.round(machine?.maintenance||0)} % · Werkzeug ${Math.round(machine?.tool||0)} % · geschätztes Fehlerrisiko vor Fertigung ${event.riskPct} %. Nacharbeit verlängert den Auftrag und kostet Material sowie Prüfzeit.`;
     const timing=$('event-order-timing');timing.hidden=false;
-    timing.querySelector('#event-order-deadline-cell small').textContent='LIEFERFRIST';
-    timing.querySelector('#event-order-processing small').textContent='NACHARBEIT';
+    $('event-order-deadline-label').textContent='LIEFERFRIST';
+    $('event-order-processing-label').textContent='NACHARBEIT';
     const deadline=Number.isFinite(machine?.deadlineAt)?machine.deadlineAt-state.gameMinutes:null;
     $('event-order-deadline-cell').classList.toggle('deadline-overdue',deadline!==null&&deadline<0);
     $('event-order-deadline').textContent=deadline===null?'Keine Frist':deadline<0?`${formatMinutes(-deadline)} überfällig`:`Noch ${formatMinutes(deadline)}`;
@@ -667,8 +667,8 @@
         return;
       }
     $('event-window').querySelector('.event-card').classList.remove('quality-event-card');
-    $('event-order-timing').querySelector('#event-order-deadline-cell small').textContent='AUFTRAGSFRIST';
-    $('event-order-timing').querySelector('#event-order-processing small').textContent='BEARBEITUNG NOCH';
+    $('event-order-deadline-label').textContent='AUFTRAGSFRIST';
+    $('event-order-processing-label').textContent='BEARBEITUNG NOCH';
     const machine=machineAt(event.bay),warning=event.event==='warning',selfRepairFailed=event.selfRepairFailed===true;
     const fault=breakdownSystem.getFaultInfo(event.fault),options=breakdownSystem.getRepairOptions(state,event.bay);
     $('event-eyebrow').textContent=selfRepairFailed?'SELBSTREPARATUR GESCHEITERT':event.sudden?'PLÖTZLICHER MASCHINENCRASH':warning?'MASCHINENWARNUNG':'SCHWERER MASCHINENSCHADEN';
