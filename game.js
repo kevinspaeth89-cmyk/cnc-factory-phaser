@@ -26,6 +26,11 @@
   const ORDER_OFFICE_SETUP_COST = 12000;
   const SHIFT_LEADER_SETUP_COST = 10000;
   const SHIFT_LEADER_HOURLY_WAGE = 42;
+  const SHIFT_LEADER_SPENDING_LIMITS = [1000,2500,5000,10000];
+  const ROBOT_FAILURE_RATE_PER_HOUR = 0.004;
+  const ROBOT_RESTART_MINUTES = [90,150];
+  const ROBOT_TECHNICIAN_COST = 900;
+  const ROBOT_TECHNICIAN_MINUTES = [25,45];
   const ORDER_OFFICE_HOURLY_WAGE = 36;
   const ORDER_OFFICE_REVIEW_MINUTES = 30;
   const ORDER_OFFICE_MIN_DEADLINE_BUFFER_MINUTES = 30;
@@ -67,7 +72,7 @@
     {id:'P09',kind:'Fräsen',customer:'Orionis Fluidics',part:'Pumpengehäuse P09',material:'EN-GJS-400',kg:88,qty:24,reward:13900,duration:78,deadlineHours:11}
   ];
   const freshMachine = (bay, type='standard') => ({
-    bay,type,purchasePrice:catalog[type].price,level:1,maintenance:90,maintenanceRemainingMinutes:0,tool:82,operator1:false,operator2:false,loadingRobot:false,
+    bay,type,purchasePrice:catalog[type].price,level:1,maintenance:90,maintenanceRemainingMinutes:0,tool:82,operator1:false,operator2:false,loadingRobot:false,robotFault:false,robotRepairRemainingMinutes:0,
     activeId:null,activeOrder:null,activeOrderSource:null,progress:0,produced:0,deadlineAt:null,
     setupDurationMinutes:0,setupRemainingMinutes:0,setupDelayMinutes:0,setupPartProduced:false,
     orderQueue:[],suspendedOrder:null,operatorProgramming:null,qualityReworkQueue:[],qualityInspectedOrderId:null,ncProgramPending:false
@@ -80,7 +85,7 @@
     credit:{principal:0,originalAmount:0,annualRate:CREDIT_ANNUAL_RATE,paymentsRemaining:0,accruedInterest:0,nextPaymentAt:null,missedPayments:0},
     recruitment:{applicants:[],nextId:1},
     orderOffice:{hired:false,autoPurchase:true,autoAccept:true,cashReserve:5000,maxMarketMarkupPct:0,minMaterialSurplus:1000,queueLimit:1,nextReviewAt:0},
-    shiftLeader:{hired:false,shift:1},pendingRushAssignment:null
+    shiftLeader:{shift1:{hired:false,autoMaintenance:true,autoTools:true,autoBreakdowns:true,spendingLimit:2500,nextDecisionAt:0},shift2:{hired:false,autoMaintenance:true,autoTools:true,autoBreakdowns:true,spendingLimit:2500,nextDecisionAt:0}},pendingRushAssignment:null
   });
   let state=defaults();
   function validMachine(m) {
@@ -114,6 +119,9 @@
             setupPartProduced:!!suspended.setupPartProduced,ncProgramPending:!!suspended.ncProgramPending,
             qualityInspectedOrderId:typeof suspended.qualityInspectedOrderId==='string'?suspended.qualityInspectedOrderId:null}:null;
         machine.ncProgramPending=hasProgramState?!!m.ncProgramPending:false;
+        machine.robotFault=!!machine.loadingRobot&&!!machine.robotFault;
+        machine.robotRepairRemainingMinutes=machine.loadingRobot?Math.max(0,Number(machine.robotRepairRemainingMinutes)||0):0;
+        if(!machine.loadingRobot)machine.robotFault=false;
         machine.operatorProgramming=m.operatorProgramming&&typeof m.operatorProgramming.key==='string'&&Number.isFinite(m.operatorProgramming.remainingMinutes)?m.operatorProgramming:null;
         machine.qualityReworkQueue=Array.isArray(m.qualityReworkQueue)?m.qualityReworkQueue.filter(task=>task&&typeof task.id==='string'&&Number.isFinite(task.remainingMinutes)):[];
         machine.qualityInspectedOrderId=typeof m.qualityInspectedOrderId==='string'?m.qualityInspectedOrderId:null;
@@ -163,6 +171,7 @@
   state.eventQueue=Array.isArray(state.eventQueue)?state.eventQueue.filter(event=>
     event&&(
       (['warning','major_failure'].includes(event.event)&&Number.isInteger(event.bay)&&typeof event.fault==='string')||
+      (event.event==='robot_failure'&&Number.isInteger(event.bay))||
       (event.event==='rush_order'&&event.order?.isRushOrder===true&&typeof event.order.id==='string'&&
         typeof event.order.customer==='string'&&Number.isFinite(event.order.createdAt)&&Number.isFinite(event.order.expiresAt))||
       (event.event==='quality_issue'&&Number.isInteger(event.bay)&&event.order&&typeof event.order.id==='string'&&Number.isInteger(event.defectParts)&&event.defectParts>0)||
@@ -244,8 +253,23 @@
   }
   function ensureShiftLeaderState(){
     const saved=state.shiftLeader&&typeof state.shiftLeader==='object'?state.shiftLeader:{};
-    state.shiftLeader={hired:!!saved.hired,shift:Number(saved.shift)===2?2:1};
+    const hasSlots=!!(saved.shift1||saved.shift2),legacyShift=Number(saved.shift)===2?2:1;
+    const leaders={};
+    for(const shift of [1,2]){
+      const old=hasSlots&&saved['shift'+shift]&&typeof saved['shift'+shift]==='object'?saved['shift'+shift]:{};
+      const legacyHired=!hasSlots&&!!saved.hired&&legacyShift===shift;
+      leaders['shift'+shift]={
+        hired:!!old.hired||legacyHired,
+        autoMaintenance:old.autoMaintenance!==false,
+        autoTools:old.autoTools!==false,
+        autoBreakdowns:old.autoBreakdowns!==false,
+        spendingLimit:SHIFT_LEADER_SPENDING_LIMITS.includes(Number(old.spendingLimit))?Number(old.spendingLimit):2500,
+        nextDecisionAt:Number.isFinite(old.nextDecisionAt)?Math.max(state.gameMinutes,old.nextDecisionAt):state.gameMinutes
+      };
+    }
+    state.shiftLeader=leaders;
   }
+  function shiftLeaderFor(shift){return state.shiftLeader?.['shift'+(Number(shift)===2?2:1)]||null;}
   function ensureOrderOfficeState(){
     const saved=state.orderOffice&&typeof state.orderOffice==='object'?state.orderOffice:{};
     const choice=(value,allowed,fallback)=>allowed.includes(Number(value))?Number(value):fallback;
@@ -579,6 +603,9 @@
     if(remaining<=1e-8)return minuteAt;
     const hasShift1=!!machine.operator1&&!!assignedEmployee(machine,1);
     const hasShift2=(!!machine.operator2&&!!assignedEmployee(machine,2))||(!operatorOnly&&!!machine.loadingRobot);
+    const robotReadyAt=machine.loadingRobot
+      ?machine.robotFault&&!(machine.robotRepairRemainingMinutes>0)?Infinity:state.gameMinutes+Math.max(0,Number(machine.robotRepairRemainingMinutes)||0)
+      :Infinity;
     if(!hasShift1&&!hasShift2)return Infinity;
     for(let dayIndex=0;dayIndex<366;dayIndex++){
       const date=dateAt(minuteAt),dayStart=(Date.UTC(date.getUTCFullYear(),date.getUTCMonth(),date.getUTCDate())-START)/60000;
@@ -587,7 +614,7 @@
         if(!(shift===1?hasShift1:hasShift2))continue;
         const shiftStart=dayStart+(shift===1?360:840),shiftEnd=dayStart+(shift===1?840:1320);
         if(minuteAt>=shiftEnd)continue;
-        const workStart=Math.max(minuteAt,shiftStart),worked=Math.min(remaining,shiftEnd-workStart);
+        const workStart=Math.max(minuteAt,shiftStart,shift===2&&machine.loadingRobot?robotReadyAt:0),worked=Math.min(remaining,shiftEnd-workStart);
         if(worked<=0)continue;
         minuteAt=workStart+worked;remaining-=worked;
         if(remaining<=1e-8)return minuteAt;
@@ -700,8 +727,9 @@
     const time=`${String(d.getUTCHours()).padStart(2,'0')}:${String(d.getUTCMinutes()).padStart(2,'0')}`;
     return `${day} ${date} · ${time}`;
   };
+  const robotAvailable=m=>!!m?.loadingRobot&&!m.robotFault&&!(m.robotRepairRemainingMinutes>0);
   const readyToRun=m=>!!job(m)&&programReady(job(m))&&!m.operatorProgramming&&!state.paused&&!(m.maintenanceRemainingMinutes>0)&&!!shiftAt(state.gameMinutes)&&
-    !!(m['operator'+shiftAt(state.gameMinutes)]||(shiftAt(state.gameMinutes)===2&&m.loadingRobot))&&m.tool>=1&&m.maintenance>=8;
+    !!(m['operator'+shiftAt(state.gameMinutes)]||(shiftAt(state.gameMinutes)===2&&robotAvailable(m)))&&m.tool>=1&&m.maintenance>=8;
   const operating=m=>readyToRun(m)&&breakdownSystem.canContinueProduction(state,m.bay);
   const spareToolCount=m=>m?Math.max(0,Number(state.inventory?.tools?.[m.type])||0):0;
   function autoReplaceWornTool(machine,shift){
@@ -738,8 +766,70 @@
     say(catalog[m.type].name+': vorbeugende Wartung gestartet · '+formatMinutes(PREVENTIVE_MAINTENANCE_MINUTES)+' Stillstand.');
     return true;
   }
+  function leaderCanSpend(leader,cost){
+    return !!leader&&Number(leader.spendingLimit)>=cost&&state.money>=cost;
+  }
+  function leaderBuySpareTool(leader,machine){
+    if(!leaderCanSpend(leader,650)||!canBuySpareTool(machine))return false;
+    const added=inventorySystem.addTool(state,machine.type,1);
+    if(!added.ok)return false;
+    const debit=book('tools',-650,'Schichtleitung: Reservewerkzeug gekauft',{bay:machine.bay,type:machine.type,role:'shift_leader'});
+    if(!debit.ok){inventorySystem.consumeTool(state,machine.type,1);return false;}
+    return true;
+  }
+  function runShiftLeaderAutomation(shift){
+    const leader=shiftLeaderFor(shift);
+    if(!leader?.hired)return false;
+    let changed=false;
+    if(shift===2&&leader.autoTools){
+      for(const machine of state.machines){
+        if(!machine.loadingRobot||machine.robotFault||machine.robotRepairRemainingMinutes>0||machine.tool>=1||
+          breakdownSystem.getStatus(state,machine.bay)!=='ok')continue;
+        if(spareToolCount(machine)<1&&leaderBuySpareTool(leader,machine)){
+          say('Schichtleiter S2 hat ein Reservewerkzeug für den Laderoboter gekauft.');
+          changed=true;
+        }
+        if(spareToolCount(machine)>0&&inventorySystem.consumeTool(state,machine.type,1).ok){
+          machine.tool=100;
+          say('Schichtleiter S2 hat das Werkzeug am Laderoboter auf Platz '+machine.bay+' gewechselt.');
+          changed=true;
+        }
+      }
+    }
+    if(state.gameMinutes+1e-8<leader.nextDecisionAt){
+      if(changed)save();
+      return changed;
+    }
+    leader.nextDecisionAt=state.gameMinutes+60;
+    if(leader.autoTools){
+      for(const machine of state.machines){
+        if(machine.tool>40||spareToolCount(machine)>0||machine.maintenanceRemainingMinutes>0||
+          breakdownSystem.getStatus(state,machine.bay)!=='ok')continue;
+        if(leaderBuySpareTool(leader,machine)){
+          say('Schichtleiter S'+shift+' hat ein Reservewerkzeug für Platz '+machine.bay bereitgelegt.');
+          changed=true;
+          break;
+        }
+      }
+    }
+    if(leader.autoMaintenance&&leaderCanSpend(leader,PREVENTIVE_MAINTENANCE_COST)){
+      const machine=state.machines.filter(item=>
+        !job(item)&&item.orderQueue.length===0&&!item.qualityReworkQueue.length&&
+        item.maintenanceRemainingMinutes<=0&&item.maintenance<=60&&canMaintain(item)
+      ).sort((a,b)=>a.maintenance-b.maintenance)[0];
+      if(machine&&book('maintenance',-PREVENTIVE_MAINTENANCE_COST,'Schichtleitung: vorbeugende Wartung gestartet',{
+        bay:machine.bay,type:machine.type,durationMinutes:PREVENTIVE_MAINTENANCE_MINUTES,role:'shift_leader',shift
+      }).ok){
+        machine.maintenanceRemainingMinutes=PREVENTIVE_MAINTENANCE_MINUTES;
+        say('Schichtleiter S'+shift+' hat vorbeugende Wartung auf Platz '+machine.bay+' eingeplant.');
+        changed=true;
+      }
+    }
+    if(changed)save();
+    return changed;
+  }
   const conditionLabel=value=>value>0&&value<1?'<1 %':Math.round(value)+' %';
-  let visual=null, currentPanel=null, businessSection='factory', messageTimer, zoomTimer, phaserGame=null, hallPreviewBay=null, shiftLeaderAdviceKey='';
+  let visual=null, currentPanel=null, businessSection='factory', messageTimer, zoomTimer, phaserGame=null, hallPreviewBay=null, shiftLeaderPanelShift=1, shiftLeaderAdviceKey='';
   function say(message){
     $('message').textContent=message;
     clearTimeout(messageTimer);
@@ -937,7 +1027,10 @@
     $('event-count').textContent='Wähle, wie du den Kundenfall löst.';
   }
   function shiftLeaderEventAdvice(event){
-    if(!event||!state.shiftLeader.hired)return '';
+    if(!event)return '';
+    const leader=shiftLeaderFor(event.event==='robot_failure'?2:shiftAt(state.gameMinutes));
+    if(!leader?.hired)return '';
+    if(event.event==='robot_failure')return leader.autoBreakdowns?'Schichtleiter S2 übernimmt die Roboterstörung automatisch, sofern die Reparatur innerhalb des Ausgabenlimits liegt.':'Schichtleiter S2 ist für automatische Störungsbehandlung deaktiviert.';
     if(event.event==='warning'||event.event==='major_failure'){
       const options=breakdownSystem.getRepairOptions(state,event.bay);
       if(!options)return '';
@@ -971,6 +1064,38 @@
     }
     return '';
   }
+  function renderRobotFailureEvent(event){
+    const machine=machineAt(event.bay),card=$('event-window').querySelector('.event-card');
+    card.classList.remove('rush-event-card','quality-event-card');
+    $('event-eyebrow').textContent='ROBOTERSTÖRUNG';
+    $('event-title').textContent='Laderoboter ausgefallen · Platz '+event.bay;
+    $('event-detail').textContent='Der Roboter kann die Spätschicht vorerst nicht bedienen. Entscheide zwischen einem kostenlosen Neustart und einer schnelleren Reparatur durch den Servicetechniker.';
+    const activeOrder=machine&&job(machine),effects=[];
+    if(activeOrder)effects.push('Laufender Auftrag: '+activeOrder.part+' · '+machine.produced+'/'+activeOrder.qty+' Teile');
+    effects.push('Der Roboter bleibt bis zum Abschluss der Reparatur außer Betrieb.');
+    $('event-consequence').textContent=effects.join(' · ');
+    const timing=$('event-order-timing'),deadlineLeft=machine&&Number.isFinite(machine.deadlineAt)?machine.deadlineAt-state.gameMinutes:null;
+    timing.hidden=!activeOrder;
+    if(activeOrder){
+      $('event-order-deadline-label').textContent='AUFTRAGSFRIST';
+      $('event-order-processing-label').textContent='BEARBEITUNG NOCH';
+      $('event-order-deadline-cell').classList.toggle('deadline-overdue',deadlineLeft!==null&&deadlineLeft<0);
+      $('event-order-deadline').textContent=deadlineLeft===null?'Keine Frist':deadlineLeft<0?formatMinutes(-deadlineLeft)+' überfällig':'Noch '+formatMinutes(deadlineLeft);
+      $('event-order-processing').textContent='Noch '+formatMinutes(remainingMinutes(machine,activeOrder));
+    }
+    const actions=$('event-actions');actions.replaceChildren();
+    const addChoice=(label,detail,method,cost=0)=>{
+      const button=document.createElement('button'),small=document.createElement('small');
+      button.type='button';button.className='action event-choice';
+      button.append(document.createTextNode(label));small.textContent=detail;button.append(small);
+      button.disabled=cost>state.money;
+      button.addEventListener('click',()=>resolveRobotFailureEvent(event,method,false));
+      actions.append(button);
+    };
+    addChoice('Neustart & neu ausrichten','Keine Sofortkosten · '+formatMinutes(ROBOT_RESTART_MINUTES[0])+'–'+formatMinutes(ROBOT_RESTART_MINUTES[1]),'restart');
+    addChoice('Servicetechniker rufen',euro(ROBOT_TECHNICIAN_COST)+' · '+formatMinutes(ROBOT_TECHNICIAN_MINUTES[0])+'–'+formatMinutes(ROBOT_TECHNICIAN_MINUTES[1])+' · zuverlässig','technician',ROBOT_TECHNICIAN_COST);
+    $('event-count').textContent='Das Spiel ist pausiert, bis du den Roboter wieder einsatzbereit machst.';
+  }
   function renderEventWindow(){
     const overlay=$('event-window');
     if(!overlay)return;
@@ -992,6 +1117,10 @@
       }
       if(event.event==='quality_complaint'){
         renderQualityComplaintEvent(event);
+        return;
+      }
+      if(event.event==='robot_failure'){
+        renderRobotFailureEvent(event);
         return;
       }
     $('event-window').querySelector('.event-card').classList.remove('quality-event-card');
@@ -1311,6 +1440,7 @@
     if(!programReady(job(m))){const task=programTaskFor(programKey(job(m)));return task?`NC-Programmierung · ${formatMinutes(programmingETA(job(m),m))}`:'NC-Programm fehlt';}
     const shift=shiftAt(state.gameMinutes);
     if(!shift)return 'Betrieb geschlossen';
+    if(shift===2&&m.loadingRobot&&!robotAvailable(m))return m.robotRepairRemainingMinutes>0?'Laderoboter wird repariert · '+formatMinutes(m.robotRepairRemainingMinutes):'Laderoboter ausgefallen';
     if(!m['operator'+shift]&&!(shift===2&&m.loadingRobot))return `Kein Bediener Schicht ${shift}`;
     if(m.setupRemainingMinutes>0)return `${m.setupDelayMinutes?'Rüstproblem · ':''}Rüstzeit · ${formatMinutes(m.setupRemainingMinutes)}`;
     return 'Produktion läuft';
@@ -1874,15 +2004,17 @@
     });
   }
   function shiftLeaderStateKey(){
-    const shift=state.shiftLeader.shift===2?2:1;
+    const shift=shiftLeaderPanelShift===2?2:1,leader=shiftLeaderFor(shift)||{};
     const workers=(state.staffRoster['shift'+shift]||[]).map(employee=>employee.assignedBay||0).join(',');
     const machines=state.machines.map(machine=>[
-      machine.bay,machine['operator'+shift],shift===2&&machine.loadingRobot,machine.activeId,
+      machine.bay,machine['operator'+shift],shift===2&&robotAvailable(machine),machine.robotFault,machine.robotRepairRemainingMinutes>0,machine.activeId,
       machine.orderQueue.map(entry=>entry.order.id).join(','),machine.qualityReworkQueue.length,
-      machine.tool<=25,spareToolCount(machine)>0,machine.maintenance<=45,machine.maintenanceRemainingMinutes>0,
+      machine.tool<=40,spareToolCount(machine)>0,machine.maintenance<=65,machine.maintenanceRemainingMinutes>0,
       breakdownSystem.getStatus(state,machine.bay)
     ].join(':')).join('|');
-    return [state.shiftLeader.hired,shift,workers,machines,state.money>=SHIFT_LEADER_SETUP_COST,state.money>=PREVENTIVE_MAINTENANCE_COST].join('::');
+    return [shift,leader.hired,leader.autoMaintenance,leader.autoTools,leader.autoBreakdowns,leader.spendingLimit,leader.nextDecisionAt,
+      workers,machines,state.shiftLeader.shift1.hired,state.shiftLeader.shift2.hired,
+      state.money>=SHIFT_LEADER_SETUP_COST,state.money>=PREVENTIVE_MAINTENANCE_COST,state.money>=ROBOT_TECHNICIAN_COST].join('::');
   }
   function shiftLeaderRecommendations(shift){
     const recommendations=[];
@@ -1945,7 +2077,8 @@
         action:()=>moveQueuedOrder(bestSwap.machine,bestSwap.index,-1)
       });
     }
-    const toolMachine=state.machines.find(machine=>
+    const leader=shiftLeaderFor(shift);
+    const toolMachine=leader?.autoTools?null:state.machines.find(machine=>
       !job(machine)&&machine.orderQueue.length===0&&!machine.qualityReworkQueue.length&&
       machine.maintenanceRemainingMinutes<=0&&machine.tool<=25&&spareToolCount(machine)>0&&
       machine['operator'+shift]&&assignedEmployee(machine,shift)&&breakdownSystem.getStatus(state,machine.bay)==='ok'
@@ -1958,7 +2091,7 @@
         action:()=>changeMachineTool(toolMachine)
       });
     }
-    const maintenanceMachine=state.machines.filter(machine=>
+    const maintenanceMachine=leader?.autoMaintenance?null:state.machines.filter(machine=>
       !job(machine)&&machine.orderQueue.length===0&&!machine.qualityReworkQueue.length&&
       machine.maintenanceRemainingMinutes<=0&&machine.maintenance<=45&&canMaintain(machine)
     ).sort((a,b)=>a.maintenance-b.maintenance)[0];
@@ -1986,46 +2119,87 @@
     let panel=$('shift-leader-panel');
     if(!panel){
       panel=document.createElement('section');panel.id='shift-leader-panel';panel.className='office-panel shift-leader-panel';
-      const title=document.createElement('h3');title.textContent='Schichtleiter';
-      const intro=document.createElement('p');intro.className='hint';intro.textContent='Organisiert den laufenden Betrieb – getrennt vom Disponenten. Zu Beginn macht die Schichtleitung Vorschläge; du entscheidest, welche übernommen werden.';
+      const style=document.createElement('style');
+      style.textContent='.shift-leader-policy-grid{display:grid;gap:5px;margin:8px 0}.shift-leader-policy{display:flex;align-items:flex-start;gap:8px;padding:7px 9px;border-radius:7px;background:#102832;color:#d6e6e9;font-size:11px;line-height:1.35}.shift-leader-policy input{margin:1px 0 0;accent-color:#78d7a5}.shift-leader-limit{margin-top:7px}';
+      document.head.append(style);
+      const title=document.createElement('h3');title.textContent='Schichtleitung';
+      const intro=document.createElement('p');intro.className='hint';intro.textContent='Bis zu ein Schichtleiter je Schicht. Sie kümmern sich automatisch um Wartung, Werkzeuge und Störungen innerhalb deines Ausgabenlimits.';
       const status=document.createElement('p');status.id='shift-leader-status';status.className='hint';
-      const hire=document.createElement('button');hire.id='hire-shift-leader';hire.type='button';hire.className='action full-action';
-      hire.addEventListener('click',hireShiftLeader);
-      const controls=document.createElement('div');controls.id='shift-leader-controls';controls.className='shift-leader-controls';
-      const label=document.createElement('label');label.className='office-setting';
-      const labelText=document.createElement('span');labelText.textContent='Betreute Schicht';
+      const shiftLabel=document.createElement('label');shiftLabel.className='office-setting';
+      const shiftText=document.createElement('span');shiftText.textContent='Schicht auswählen';
       const select=document.createElement('select');select.id='shift-leader-shift';
       for(const [value,text] of [[1,'S1 · Frühschicht'],[2,'S2 · Spätschicht']]){
         const option=document.createElement('option');option.value=String(value);option.textContent=text;select.append(option);
       }
       select.addEventListener('change',()=>{
-        state.shiftLeader.shift=Number(select.value)===2?2:1;
-        save();renderShiftLeader();say('Schichtleiter betreut jetzt Schicht '+state.shiftLeader.shift+'.');
+        shiftLeaderPanelShift=Number(select.value)===2?2:1;
+        renderShiftLeader();
       });
-      label.append(labelText,select);controls.append(label);
+      shiftLabel.append(shiftText,select);
+      const hire=document.createElement('button');hire.id='hire-shift-leader';hire.type='button';hire.className='action full-action';
+      hire.addEventListener('click',()=>hireShiftLeader(shiftLeaderPanelShift));
+      const controls=document.createElement('div');controls.id='shift-leader-controls';controls.className='shift-leader-controls';
+      const policies=document.createElement('div');policies.id='shift-leader-policy-grid';policies.className='shift-leader-policy-grid';
+      const policyOptions=[
+        ['autoMaintenance','Vorbeugende Wartung im Leerlauf selbst einplanen'],
+        ['autoTools','Ersatzwerkzeuge bereitstellen und verschlissene Werkzeuge wechseln'],
+        ['autoBreakdowns','Maschinen- und Roboterausfälle selbst behandeln']
+      ];
+      for(const [key,labelText] of policyOptions){
+        const label=document.createElement('label');label.className='shift-leader-policy';
+        const input=document.createElement('input');input.type='checkbox';input.id='shift-leader-'+key;
+        const text=document.createElement('span');text.textContent=labelText;
+        input.addEventListener('change',()=>{
+          const leader=shiftLeaderFor(shiftLeaderPanelShift);
+          if(!leader?.hired)return;
+          leader[key]=input.checked;save();renderShiftLeader();
+          say(input.checked?'Automatische Entscheidung der Schichtleitung aktiviert.':'Automatische Entscheidung der Schichtleitung deaktiviert.');
+        });
+        label.append(input,text);policies.append(label);
+      }
+      const limitLabel=document.createElement('label');limitLabel.className='office-setting shift-leader-limit';
+      const limitText=document.createElement('span');limitText.textContent='Ausgabenlimit je Maßnahme';
+      const limit=document.createElement('select');limit.id='shift-leader-limit';
+      for(const amount of SHIFT_LEADER_SPENDING_LIMITS){
+        const option=document.createElement('option');option.value=String(amount);option.textContent=euro(amount);limit.append(option);
+      }
+      limit.addEventListener('change',()=>{
+        const leader=shiftLeaderFor(shiftLeaderPanelShift);
+        if(!leader?.hired)return;
+        leader.spendingLimit=Number(limit.value);save();renderShiftLeader();
+        say('Ausgabenlimit der Schichtleitung angepasst.');
+      });
+      limitLabel.append(limitText,limit);controls.append(policies,limitLabel);
       const list=document.createElement('div');list.id='shift-leader-recommendations';list.className='shift-leader-recommendations';
-      panel.append(title,intro,status,hire,controls,list);parent.append(panel);
+      panel.append(title,intro,status,shiftLabel,hire,controls,list);parent.append(panel);
     }
+    const shift=shiftLeaderPanelShift===2?2:1,leader=shiftLeaderFor(shift),unlocked=state.factoryExpansion.level>=2;
     shiftLeaderAdviceKey=shiftLeaderStateKey();
-    const leader=state.shiftLeader,unlocked=state.factoryExpansion.level>=2;
     const status=$('shift-leader-status'),hire=$('hire-shift-leader'),controls=$('shift-leader-controls'),list=$('shift-leader-recommendations');
-    hire.hidden=leader.hired;hire.disabled=!unlocked||state.money<SHIFT_LEADER_SETUP_COST;
-    hire.textContent=unlocked?'Schichtleiter einstellen · '+euro(SHIFT_LEADER_SETUP_COST):'Ab Hallenausbau auf 6 Plätze';
+    $('shift-leader-shift').value=String(shift);
+    const hiredCount=[1,2].filter(slot=>shiftLeaderFor(slot)?.hired).length;
+    hire.hidden=!!leader.hired;
+    hire.disabled=!unlocked||!!leader.hired||hiredCount>=2||state.money<SHIFT_LEADER_SETUP_COST;
+    hire.textContent=leader.hired?'Für diese Schicht bereits besetzt'
+      :!unlocked?'Ab Hallenausbau auf 6 Plätze'
+      :hiredCount>=2?'Beide Schichten sind bereits besetzt'
+      :'Schichtleiter für S'+shift+' einstellen · '+euro(SHIFT_LEADER_SETUP_COST);
     status.textContent=leader.hired
-      ?'Besetzt · S'+leader.shift+' · '+euro(SHIFT_LEADER_HOURLY_WAGE)+' je Stunde dieser Schicht.'
-      :unlocked?'Noch unbesetzt · einmalig '+euro(SHIFT_LEADER_SETUP_COST)+' und '+euro(SHIFT_LEADER_HOURLY_WAGE)+' je Stunde in der betreuten Schicht.'
-      :'Wird mit der ersten Hallenerweiterung auf 6 Plätze verfügbar.';
+      ?'Besetzt · S'+shift+' · '+euro(SHIFT_LEADER_HOURLY_WAGE)+' je Stunde dieser Schicht · Ausgabenlimit '+euro(leader.spendingLimit)+' je Maßnahme.'
+      :unlocked?'S'+shift+' ist noch unbesetzt · '+euro(SHIFT_LEADER_SETUP_COST)+' einmalig, danach '+euro(SHIFT_LEADER_HOURLY_WAGE)+' je Stunde in dieser Schicht.'
+      :'Schichtleitung wird mit dem Hallenausbau auf 6 Plätze verfügbar.';
     controls.hidden=!leader.hired;
     if(!leader.hired){
       list.replaceChildren();
-      const note=document.createElement('p');note.className='hint';note.textContent='Die Schichtleitung weist Bediener ein, verbessert bei Bedarf die Warteschlange und empfiehlt Wartung oder Werkzeugwechsel im Leerlauf.';
+      const note=document.createElement('p');note.className='hint';note.textContent='Stelle bis zu zwei Personen ein – jeweils eine für Früh- und Spätschicht.';
       list.append(note);return;
     }
-    $('shift-leader-shift').value=String(leader.shift);
-    const suggestions=shiftLeaderRecommendations(leader.shift);
+    for(const key of ['autoMaintenance','autoTools','autoBreakdowns'])$('shift-leader-'+key).checked=leader[key]!==false;
+    $('shift-leader-limit').value=String(leader.spendingLimit);
+    const suggestions=shiftLeaderRecommendations(shift);
     if(!suggestions.length){
       list.replaceChildren();
-      const quiet=document.createElement('p');quiet.className='shift-leader-clear';quiet.textContent='Aktuell keine dringenden Besetzungs-, Frist- oder Wartungsvorschläge.';
+      const quiet=document.createElement('p');quiet.className='shift-leader-clear';quiet.textContent='Aktuell gibt es keine offene Besetzungs- oder Auftragsreihenfolge. Die Automatik erledigt die aktivierten Aufgaben innerhalb des Ausgabenlimits.';
       list.append(quiet);return;
     }
     list.replaceChildren(...suggestions.map(suggestion=>{
@@ -2035,12 +2209,15 @@
       button.addEventListener('click',suggestion.action);card.append(heading,detail,button);return card;
     }));
   }
-  function hireShiftLeader(){
-    if(state.shiftLeader.hired||state.factoryExpansion.level<2||state.money<SHIFT_LEADER_SETUP_COST)return;
-    if(!book('other',-SHIFT_LEADER_SETUP_COST,'Schichtleiter eingestellt',{role:'shift_leader',shift:state.shiftLeader.shift,hourlyWage:SHIFT_LEADER_HOURLY_WAGE}).ok)return;
-    state.shiftLeader.hired=true;
+  function hireShiftLeader(shift=shiftLeaderPanelShift){
+    shift=Number(shift)===2?2:1;
+    const leader=shiftLeaderFor(shift);
+    if(!leader||leader.hired||state.factoryExpansion.level<2||state.money<SHIFT_LEADER_SETUP_COST||
+      [1,2].filter(slot=>shiftLeaderFor(slot)?.hired).length>=2)return;
+    if(!book('other',-SHIFT_LEADER_SETUP_COST,'Schichtleiter eingestellt',{role:'shift_leader',shift,hourlyWage:SHIFT_LEADER_HOURLY_WAGE}).ok)return;
+    leader.hired=true;leader.nextDecisionAt=state.gameMinutes;
     save();renderBusiness();render();
-    say('Schichtleiter eingestellt. Er macht Vorschläge für Besetzung, Auftragsreihenfolge und Wartung.');
+    say('Schichtleiter für Schicht '+shift+' eingestellt. Wartung, Werkzeuge und Störungen können innerhalb deines Limits automatisch betreut werden.');
   }
     function hireOrderOffice(){
     if(state.orderOffice.hired||state.factoryExpansion.level<2||state.money<ORDER_OFFICE_SETUP_COST)return;
@@ -2213,7 +2390,7 @@
       return card;
     }));
     $('operator-1').textContent=m?(m.operator1?'S1 abziehen':'S1 zuweisen'):'Keine Maschine';
-    $('operator-2').textContent=m?(m.loadingRobot?'S2 · Roboter aktiv':m.operator2?'S2 abziehen':'S2 zuweisen'):'Keine Maschine';
+    $('operator-2').textContent=m?(m.loadingRobot?(robotAvailable(m)?'S2 · Roboter aktiv':m.robotRepairRemainingMinutes>0?'S2 · Roboter Reparatur':'S2 · Roboter gestört'):m.operator2?'S2 abziehen':'S2 zuweisen'):'Keine Maschine';
     $('buy-robot').textContent=m?.loadingRobot?'Laderoboter installiert':`Laderoboter kaufen · ${euro(LOADING_ROBOT_COST)}`;
     $('buy-robot').disabled=!m||m.loadingRobot||state.money<LOADING_ROBOT_COST;
     $('sell-machine-value').textContent=m?euro(resaleValue(m)):'—';
@@ -2728,8 +2905,9 @@
       if(shift)state.payrollDue+=state.staff['shift'+shift]*(shift===1?24:26)*step/60;
       if(state.orderOffice.hired&&officeOpenAt(state.gameMinutes))state.payrollDue+=ORDER_OFFICE_HOURLY_WAGE*step/60;
       if(state.programmer.hired&&shift===1)state.payrollDue+=PROGRAMMER_HOURLY_WAGE*step/60;
-      if(state.shiftLeader.hired&&shift===state.shiftLeader.shift)state.payrollDue+=SHIFT_LEADER_HOURLY_WAGE*step/60;
-      if(shift)for(const machine of state.machines)autoReplaceWornTool(machine,shift);
+      const leader=shiftLeaderFor(shift);
+      if(shift&&leader?.hired)state.payrollDue+=SHIFT_LEADER_HOURLY_WAGE*step/60;
+      if(shift){for(const machine of state.machines)autoReplaceWornTool(machine,shift);runShiftLeaderAutomation(shift);}
       const storageCharge=state.material*STORAGE_RATE*step/1440;
       if(storageCharge>0){
         const dateKey=gameDateKey();
@@ -2738,6 +2916,16 @@
       }
       const faultEvents=breakdownSystem.tick(state,step,{operatingBays:state.machines.filter(readyToRun).map(m=>m.bay)});
       for(const event of faultEvents)handleBreakdownEvent(event);
+      if(!state.paused&&shift===2){
+        for(const machine of state.machines){
+          if(!machine.loadingRobot||!robotAvailable(machine)||!readyToRun(machine)||!breakdownSystem.canContinueProduction(state,machine.bay))continue;
+          const chance=1-Math.exp(-ROBOT_FAILURE_RATE_PER_HOUR*step/60);
+          if(Math.random()<chance){
+            handleRobotFailureEvent({event:'robot_failure',id:'robot_failure:'+machine.bay+':'+Math.floor(state.gameMinutes+step),bay:machine.bay,since:state.gameMinutes+step});
+            if(state.paused)break;
+          }
+        }
+      }
       if(!state.paused)tickProgrammer(step,shift);
       for(const m of state.machines){
         if(m.operatorProgramming){
@@ -2808,6 +2996,13 @@
       }
       state.gameMinutes+=step;left-=step;
       for(const m of state.machines){
+        if(m.robotRepairRemainingMinutes>0){
+          m.robotRepairRemainingMinutes=Math.max(0,m.robotRepairRemainingMinutes-step);
+          if(m.robotRepairRemainingMinutes===0&&m.robotFault){
+            m.robotFault=false;save();
+            say('Platz '+m.bay+': Laderoboter wieder einsatzbereit.');
+          }
+        }
         if(!(m.maintenanceRemainingMinutes>0))continue;
         m.maintenanceRemainingMinutes=Math.max(0,m.maintenanceRemainingMinutes-step);
         if(m.maintenanceRemainingMinutes===0){
@@ -2841,6 +3036,62 @@
     if(currentPanel==='business'||currentPanel==='warehouse')renderCosts();
     if(currentPanel==='business'){updateStaffDevelopment();renderProgrammer();renderCreditPanel();if(shiftLeaderAdviceKey!==shiftLeaderStateKey())renderShiftLeader();}
   }
+  function tryShiftLeaderRepair(event){
+    const shift=shiftAt(state.gameMinutes),leader=shiftLeaderFor(shift);
+    if(!leader?.hired||!leader.autoBreakdowns)return false;
+    const options=breakdownSystem.getRepairOptions(state,event.bay);
+    if(!options)return false;
+    const selfChance=Number(options.self.failureChance);
+    const selfAllowed=!event.selfRepairFailed&&options.self.allowed!==false&&Number.isFinite(selfChance);
+    let action=null;
+    if(selfAllowed&&selfChance>=.9&&options.self.cost<=leader.spendingLimit&&options.self.cost<=state.money&&
+      options.self.cost<=options.technician.cost&&options.self.downtime<options.technician.downtime){
+      action='repairSelf';
+    }else if(options.technician.cost<=leader.spendingLimit&&options.technician.cost<=state.money){
+      action='repairTechnician';
+    }else if(selfAllowed&&selfChance>=.72&&options.self.cost<=leader.spendingLimit&&options.self.cost<=state.money){
+      action='repairSelf';
+    }
+    if(!action)return false;
+    const started=chooseBreakdown(action,event.bay);
+    if(started)say('Schichtleiter S'+shift+' hat die Reparatur auf Platz '+event.bay+' selbst eingeleitet.');
+    return started;
+  }
+  function resolveRobotFailureEvent(event,method,automatic=false){
+    const machine=machineAt(event?.bay);
+    if(!machine||!machine.loadingRobot)return false;
+    let duration;
+    if(method==='technician'){
+      if(state.money<ROBOT_TECHNICIAN_COST)return false;
+      const payment=book('repairs',-ROBOT_TECHNICIAN_COST,'Laderoboter repariert',{bay:machine.bay,type:machine.type,method:'technician'});
+      if(!payment.ok)return false;
+      duration=ROBOT_TECHNICIAN_MINUTES[0]+Math.floor(Math.random()*(ROBOT_TECHNICIAN_MINUTES[1]-ROBOT_TECHNICIAN_MINUTES[0]+1));
+    }else{
+      duration=ROBOT_RESTART_MINUTES[0]+Math.floor(Math.random()*(ROBOT_RESTART_MINUTES[1]-ROBOT_RESTART_MINUTES[0]+1));
+    }
+    machine.robotFault=true;machine.robotRepairRemainingMinutes=duration;
+    const eventIndex=state.eventQueue.findIndex(item=>item.id===event.id);
+    if(eventIndex>=0)state.eventQueue.splice(eventIndex,1);
+    state.paused=state.eventQueue.length>0;
+    say((automatic?'Schichtleiter S2 hat den Laderoboter':'Laderoboter')+' auf Platz '+machine.bay+
+      (method==='technician'?' durch den Servicetechniker reparieren lassen':' neu gestartet')+' · wieder einsatzbereit in '+formatMinutes(duration)+'.');
+    save();render();renderBusiness();renderEventWindow();
+    return true;
+  }
+  function handleRobotFailureEvent(event){
+    const machine=machineAt(event?.bay);
+    if(!machine||!machine.loadingRobot)return false;
+    machine.robotFault=true;
+    const leader=shiftLeaderFor(2);
+    if(leader?.hired&&leader.autoBreakdowns){
+      const method=leaderCanSpend(leader,ROBOT_TECHNICIAN_COST)?'technician':'restart';
+      if(resolveRobotFailureEvent(event,method,true))return true;
+    }
+    state.eventQueue=Array.isArray(state.eventQueue)?state.eventQueue:[];
+    if(!state.eventQueue.some(item=>item.id===event.id))state.eventQueue.push(event);
+    state.paused=true;save();renderEventWindow();
+    return true;
+  }
   function handleBreakdownEvent(event){
     if(!event)return;
     if(event.cost>0&&['repair','repair_scheduled','major_failure'].includes(event.event)){
@@ -2857,6 +3108,7 @@
       }
     }
     if(event.event==='warning'||event.event==='major_failure'){
+      if(tryShiftLeaderRepair(event)){save();return;}
       state.speed=1;
       state.eventQueue=Array.isArray(state.eventQueue)?state.eventQueue:[];
       const id=event.id||`${event.event}:${event.bay}:${event.since??state.gameMinutes}`;
