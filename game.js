@@ -5,7 +5,7 @@
   const euroExact = amount => '€ ' + amount.toLocaleString('de-DE',{minimumFractionDigits:2,maximumFractionDigits:2});
   const SAVE_KEY = 'cnc_factory_save_v3';
   const START = Date.UTC(2026, 0, 5, 6);
-  const GAME_MINUTES_PER_REAL_SECOND = 8;
+  const GAME_MINUTES_PER_REAL_SECOND = 10;
   const HIRING_FEE = 150;
   const TRAINING_BASE_COST = 900;
   const PREVENTIVE_MAINTENANCE_COST = 1200;
@@ -62,6 +62,7 @@
   const freshMachine = (bay, type='standard') => ({
     bay,type,purchasePrice:catalog[type].price,level:1,maintenance:90,maintenanceRemainingMinutes:0,tool:82,operator1:false,operator2:false,loadingRobot:false,
     activeId:null,activeOrder:null,activeOrderSource:null,progress:0,produced:0,deadlineAt:null,
+    setupDurationMinutes:0,setupRemainingMinutes:0,setupDelayMinutes:0,setupPartProduced:false,
     orderQueue:[]
   });
   const defaults = () => ({
@@ -84,7 +85,13 @@
       state={...defaults(),...stored};
       expansionSystem.init(state);
       state.machines=stored.machines.filter(validMachine).map(m=>{
+        const hasSetupState=Object.prototype.hasOwnProperty.call(m,'setupDurationMinutes');
         const machine={...freshMachine(m.bay,m.type),...m};
+        if(!hasSetupState&&machine.activeId)machine.setupPartProduced=true;
+        machine.setupDurationMinutes=Math.max(0,Number(machine.setupDurationMinutes)||0);
+        machine.setupRemainingMinutes=Math.min(machine.setupDurationMinutes,Math.max(0,Number(machine.setupRemainingMinutes)||0));
+        machine.setupDelayMinutes=Math.max(0,Number(machine.setupDelayMinutes)||0);
+        machine.setupPartProduced=!!machine.setupPartProduced;
         if(!Number.isFinite(m.purchasePrice))machine.purchasePrice=LEGACY_MACHINE_PRICES[m.type]||catalog[m.type].price;
         return machine;
       });
@@ -145,6 +152,7 @@
       const next=m.orderQueue.shift();
       m.activeId=next.order.id;m.activeOrder=next.order;m.activeOrderSource='market';
       m.progress=0;m.produced=0;m.deadlineAt=next.deadlineAt;
+      m.setupDurationMinutes=0;m.setupRemainingMinutes=0;m.setupDelayMinutes=0;m.setupPartProduced=false;
     }
   });
   state.speed=[1,2,5,10].includes(state.speed)?state.speed:1;
@@ -285,6 +293,58 @@
       (1+.05*skillLevel(employee))*recruitmentSystem.productionMultiplier(employee,catalog[m.type].kind);
   };
   const productionFactor=m=>productionFactorForShift(m,shiftAt(state.gameMinutes)||1);
+  const setupMinutesForOrder=order=>{
+    const difficulty=Math.min(5,Math.max(1,Number(order?.difficulty)||1));
+    const quantity=Math.max(1,Number(order?.qty)||1);
+    const duration=Math.max(0,Number(order?.duration)||0);
+    const complexity=(difficulty-1)*24+
+      Math.min(60,Math.max(0,quantity-15)*.7)+
+      Math.min(45,Math.max(0,duration-40)*.65)+
+      (order?.kind==='Fräsen'?20:0);
+    return Math.min(240,Math.max(60,Math.round((60+complexity)/15)*15));
+  };
+  const setupProblemChance=(machine,order)=>{
+    const difficulty=Math.min(5,Math.max(1,Number(order?.difficulty)||1));
+    const maintenance=Math.max(0,Math.min(100,Number(machine?.maintenance)||0));
+    const tool=Math.max(0,Math.min(100,Number(machine?.tool)||0));
+    return Math.min(.55,.1+(difficulty-1)*.035+Math.max(0,70-maintenance)*.003+Math.max(0,60-tool)*.002);
+  };
+  const expectedSetupMinutes=(machine,order)=>setupMinutesForOrder(order)+setupProblemChance(machine,order)*75;
+  function beginMachineSetup(machine,order){
+    const baseMinutes=setupMinutesForOrder(order);
+    const delayMinutes=Math.random()<setupProblemChance(machine,order)?30+Math.floor(Math.random()*7)*15:0;
+    const totalMinutes=baseMinutes+delayMinutes;
+    machine.setupDurationMinutes=totalMinutes;
+    machine.setupRemainingMinutes=totalMinutes;
+    machine.setupDelayMinutes=delayMinutes;
+    machine.setupPartProduced=false;
+    machine.progress=0;
+    machine.produced=0;
+    return {baseMinutes,delayMinutes,totalMinutes};
+  }
+  const orderProgressPercent=(machine,order)=>{
+    if(!machine||!order)return 0;
+    const quantity=Math.max(1,Number(order.qty)||1);
+    if(!machine.setupPartProduced&&machine.setupDurationMinutes>0){
+      const setupProgress=Math.max(0,Math.min(1,1-machine.setupRemainingMinutes/machine.setupDurationMinutes));
+      return 100/quantity*setupProgress;
+    }
+    return Math.max(0,Math.min(100,Number(machine.progress)||0));
+  };
+  const remainingMinutes=(machine,order,factor=productionFactor(machine))=>{
+    if(!machine||!order)return 0;
+    const quantity=Math.max(1,Number(order.qty)||1);
+    const productionProgress=machine.setupPartProduced
+      ?machine.progress
+      :Math.max(machine.progress,100/quantity);
+    const setupRemaining=machine.setupPartProduced?0:Math.max(0,Number(machine.setupRemainingMinutes)||0);
+    return setupRemaining+Math.max(0,(100-productionProgress)*order.duration*6/(100*factor));
+  };
+  const plannedOrderMinutes=(machine,order,factor)=>{
+    if(!order||!Number.isFinite(order.duration))return 0;
+    const quantity=Math.max(1,Number(order.qty)||1);
+    return expectedSetupMinutes(machine,order)+Math.max(0,(quantity-1)/quantity)*order.duration*6/factor;
+  };
   function plannedMachineLoad(machine,additionalOrder=null){
     const shifts=[1,2].filter(shift=>machine['operator'+shift]||(shift===2&&machine.loadingRobot));
     const capacityMinutes=shifts.length*8*60;
@@ -292,14 +352,13 @@
       ?shifts.reduce((sum,shift)=>sum+productionFactorForShift(machine,shift),0)/shifts.length
       :productionFactor(machine);
     const active=job(machine);
-    let plannedMinutes=active?Math.max(0,(100-machine.progress)*active.duration*6/(100*factor)):0;
+    let plannedMinutes=active?remainingMinutes(machine,active,factor):0;
     for(const entry of machine.orderQueue){
-      if(Number.isFinite(entry.order?.duration))plannedMinutes+=entry.order.duration*6/factor;
+      plannedMinutes+=plannedOrderMinutes(machine,entry.order,factor);
     }
-    if(Number.isFinite(additionalOrder?.duration))plannedMinutes+=additionalOrder.duration*6/factor;
+    if(Number.isFinite(additionalOrder?.duration))plannedMinutes+=plannedOrderMinutes(machine,additionalOrder,factor);
     return {shifts,capacityMinutes,plannedMinutes,percent:capacityMinutes?plannedMinutes/capacityMinutes*100:null};
   }
-  const remainingMinutes=(m,o)=>o?Math.max(0,(100-m.progress)*o.duration*6/(100*productionFactor(m))):0;
   const formatMinutes=min=>{
     min=Math.max(0,Math.ceil(min));
     const hours=Math.floor(min/60),mins=min%60;
@@ -440,6 +499,7 @@
     const shift=shiftAt(state.gameMinutes);
     if(!shift)return 'Betrieb geschlossen';
     if(!m['operator'+shift]&&!(shift===2&&m.loadingRobot))return `Kein Bediener Schicht ${shift}`;
+    if(m.setupRemainingMinutes>0)return `${m.setupDelayMinutes?'Rüstproblem · ':''}Rüstzeit · ${formatMinutes(m.setupRemainingMinutes)}`;
     return 'Produktion läuft';
   }
   function setBusinessSection(name){
@@ -499,9 +559,10 @@
     const order=job(machine);
     $('hall-preview-title').textContent=`${catalog[machine.type].name} · Platz ${machine.bay}`;
     $('hall-preview-meta').textContent=`${catalog[machine.type].kind} · Level ${machine.level} · ${statusFor(machine)}`;
-    $('hall-preview-job').textContent=order?`${order.part} · ${machine.produced}/${order.qty} Teile · ${Math.floor(machine.progress)} %`:'Kein laufender Auftrag';
+    const progress=order?orderProgressPercent(machine,order):0;
+    $('hall-preview-job').textContent=order?`${order.part} · ${machine.produced}/${order.qty} Teile · ${machine.setupRemainingMinutes>0?'Rüstphase':`${Math.floor(progress)} %`}`:'Kein laufender Auftrag';
     $('hall-preview-progress').hidden=!order;
-    for(const [name,value] of [['progress',order?machine.progress:0],['tool',machine.tool],['maintenance',machine.maintenance]]){
+    for(const [name,value] of [['progress',progress],['tool',machine.tool],['maintenance',machine.maintenance]]){
       const fill=$(`hall-preview-${name}-fill`);
       fill.style.width=Math.max(0,Math.min(100,value))+'%';
       fill.className='preview-meter-fill '+(name==='progress'?'progress':value<=15?'low':value<=40?'medium':'good');
@@ -1158,7 +1219,7 @@
     }));
   }
   function render(){
-    const m=selectedMachine(),o=job(m),pct=m?Math.max(0,Math.min(100,m.progress)):0;
+    const m=selectedMachine(),o=job(m),pct=m?orderProgressPercent(m,o):0;
     const layout=expansionSystem.getLayoutConfig(state),hallMap=$('hall-map');
     hallMap.classList.toggle('expanded',layout.level>1);
     hallMap.classList.toggle('six-bay',layout.level===2);
@@ -1184,7 +1245,7 @@
     $('parts').textContent=`${state.machines.length} / ${layout.unlockedBays}`;
     $('part-name').textContent=o?o.part:m?'Auftrag auswählen':'Erste Maschine kaufen';
     $('progress').style.width=pct+'%';
-    $('progress-label').textContent=o?`${Math.floor(pct)} % · ${m.produced} / ${o.qty} · ${statusFor(m)}`:m?statusFor(m):'Öffne Betrieb und wähle deine erste Maschine.';
+    $('progress-label').textContent=o?(m.setupRemainingMinutes>0?`${m.setupDelayMinutes?`Einrichtungsproblem +${formatMinutes(m.setupDelayMinutes)} · `:''}Rüstphase · ${formatMinutes(m.setupRemainingMinutes)} · ${m.produced} / ${o.qty} Teile`:`${Math.floor(pct)} % · ${m.produced} / ${o.qty} · ${statusFor(m)}`):m?statusFor(m):'Öffne Betrieb und wähle deine erste Maschine.';
     $('clock').textContent=clock();
     $('status').textContent='● '+statusFor(m);
     $('status').classList.toggle('paused',state.paused);
@@ -1349,11 +1410,12 @@
       return true;
     }
     m.activeId=accepted.id;m.activeOrder=accepted;m.activeOrderSource='market';m.progress=0;m.produced=0;
+    const setupPlan=beginMachineSetup(m,accepted);
     m.deadlineAt=state.gameMinutes+accepted.deadlineHours*60;
     if(state.warehouseOrderSnapshot?.id===accepted.id)state.warehouseOrderSnapshot=null;
     if(!options.automatic)state.selected=null;
     save();renderOrders();renderBusiness();render();
-    if(!options.automatic){closeDrawer();showMachine(m.bay);say(`${accepted.part} auf Platz ${m.bay} angenommen. ${statusFor(m)}.`);}
+    if(!options.automatic){closeDrawer();showMachine(m.bay);say(`${accepted.part} auf Platz ${m.bay} angenommen. Rüstzeit ${formatMinutes(setupPlan.totalMinutes)}${setupPlan.delayMinutes?` · Einrichtungsproblem verlängert um ${formatMinutes(setupPlan.delayMinutes)}`:''}.`);}
     return true;
   }
   function officeOpenAt(minutes){
@@ -1569,19 +1631,37 @@
       for(const event of faultEvents)handleBreakdownEvent(event);
       for(const m of state.machines){
         const o=job(m);
-        if(!o||!operating(m))continue;
+        if(!o)continue;
+        if(!m.setupPartProduced&&m.setupRemainingMinutes<=0)beginMachineSetup(m,o);
+        if(!operating(m))continue;
         const power=(MACHINE_POWER_COST_PER_HOUR+(shift===2&&m.loadingRobot?ROBOT_POWER_COST_PER_HOUR:0))*step/60;
         const dateKey=gameDateKey();
         book('energy',-power,'Stromkosten laufende Maschinen',{gameDate:dateKey},`daily:energy:${dateKey}`);
         state.energyPaid+=power;
         const employee=assignedEmployee(m,shift);
         const factor=productionFactor(m);
-        const gain=100/o.duration*(step/6)*factor;
-        m.progress=Math.min(100,m.progress+gain);
+        let productionStep=step;
+        if(!m.setupPartProduced&&m.setupRemainingMinutes>0){
+          const setupStep=Math.min(step,m.setupRemainingMinutes);
+          m.setupRemainingMinutes=Math.max(0,m.setupRemainingMinutes-setupStep);
+          productionStep=Math.max(0,productionStep-setupStep);
+          if(m.setupRemainingMinutes<=1e-8){
+            m.setupRemainingMinutes=0;m.setupPartProduced=true;
+            const firstPartProgress=100/Math.max(1,o.qty);
+            m.progress=Math.max(m.progress,firstPartProgress);
+            m.produced=Math.min(o.qty,Math.max(1,Math.floor(o.qty*m.progress/100)));
+            m.maintenance=Math.max(0,m.maintenance-firstPartProgress*.12);
+            m.tool=Math.max(0,m.tool-firstPartProgress*.18*recruitmentSystem.toolWearMultiplier(employee));
+          }
+        }
+        if(productionStep>1e-8){
+          const gain=100/o.duration*(productionStep/6)*factor;
+          m.progress=Math.min(100,m.progress+gain);
+          m.produced=Math.max(m.produced,Math.min(o.qty,Math.floor(o.qty*m.progress/100)));
+          m.maintenance=Math.max(0,m.maintenance-gain*.12);
+          m.tool=Math.max(0,m.tool-gain*.18*recruitmentSystem.toolWearMultiplier(employee));
+        }
         if(employee)employee.xp=Math.round((employee.xp+step*recruitmentSystem.learningMultiplier(employee))*1000)/1000;
-        m.produced=Math.min(o.qty,Math.floor(o.qty*m.progress/100));
-        m.maintenance=Math.max(0,m.maintenance-gain*.12);
-        m.tool=Math.max(0,m.tool-gain*.18*recruitmentSystem.toolWearMultiplier(employee));
         if(m.progress>=100){
           const late=m.deadlineAt!==null&&state.gameMinutes+step>m.deadlineAt;
           const payout=late?Math.round(o.reward*.8):o.reward;
@@ -1592,14 +1672,17 @@
           }
           state.completed++;
           m.activeId=null;m.activeOrder=null;m.activeOrderSource=null;m.progress=0;m.produced=0;m.deadlineAt=null;
+          m.setupDurationMinutes=0;m.setupRemainingMinutes=0;m.setupDelayMinutes=0;m.setupPartProduced=false;
           const next=m.orderQueue.shift();
+          let nextSetup=null;
           if(next){
             m.activeId=next.order.id;m.activeOrder=next.order;m.activeOrderSource='market';
             m.deadlineAt=next.deadlineAt;
+            nextSetup=beginMachineSetup(m,next.order);
           }
           state.speed=1;
           save();renderOrders();
-          say(`${catalog[m.type].name}: ${o.part} fertig · ${euro(payout)}${late?' (20 % Fristabzug)':''}${next?' · Nächster Auftrag gestartet':''}`);
+          say(`${catalog[m.type].name}: ${o.part} fertig · ${euro(payout)}${late?' (20 % Fristabzug)':''}${next?` · Nächster Auftrag gestartet · Rüstzeit ${formatMinutes(nextSetup.totalMinutes)}${nextSetup.delayMinutes?` · Einrichtungsproblem +${formatMinutes(nextSetup.delayMinutes)}`:''}`:''}`);
         }
       }
       state.gameMinutes+=step;left-=step;
