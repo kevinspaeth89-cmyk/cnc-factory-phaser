@@ -806,7 +806,7 @@
         if(machine.tool>40||spareToolCount(machine)>0||machine.maintenanceRemainingMinutes>0||
           breakdownSystem.getStatus(state,machine.bay)!=='ok')continue;
         if(leaderBuySpareTool(leader,machine)){
-          say('Schichtleiter S'+shift+' hat ein Reservewerkzeug für Platz '+machine.bay bereitgelegt.');
+          say('Schichtleiter S'+shift+' hat ein Reservewerkzeug für Platz '+machine.bay+' bereitgelegt.');
           changed=true;
           break;
         }
