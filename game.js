@@ -24,6 +24,8 @@
   const MAX_QUEUED_ORDERS = 3;
   const LOADING_ROBOT_COST = 8500;
   const ORDER_OFFICE_SETUP_COST = 12000;
+  const SHIFT_LEADER_SETUP_COST = 10000;
+  const SHIFT_LEADER_HOURLY_WAGE = 42;
   const ORDER_OFFICE_HOURLY_WAGE = 36;
   const ORDER_OFFICE_REVIEW_MINUTES = 30;
   const ORDER_OFFICE_MIN_DEADLINE_BUFFER_MINUTES = 30;
@@ -77,7 +79,8 @@
     payrollDue:0,wagesPaid:0,storagePaid:0,energyPaid:0,selected:null,selectedMaterialType:'c45',
     credit:{principal:0,originalAmount:0,annualRate:CREDIT_ANNUAL_RATE,paymentsRemaining:0,accruedInterest:0,nextPaymentAt:null,missedPayments:0},
     recruitment:{applicants:[],nextId:1},
-    orderOffice:{hired:false,autoPurchase:true,autoAccept:true,cashReserve:5000,maxMarketMarkupPct:0,minMaterialSurplus:1000,queueLimit:1,nextReviewAt:0}
+    orderOffice:{hired:false,autoPurchase:true,autoAccept:true,cashReserve:5000,maxMarketMarkupPct:0,minMaterialSurplus:1000,queueLimit:1,nextReviewAt:0},
+    shiftLeader:{hired:false,shift:1}
   });
   let state=defaults();
   function validMachine(m) {
@@ -236,6 +239,10 @@
     roster.nextId=Math.max(roster.nextId,...[...used].map(id=>id+1));
     state.staffRoster=roster;
   }
+  function ensureShiftLeaderState(){
+    const saved=state.shiftLeader&&typeof state.shiftLeader==='object'?state.shiftLeader:{};
+    state.shiftLeader={hired:!!saved.hired,shift:Number(saved.shift)===2?2:1};
+  }
   function ensureOrderOfficeState(){
     const saved=state.orderOffice&&typeof state.orderOffice==='object'?state.orderOffice:{};
     const choice=(value,allowed,fallback)=>allowed.includes(Number(value))?Number(value):fallback;
@@ -284,6 +291,7 @@
     expansionSystem.init(state);
     ensureStaffRoster();
     ensureOrderOfficeState();
+    ensureShiftLeaderState();
     ensureCreditState();
     recruitmentSystem.ensureState(state);
     economySystem.setTime(state,START+state.gameMinutes*60000);
@@ -710,8 +718,25 @@
   };
   const canMaintain=m=>!!m&&state.money>=PREVENTIVE_MAINTENANCE_COST&&m.maintenance<99&&
     !(m.maintenanceRemainingMinutes>0)&&breakdownSystem.getStatus(state,m.bay)==='ok';
+  function changeMachineTool(m){
+    if(!canChangeTool(m))return false;
+    const usingSpare=spareToolCount(m)>0;
+    if(usingSpare){if(!inventorySystem.consumeTool(state,m.type,1).ok)return false;}
+    else if(!book('tools',-650,'Werkzeugwechsel',{bay:m.bay,type:m.type}).ok)return false;
+    m.tool=100;save();renderBusiness();render();
+    say(usingSpare?'Reservewerkzeug eingesetzt.':'Werkzeug gewechselt.');
+    return true;
+  }
+  function startPreventiveMaintenance(m){
+    if(!canMaintain(m))return false;
+    if(!book('maintenance',-PREVENTIVE_MAINTENANCE_COST,'Vorbeugende Wartung gestartet',{bay:m.bay,type:m.type,durationMinutes:PREVENTIVE_MAINTENANCE_MINUTES}).ok)return false;
+    m.maintenanceRemainingMinutes=PREVENTIVE_MAINTENANCE_MINUTES;
+    save();renderBusiness();render();
+    say(catalog[m.type].name+': vorbeugende Wartung gestartet · '+formatMinutes(PREVENTIVE_MAINTENANCE_MINUTES)+' Stillstand.');
+    return true;
+  }
   const conditionLabel=value=>value>0&&value<1?'<1 %':Math.round(value)+' %';
-  let visual=null, currentPanel=null, businessSection='factory', messageTimer, zoomTimer, phaserGame=null, hallPreviewBay=null;
+  let visual=null, currentPanel=null, businessSection='factory', messageTimer, zoomTimer, phaserGame=null, hallPreviewBay=null, shiftLeaderAdviceKey='';
   function say(message){
     $('message').textContent=message;
     clearTimeout(messageTimer);
@@ -721,13 +746,14 @@
     if($('event-window'))return;
     const overlay=document.createElement('section'),card=document.createElement('article');
     const eyebrow=document.createElement('span'),title=document.createElement('h2'),detail=document.createElement('p');
-    const consequence=document.createElement('div'),orderTiming=document.createElement('div'),rushCapacity=document.createElement('section'),actions=document.createElement('div'),count=document.createElement('p');
+    const consequence=document.createElement('div'),managerAdvice=document.createElement('p'),orderTiming=document.createElement('div'),rushCapacity=document.createElement('section'),actions=document.createElement('div'),count=document.createElement('p');
     const rushStyle=document.createElement('style');
-    rushStyle.textContent='.rush-machine-actions{display:grid;grid-template-columns:1fr;gap:5px;margin-top:6px}.rush-machine-choice{width:100%;min-height:38px;padding:6px 8px;text-align:left;font-size:10px;line-height:1.25}.rush-machine-choice small{display:block;margin-top:3px;color:#d1dcdf;font-size:9px;font-weight:600;line-height:1.3}.rush-interrupt-choice{background:#644426;border-color:#d3944d}.rush-capacity-rows{max-height:min(38vh,330px)}';
+    rushStyle.textContent='.rush-machine-actions{display:grid;grid-template-columns:1fr;gap:5px;margin-top:6px}.rush-machine-choice{width:100%;min-height:38px;padding:6px 8px;text-align:left;font-size:10px;line-height:1.25}.rush-machine-choice small{display:block;margin-top:3px;color:#d1dcdf;font-size:9px;font-weight:600;line-height:1.3}.rush-interrupt-choice{background:#644426;border-color:#d3944d}.rush-capacity-rows{max-height:min(38vh,330px)}.shift-leader-event-advice{margin:7px 0;padding:8px 10px;border-left:3px solid #74d7a4;border-radius:5px;background:#102a31;color:#d7f0e3;font-size:11px;line-height:1.4}.shift-leader-event-advice[hidden]{display:none}';
     document.head.append(rushStyle);
     overlay.id='event-window';overlay.hidden=true;overlay.setAttribute('role','dialog');overlay.setAttribute('aria-modal','true');overlay.setAttribute('aria-labelledby','event-title');
     card.className='event-card';eyebrow.id='event-eyebrow';eyebrow.className='event-eyebrow';
     title.id='event-title';detail.id='event-detail';consequence.id='event-consequence';consequence.className='event-consequence';
+    managerAdvice.id='shift-leader-event-advice';managerAdvice.className='shift-leader-event-advice';managerAdvice.hidden=true;
     orderTiming.id='event-order-timing';orderTiming.className='event-order-timing';
     const deadlineCell=document.createElement('div'),deadlineLabel=document.createElement('small'),deadlineValue=document.createElement('strong');
     deadlineCell.id='event-order-deadline-cell';deadlineLabel.id='event-order-deadline-label';deadlineLabel.textContent='AUFTRAGSFRIST';deadlineValue.id='event-order-deadline';
@@ -737,7 +763,7 @@
     processCell.append(processLabel,processValue);orderTiming.append(deadlineCell,processCell);
     rushCapacity.id='rush-capacity-check';rushCapacity.className='rush-capacity-check';rushCapacity.hidden=true;
     actions.id='event-actions';actions.className='event-actions';count.id='event-count';count.className='event-count';
-    card.append(eyebrow,title,detail,consequence,orderTiming,rushCapacity,actions,count);overlay.append(card);document.querySelector('main').append(overlay);
+    card.append(eyebrow,title,detail,consequence,managerAdvice,orderTiming,rushCapacity,actions,count);overlay.append(card);document.querySelector('main').append(overlay);
     const selfButton=$('repair-now'),selfDetail=document.createElement('b');selfDetail.id='repair-self-detail';
     selfButton.replaceChildren(document.createTextNode('Selbst reparieren'),selfDetail);
     const technician=document.createElement('button'),technicianDetail=document.createElement('b');
@@ -906,6 +932,41 @@
     addQualityChoice('Reklamation ablehnen','Keine Sofortkosten · Vertrauen −18',()=>resolveQualityComplaint(event,'reject'),0,true);
     $('event-count').textContent='Wähle, wie du den Kundenfall löst.';
   }
+  function shiftLeaderEventAdvice(event){
+    if(!event||!state.shiftLeader.hired)return '';
+    if(event.event==='warning'||event.event==='major_failure'){
+      const options=breakdownSystem.getRepairOptions(state,event.bay);
+      if(!options)return '';
+      const selfChance=Number(options.self.failureChance);
+      const preferSelf=!event.selfRepairFailed&&Number.isFinite(selfChance)&&selfChance>=.75&&
+        options.self.cost<=options.technician.cost&&options.self.downtime<options.technician.downtime;
+      if(preferSelf)return 'Schichtleiter empfiehlt Selbstreparatur: '+Math.round(selfChance*100)+' % Erfolgschance, geringere Kosten und kürzerer Stillstand als beim Monteur.';
+      return event.selfRepairFailed
+        ?'Schichtleiter empfiehlt den Monteur: Der Selbstversuch ist für diese Störung gesperrt.'
+        :'Schichtleiter empfiehlt den Monteur: Die Selbstreparatur ist bei diesem Risiko die unsicherere Wahl.';
+    }
+    if(event.event==='quality_issue'){
+      const machine=machineAt(event.bay),order=event.order;
+      if(!machine||!order)return '';
+      const cost=Number.isFinite(event.reworkCost)?event.reworkCost:Math.max(250,Math.round(order.reward*(event.defectParts||1)/Math.max(1,order.qty)*.55));
+      const extra=replacementWorkMinutes(order,event.defectParts||1,machine);
+      if(state.money<cost)return 'Schichtleiter: Nacharbeit schützt vor fehlerhafter Auslieferung, ist mit '+euro(cost)+' aktuell aber nicht finanzierbar.';
+      const deadlineLeft=Number.isFinite(machine.deadlineAt)?machine.deadlineAt-state.gameMinutes:null;
+      const buffer=deadlineLeft===null?null:deadlineLeft-extra;
+      const timing=buffer===null?'Frist nicht berechenbar.':buffer>=0?'Danach bleiben voraussichtlich '+formatEstimateMinutes(buffer)+' Fristpuffer.':'Nacharbeit würde den Auftrag voraussichtlich um '+formatEstimateMinutes(-buffer)+' weiter verspäten.';
+      return 'Schichtleiter empfiehlt Nacharbeit: '+euro(cost)+' und '+formatMinutes(extra)+' Zusatzzeit; '+timing;
+    }
+    if(event.event==='quality_complaint'){
+      const order=event.order,machine=findQualityReworkMachine(order);
+      const cost=Number.isFinite(event.reworkCost)?event.reworkCost:Math.max(400,Math.round(order.reward*.18));
+      if(machine&&state.money>=cost){
+        const extra=replacementWorkMinutes(order,event.defectParts||1,machine);
+        return 'Schichtleiter empfiehlt eine Ersatzcharge: Sie schützt die Kundenbeziehung, kostet '+euro(cost)+' und etwa '+formatMinutes(extra)+' Maschinenzeit.';
+      }
+      return 'Schichtleiter empfiehlt eine Gutschrift, da aktuell keine finanzierbare Ersatzcharge mit passender Maschine verfügbar ist.';
+    }
+    return '';
+  }
   function renderEventWindow(){
     const overlay=$('event-window');
     if(!overlay)return;
@@ -913,6 +974,8 @@
     if(capacityPanel)capacityPanel.hidden=true;
     const event=state.eventQueue[0];overlay.hidden=!event;
     if(!event)return;
+    const managerAdvice=$('shift-leader-event-advice'),advice=shiftLeaderEventAdvice(event);
+    if(managerAdvice){managerAdvice.textContent=advice;managerAdvice.hidden=!advice;}
     try{
       if(event.event==='rush_order'){
         renderRushOrderEvent(event);
@@ -1759,7 +1822,176 @@
       else input.value=String(value);
     });
   }
-  function hireOrderOffice(){
+  function shiftLeaderStateKey(){
+    const shift=state.shiftLeader.shift===2?2:1;
+    const workers=(state.staffRoster['shift'+shift]||[]).map(employee=>employee.assignedBay||0).join(',');
+    const machines=state.machines.map(machine=>[
+      machine.bay,machine['operator'+shift],shift===2&&machine.loadingRobot,machine.activeId,
+      machine.orderQueue.map(entry=>entry.order.id).join(','),machine.qualityReworkQueue.length,
+      machine.tool<=25,spareToolCount(machine)>0,machine.maintenance<=45,machine.maintenanceRemainingMinutes>0,
+      breakdownSystem.getStatus(state,machine.bay)
+    ].join(':')).join('|');
+    return [state.shiftLeader.hired,shift,workers,machines,state.money>=SHIFT_LEADER_SETUP_COST,state.money>=PREVENTIVE_MAINTENANCE_COST].join('::');
+  }
+  function shiftLeaderRecommendations(shift){
+    const recommendations=[];
+    const roster=state.staffRoster['shift'+shift]||[];
+    const freeEmployee=roster.find(employee=>employee.assignedBay===null);
+    const unstaffed=state.machines.filter(machine=>
+      !(shift===2&&machine.loadingRobot)&&!machine['operator'+shift]&&
+      (!!job(machine)||machine.orderQueue.length>0||machine.qualityReworkQueue.length>0)
+    );
+    if(unstaffed.length&&freeEmployee){
+      const candidates=unstaffed.map(machine=>{
+        const plan=plannedMachineLoad(machine),key=catalog[machine.type].kind==='Fräsen'?'milling':'turning';
+        const skill=Number(freeEmployee.skills?.[key])||5;
+        return {machine,plan,skill};
+      }).sort((a,b)=>(a.plan.critical?.bufferMinutes??Infinity)-(b.plan.critical?.bufferMinutes??Infinity)||b.skill-a.skill||a.machine.bay-b.machine.bay);
+      const {machine,plan,skill}=candidates[0],key=catalog[machine.type].kind==='Fräsen'?'Fräsen':'Drehen';
+      const deadline=plan.critical?'Engster Fristpuffer: '+(plan.critical.bufferMinutes>=0?formatEstimateMinutes(plan.critical.bufferMinutes):formatEstimateMinutes(-plan.critical.bufferMinutes)+' zu spät')+'.':'Frist nicht berechenbar.';
+      recommendations.push({
+        title:'Bediener für Platz '+machine.bay+' einteilen',
+        detail:freeEmployee.name+' hat '+skill+'/10 in '+key+'. Dort wartet Arbeit für Schicht '+shift+'. '+deadline,
+        button:'Bediener zuweisen',
+        action:()=>assignShiftLeaderOperator(machine,shift,freeEmployee.id)
+      });
+    }else if(unstaffed.length){
+      const machine=unstaffed[0];
+      recommendations.push({
+        title:'Bediener für Platz '+machine.bay+' fehlt',
+        detail:'In Schicht '+shift+' wartet Arbeit, aber es ist niemand frei. Neue Bediener findest du unter „Bewerber ansehen“.',
+        button:'Bewerber ansehen',
+        action:()=>$('open-recruitment').click()
+      });
+    }
+    let bestSwap=null;
+    for(const machine of state.machines){
+      if(machine.orderQueue.length<2)continue;
+      const before=plannedMachineLoad(machine).deadlineChecks;
+      if(before.length<2)continue;
+      const beforeWorst=Math.min(...before.map(check=>check.bufferMinutes));
+      const beforeById=new Map(before.map(check=>[check.orderId,check]));
+      for(let index=1;index<machine.orderQueue.length;index++){
+        const reordered=machine.orderQueue.slice();
+        [reordered[index-1],reordered[index]]=[reordered[index],reordered[index-1]];
+        const after=plannedMachineLoad({...machine,orderQueue:reordered}).deadlineChecks;
+        if(after.length!==before.length)continue;
+        const afterWorst=Math.min(...after.map(check=>check.bufferMinutes));
+        const keepsOnTime=after.every(check=>{
+          const original=beforeById.get(check.orderId);
+          return !original||original.bufferMinutes<0||check.bufferMinutes>=0;
+        });
+        const improvement=afterWorst-beforeWorst;
+        if(!keepsOnTime||!Number.isFinite(improvement)||improvement<30)continue;
+        if(!bestSwap||improvement>bestSwap.improvement)bestSwap={machine,index,improvement,order:machine.orderQueue[index].order};
+      }
+    }
+    if(bestSwap){
+      recommendations.push({
+        title:'Warteschlange auf Platz '+bestSwap.machine.bay+' anpassen',
+        detail:bestSwap.order.part+' eine Position vorziehen. Der engste Fristpuffer verbessert sich rechnerisch um '+formatEstimateMinutes(bestSwap.improvement)+', ohne einen derzeit pünktlichen Auftrag verspätet zu machen.',
+        button:'Eine Position nach oben',
+        action:()=>moveQueuedOrder(bestSwap.machine,bestSwap.index,-1)
+      });
+    }
+    const toolMachine=state.machines.find(machine=>
+      !job(machine)&&machine.orderQueue.length===0&&!machine.qualityReworkQueue.length&&
+      machine.maintenanceRemainingMinutes<=0&&machine.tool<=25&&spareToolCount(machine)>0&&
+      machine['operator'+shift]&&assignedEmployee(machine,shift)&&breakdownSystem.getStatus(state,machine.bay)==='ok'
+    );
+    if(toolMachine){
+      recommendations.push({
+        title:'Reservewerkzeug für Platz '+toolMachine.bay+' einsetzen',
+        detail:'Werkzeugstand '+Math.round(toolMachine.tool)+' %. Die Maschine ist in Schicht '+shift+' gerade ohne Auftrag; der Wechsel verbraucht kein Materialgeld und unterbricht keine Produktion.',
+        button:'Werkzeug jetzt wechseln',
+        action:()=>changeMachineTool(toolMachine)
+      });
+    }
+    const maintenanceMachine=state.machines.filter(machine=>
+      !job(machine)&&machine.orderQueue.length===0&&!machine.qualityReworkQueue.length&&
+      machine.maintenanceRemainingMinutes<=0&&machine.maintenance<=45&&canMaintain(machine)
+    ).sort((a,b)=>a.maintenance-b.maintenance)[0];
+    if(maintenanceMachine){
+      recommendations.push({
+        title:'Vorbeugende Wartung für Platz '+maintenanceMachine.bay+' einplanen',
+        detail:'Maschinenzustand '+Math.round(maintenanceMachine.maintenance)+' %. Sie ist gerade ohne Auftrag. Die Wartung kostet '+euro(PREVENTIVE_MAINTENANCE_COST)+' und dauert '+formatMinutes(PREVENTIVE_MAINTENANCE_MINUTES)+'.',
+        button:'Wartung jetzt starten',
+        action:()=>startPreventiveMaintenance(maintenanceMachine)
+      });
+    }
+    return recommendations;
+  }
+  function assignShiftLeaderOperator(machine,shift,employeeId){
+    const key='operator'+shift,employee=(state.staffRoster['shift'+shift]||[]).find(person=>person.id===employeeId);
+    if(!machine||!employee||employee.assignedBay!==null||machine[key]||(shift===2&&machine.loadingRobot))return;
+    if(state.machines.filter(item=>item[key]).length>=state.staff['shift'+shift])return;
+    employee.assignedBay=machine.bay;machine[key]=true;
+    save();renderBusiness();render();
+    say('Schichtleiter-Vorschlag übernommen: '+employee.name+' arbeitet in Schicht '+shift+' auf Platz '+machine.bay+'.');
+  }
+  function renderShiftLeader(){
+    const parent=$('business-staff-section');
+    if(!parent)return;
+    let panel=$('shift-leader-panel');
+    if(!panel){
+      panel=document.createElement('section');panel.id='shift-leader-panel';panel.className='office-panel shift-leader-panel';
+      const title=document.createElement('h3');title.textContent='Schichtleiter';
+      const intro=document.createElement('p');intro.className='hint';intro.textContent='Organisiert den laufenden Betrieb – getrennt vom Disponenten. Zu Beginn macht die Schichtleitung Vorschläge; du entscheidest, welche übernommen werden.';
+      const status=document.createElement('p');status.id='shift-leader-status';status.className='hint';
+      const hire=document.createElement('button');hire.id='hire-shift-leader';hire.type='button';hire.className='action full-action';
+      hire.addEventListener('click',hireShiftLeader);
+      const controls=document.createElement('div');controls.id='shift-leader-controls';controls.className='shift-leader-controls';
+      const label=document.createElement('label');label.className='office-setting';
+      const labelText=document.createElement('span');labelText.textContent='Betreute Schicht';
+      const select=document.createElement('select');select.id='shift-leader-shift';
+      for(const [value,text] of [[1,'S1 · Frühschicht'],[2,'S2 · Spätschicht']]){
+        const option=document.createElement('option');option.value=String(value);option.textContent=text;select.append(option);
+      }
+      select.addEventListener('change',()=>{
+        state.shiftLeader.shift=Number(select.value)===2?2:1;
+        save();renderShiftLeader();say('Schichtleiter betreut jetzt Schicht '+state.shiftLeader.shift+'.');
+      });
+      label.append(labelText,select);controls.append(label);
+      const list=document.createElement('div');list.id='shift-leader-recommendations';list.className='shift-leader-recommendations';
+      panel.append(title,intro,status,hire,controls,list);parent.append(panel);
+    }
+    shiftLeaderAdviceKey=shiftLeaderStateKey();
+    const leader=state.shiftLeader,unlocked=state.factoryExpansion.level>=2;
+    const status=$('shift-leader-status'),hire=$('hire-shift-leader'),controls=$('shift-leader-controls'),list=$('shift-leader-recommendations');
+    hire.hidden=leader.hired;hire.disabled=!unlocked||state.money<SHIFT_LEADER_SETUP_COST;
+    hire.textContent=unlocked?'Schichtleiter einstellen · '+euro(SHIFT_LEADER_SETUP_COST):'Ab Hallenausbau auf 6 Plätze';
+    status.textContent=leader.hired
+      ?'Besetzt · S'+leader.shift+' · '+euro(SHIFT_LEADER_HOURLY_WAGE)+' je Stunde dieser Schicht.'
+      :unlocked?'Noch unbesetzt · einmalig '+euro(SHIFT_LEADER_SETUP_COST)+' und '+euro(SHIFT_LEADER_HOURLY_WAGE)+' je Stunde in der betreuten Schicht.'
+      :'Wird mit der ersten Hallenerweiterung auf 6 Plätze verfügbar.';
+    controls.hidden=!leader.hired;
+    if(!leader.hired){
+      list.replaceChildren();
+      const note=document.createElement('p');note.className='hint';note.textContent='Die Schichtleitung weist Bediener ein, verbessert bei Bedarf die Warteschlange und empfiehlt Wartung oder Werkzeugwechsel im Leerlauf.';
+      list.append(note);return;
+    }
+    $('shift-leader-shift').value=String(leader.shift);
+    const suggestions=shiftLeaderRecommendations(leader.shift);
+    if(!suggestions.length){
+      list.replaceChildren();
+      const quiet=document.createElement('p');quiet.className='shift-leader-clear';quiet.textContent='Aktuell keine dringenden Besetzungs-, Frist- oder Wartungsvorschläge.';
+      list.append(quiet);return;
+    }
+    list.replaceChildren(...suggestions.map(suggestion=>{
+      const card=document.createElement('article'),heading=document.createElement('strong'),detail=document.createElement('p'),button=document.createElement('button');
+      card.className='shift-leader-advice';heading.textContent=suggestion.title;detail.textContent=suggestion.detail;
+      button.type='button';button.className='action';button.textContent=suggestion.button;
+      button.addEventListener('click',suggestion.action);card.append(heading,detail,button);return card;
+    }));
+  }
+  function hireShiftLeader(){
+    if(state.shiftLeader.hired||state.factoryExpansion.level<2||state.money<SHIFT_LEADER_SETUP_COST)return;
+    if(!book('other',-SHIFT_LEADER_SETUP_COST,'Schichtleiter eingestellt',{role:'shift_leader',shift:state.shiftLeader.shift,hourlyWage:SHIFT_LEADER_HOURLY_WAGE}).ok)return;
+    state.shiftLeader.hired=true;
+    save();renderBusiness();render();
+    say('Schichtleiter eingestellt. Er macht Vorschläge für Besetzung, Auftragsreihenfolge und Wartung.');
+  }
+    function hireOrderOffice(){
     if(state.orderOffice.hired||state.factoryExpansion.level<2||state.money<ORDER_OFFICE_SETUP_COST)return;
     if(!book('other',-ORDER_OFFICE_SETUP_COST,'Disponent für das Auftragsbüro eingestellt',{role:'order_office'}).ok)return;
     state.orderOffice.hired=true;state.orderOffice.nextReviewAt=state.gameMinutes+ORDER_OFFICE_REVIEW_MINUTES;
@@ -1904,6 +2136,7 @@
     }
     renderStaffDevelopment();
     renderProgrammer();
+    renderShiftLeader();
     renderOrderOffice();
     renderCreditPanel();
     $('storage-upgrade').disabled=state.money<STORAGE_UPGRADE;
@@ -2442,6 +2675,7 @@
       if(shift)state.payrollDue+=state.staff['shift'+shift]*(shift===1?24:26)*step/60;
       if(state.orderOffice.hired&&officeOpenAt(state.gameMinutes))state.payrollDue+=ORDER_OFFICE_HOURLY_WAGE*step/60;
       if(state.programmer.hired&&shift===1)state.payrollDue+=PROGRAMMER_HOURLY_WAGE*step/60;
+      if(state.shiftLeader.hired&&shift===state.shiftLeader.shift)state.payrollDue+=SHIFT_LEADER_HOURLY_WAGE*step/60;
       if(shift)for(const machine of state.machines)autoReplaceWornTool(machine,shift);
       const storageCharge=state.material*STORAGE_RATE*step/1440;
       if(storageCharge>0){
@@ -2552,7 +2786,7 @@
       updateAssignmentLoads();
     }
     if(currentPanel==='business'||currentPanel==='warehouse')renderCosts();
-    if(currentPanel==='business'){updateStaffDevelopment();renderProgrammer();renderCreditPanel();}
+    if(currentPanel==='business'){updateStaffDevelopment();renderProgrammer();renderCreditPanel();if(shiftLeaderAdviceKey!==shiftLeaderStateKey())renderShiftLeader();}
   }
   function handleBreakdownEvent(event){
     if(!event)return;
@@ -2655,14 +2889,7 @@
   });
   $('material-quantity').addEventListener('change',renderMaterialPrice);
   $('finance-period').addEventListener('change',renderFinance);
-  $('change-tool').addEventListener('click',()=>{
-    const m=selectedMachine();if(!canChangeTool(m))return;
-    const usingSpare=spareToolCount(m)>0;
-    if(usingSpare){
-      if(!inventorySystem.consumeTool(state,m.type,1).ok)return;
-    }else if(!book('tools',-650,'Werkzeugwechsel',{bay:m.bay,type:m.type}).ok)return;
-    m.tool=100;save();render();say(usingSpare?'Reservewerkzeug eingesetzt.':'Werkzeug gewechselt.');
-  });
+  $('change-tool').addEventListener('click',()=>changeMachineTool(selectedMachine()));
   $('buy-spare-tool').addEventListener('click',()=>{
     const m=selectedMachine();if(!canBuySpareTool(m))return;
     const added=inventorySystem.addTool(state,m.type,1);
@@ -2670,12 +2897,7 @@
     if(!book('tools',-650,'Ersatzwerkzeug auf Reserve gekauft',{bay:m.bay,type:m.type}).ok){inventorySystem.consumeTool(state,m.type,1);return;}
     save();render();say(`Ersatzwerkzeug für ${catalog[m.type].name} auf Reserve gelegt.`);
   });
-  $('maintenance').addEventListener('click',()=>{
-    const m=selectedMachine();if(!canMaintain(m))return;
-    if(!book('maintenance',-PREVENTIVE_MAINTENANCE_COST,'Vorbeugende Wartung gestartet',{bay:m.bay,type:m.type,durationMinutes:PREVENTIVE_MAINTENANCE_MINUTES}).ok)return;
-    m.maintenanceRemainingMinutes=PREVENTIVE_MAINTENANCE_MINUTES;
-    save();render();say(`${catalog[m.type].name}: vorbeugende Wartung gestartet · ${formatMinutes(PREVENTIVE_MAINTENANCE_MINUTES)} Stillstand.`);
-  });
+  $('maintenance').addEventListener('click',()=>startPreventiveMaintenance(selectedMachine()));
   $('upgrade').addEventListener('click',()=>{
     const m=selectedMachine();if(!m)return;const cost=9000*m.level;if(state.money<cost)return;
     if(!book('other',-cost,`${catalog[m.type].name} Upgrade`,{bay:m.bay,level:m.level+1}).ok)return;
