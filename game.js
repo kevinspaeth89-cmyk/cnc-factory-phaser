@@ -80,7 +80,7 @@
     credit:{principal:0,originalAmount:0,annualRate:CREDIT_ANNUAL_RATE,paymentsRemaining:0,accruedInterest:0,nextPaymentAt:null,missedPayments:0},
     recruitment:{applicants:[],nextId:1},
     orderOffice:{hired:false,autoPurchase:true,autoAccept:true,cashReserve:5000,maxMarketMarkupPct:0,minMaterialSurplus:1000,queueLimit:1,nextReviewAt:0},
-    shiftLeader:{hired:false,shift:1}
+    shiftLeader:{hired:false,shift:1},pendingRushAssignment:null
   });
   let state=defaults();
   function validMachine(m) {
@@ -96,6 +96,9 @@
       state.programmer={hired:!!savedProgrammer.hired,active:savedProgrammer.active&&typeof savedProgrammer.active.key==='string'?savedProgrammer.active:null,
         queue:Array.isArray(savedProgrammer.queue)?savedProgrammer.queue.filter(task=>task&&typeof task.key==='string'&&Number.isFinite(task.remainingMinutes)&&Number.isFinite(task.totalMinutes)):[]};
       state.pendingQualityComplaints=Array.isArray(stored.pendingQualityComplaints)?stored.pendingQualityComplaints.filter(item=>item&&typeof item.id==='string'&&Number.isFinite(item.dueAt)&&item.order&&typeof item.order.id==='string'):[];
+      const pendingRush=stored.pendingRushAssignment;
+      state.pendingRushAssignment=pendingRush&&typeof pendingRush.orderId==='string'&&Number.isInteger(pendingRush.bay)&&pendingRush.bay>0
+        ?{orderId:pendingRush.orderId,bay:pendingRush.bay,interrupt:!!pendingRush.interrupt}:null;
       expansionSystem.init(state);
       state.machines=stored.machines.filter(validMachine).map(m=>{
         const hasSetupState=Object.prototype.hasOwnProperty.call(m,'setupDurationMinutes');
@@ -845,20 +848,20 @@
       choices.className='rush-machine-actions';
       const normalButton=document.createElement('button'),normalDetail=document.createElement('small');
       normalButton.type='button';normalButton.className='action rush-machine-choice';
-      normalButton.append(document.createTextNode(activeOrder?'Nach laufendem Auftrag einplanen':'Direkt auf dieser Maschine starten'));
       const materialShortage=Math.max(0,materialSystem.requiredKg(order)-materialSystem.available(state,order));
+      normalButton.append(document.createTextNode(materialShortage>1e-9?'Material kaufen & hier einplanen':activeOrder?'Nach laufendem Auftrag einplanen':'Direkt auf dieser Maschine starten'));
       const normalTiming=rushCheck
         ?'Eilauftrag fertig in '+formatEstimateMinutes(rushCheck.leadMinutes)+' · '+rushOutcome
         :'Eilfrist nicht berechenbar';
-      normalDetail.textContent=reason||(!projected.shifts.length?'Keine besetzte Schicht':euro(Number(order.rushBonus)||0)+' Zuschlag · '+normalTiming);
-      normalButton.append(normalDetail);normalButton.disabled=!!reason||!projected.shifts.length||materialShortage>1e-9;
+      normalDetail.textContent=reason||(!projected.shifts.length?'Keine besetzte Schicht':materialShortage>1e-9?'Es fehlen '+Math.ceil(materialShortage)+' kg '+order.material+' · nach dem Kauf '+(activeOrder?'in die Warteschlange':'direkt')+' auf Platz '+machine.bay+' · '+euro(Number(order.rushBonus)||0)+' Zuschlag · '+normalTiming:euro(Number(order.rushBonus)||0)+' Zuschlag · '+normalTiming);
+      normalButton.append(normalDetail);normalButton.disabled=!!reason||!projected.shifts.length;
       normalButton.addEventListener('click',()=>resolveRushOrderEvent(event,true,machine.bay,false));
       choices.append(normalButton);
       if(activeOrder){
         const interruptButton=document.createElement('button'),interruptDetail=document.createElement('small');
         const interruptReason=rushAssignmentBlockReason(machine,order,true);
         interruptButton.type='button';interruptButton.className='action rush-machine-choice rush-interrupt-choice';
-        interruptButton.append(document.createTextNode('Jetzt starten und laufenden Auftrag unterbrechen'));
+        interruptButton.append(document.createTextNode(materialShortage>1e-9?'Material kaufen & Auftrag hier einschieben':'Jetzt starten und laufenden Auftrag unterbrechen'));
         if(interruption){
           const deadlineRemaining=interruption.deadlineAt-state.gameMinutes;
           const deadlineText=deadlineRemaining>=0
@@ -874,12 +877,13 @@
             const delayText=(delay>=0?'später um ':'früher um ')+formatEstimateMinutes(Math.abs(delay));
             finishImpact='Vorher fertig in '+formatEstimateMinutes(activeDeadlineCheck.leadMinutes)+' · danach in '+formatEstimateMinutes(afterFinish)+' ('+delayText+').';
           }
-          interruptDetail.textContent='Eilauftrag zuerst: fertig in '+(rushCheck?formatEstimateMinutes(rushCheck.leadMinutes):'nicht berechenbar')+'.\n'+
+          interruptDetail.textContent=(materialShortage>1e-9?'Es fehlen '+Math.ceil(materialShortage)+' kg '+order.material+'; nach dem Kauf wird der Eilauftrag auf Platz '+machine.bay+' zuerst gestartet. ':'')+
+            'Eilauftrag zuerst: fertig in '+(rushCheck?formatEstimateMinutes(rushCheck.leadMinutes):'nicht berechenbar')+'.\n'+
             'Danach '+activeOrder.part+': '+finishImpact+'\n'+
             'Neue Rüstzeit '+formatMinutes(interruption.resumedSetup)+' · '+deadlineText+' · danach '+outcome+'.';
         }else interruptDetail.textContent=interruptReason||'Frist des laufenden Auftrags nicht berechenbar.';
         interruptButton.append(interruptDetail);
-        interruptButton.disabled=!!interruptReason||!interruption||materialShortage>1e-9;
+        interruptButton.disabled=!!interruptReason||!interruption;
         interruptButton.addEventListener('click',()=>resolveRushOrderEvent(event,true,machine.bay,true));
         choices.append(interruptButton);
       }
@@ -1080,7 +1084,7 @@
   }
   function resolveRushOrderEvent(event,accepted,targetBay=null,interrupt=false){
     if(!state.eventQueue.some(item=>item.id===event.id))return false;
-    let offer=event.order;
+    let offer=event.order,materialPurchaseAssignment=null;
     if(accepted){
       if(Number.isInteger(targetBay)){
         const machine=machineAt(targetBay),reason=machine&&rushAssignmentBlockReason(machine,offer,interrupt);
@@ -1096,14 +1100,30 @@
       if(!added){say('Der Eilauftrag konnte nicht angenommen werden. Die Auftragsbörse ist voll.');return false;}
       offer=added;
       orderMarketSystem.recordRushDecision(state,offer,true);
+      if(Number.isInteger(targetBay)){
+        const shortage=Math.max(0,materialSystem.requiredKg(offer)-materialSystem.available(state,offer));
+        if(shortage>1e-9)materialPurchaseAssignment={orderId:offer.id,bay:targetBay,interrupt:!!interrupt};
+      }
     }else{
       orderMarketSystem.recordRushDecision(state,offer,false);
     }
     const index=state.eventQueue.findIndex(item=>item.id===event.id);
     if(index>=0)state.eventQueue.splice(index,1);
     state.paused=state.eventQueue.length>0;
+    if(materialPurchaseAssignment){
+      state.pendingRushAssignment=materialPurchaseAssignment;
+      state.selected=offer.id;
+      state.warehouseOrderSnapshot={...offer};
+      state.selectedMaterialType=materialSystem.typeForOrder(offer)||state.selectedMaterialType;
+    }
     save();render();
     if(accepted){
+      if(materialPurchaseAssignment){
+        const shortage=Math.max(0,materialSystem.requiredKg(offer)-materialSystem.available(state,offer));
+        tab('warehouse');
+        say('Eilauftrag zugesagt: '+offer.part+' · Es fehlen '+Math.ceil(shortage)+' kg '+offer.material+'. Nach dem Kauf wird er '+(interrupt?'gestartet und der laufende Auftrag unterbrochen':'auf Platz '+targetBay+' eingeplant')+'.');
+        return true;
+      }
       if(Number.isInteger(targetBay)){
         startOrder(offer.id,targetBay,{rushEvent:true,interrupt});
         return true;
@@ -1710,15 +1730,32 @@
     const machine=state.machines.find(m=>m.activeId===order.id||m.orderQueue.some(entry=>entry.order.id===order.id));
     const offerAvailable=orderMarketSystem.getAvailable(state).some(item=>item.id===order.id);
     const hasMaterial=available+1e-9>=required;
+    const missing=Math.max(0,Math.ceil(required-available));
+    const pendingRush=state.pendingRushAssignment?.orderId===order.id?state.pendingRushAssignment:null;
+    const pendingMachine=pendingRush?machineAt(pendingRush.bay):null;
+    const pendingReason=pendingRush
+      ?!pendingMachine?'Die ausgewählte Maschine ist nicht mehr verfügbar.'
+        :rushAssignmentBlockReason(pendingMachine,order,pendingRush.interrupt)
+          ||(!plannedMachineLoad(pendingMachine).shifts.length?'Für diese Maschine ist keine besetzte Schicht geplant.':'')
+      :'';
     const machineReady=state.machines.some(m=>compatible(m,order)&&!machineOrderBlockReason(m,order));
-    const status=machine?`angenommen für Platz ${machine.bay}`:offerAvailable?'noch im Angebot':'Angebot abgelaufen';
-    title.textContent=`Ausgewählter Auftrag: ${order.part}`;
-    details.textContent=`${order.material} · benötigt ${required} kg · im Lager ${Math.floor(available)} kg · es fehlen ${Math.max(0,Math.ceil(required-available))} kg · ${status}${offerAvailable?` · gültig noch ${formatMinutes(order.expiresAt-state.gameMinutes)}`:''}`;
+    const status=pendingRush?'zugesagt · wartet auf Material für Platz '+pendingRush.bay
+      :machine?'angenommen für Platz '+machine.bay:offerAvailable?'noch im Angebot':'Angebot abgelaufen';
+    title.textContent='Ausgewählter Auftrag: '+order.part;
+    details.textContent=order.material+' · benötigt '+required+' kg · im Lager '+Math.floor(available)+' kg · es fehlen '+missing+' kg · '+status+(offerAvailable?' · gültig noch '+formatMinutes(order.expiresAt-state.gameMinutes):'');
     stamp.hidden=offerAvailable||!!machine;
-    accept.hidden=!offerAvailable||!!machine||!hasMaterial;
+    if(pendingRush){
+      accept.hidden=false;
+      accept.disabled=!hasMaterial||!!pendingReason;
+      accept.textContent=pendingReason||(!hasMaterial?'Noch '+missing+' kg '+order.material+' kaufen'
+        :pendingRush.interrupt?'Eilauftrag auf Platz '+pendingRush.bay+' starten & einschieben'
+        :'Eilauftrag auf Platz '+pendingRush.bay+' einplanen');
+    }else{
+      accept.hidden=!offerAvailable||!!machine||!hasMaterial;
+      accept.disabled=!machineReady;
+      accept.textContent=machineReady?'Auftrag annehmen':'Keine passende Maschine verfügbar';
+    }
     accept.parentElement.classList.toggle('with-accept',!accept.hidden);
-    accept.disabled=!machineReady;
-    accept.textContent=machineReady?'Auftrag annehmen':'Keine passende Maschine verfügbar';
     box.hidden=false;
     $('drawer').classList.toggle('warehouse-focus',currentPanel==='warehouse');
   }
@@ -1727,7 +1764,21 @@
     const order=orderMarketSystem.getAvailable(state).find(item=>item.id===id);
     if(!order){say('Dieses Angebot ist inzwischen abgelaufen.');renderWarehouseOrderContext();return;}
     const required=materialSystem.requiredKg(order),available=materialSystem.available(state,order);
-    if(available+1e-9<required){say(`Es fehlen noch ${Math.ceil(required-available)} kg ${order.material}.`);renderWarehouseOrderContext();return;}
+    const pendingRush=state.pendingRushAssignment?.orderId===order.id?state.pendingRushAssignment:null;
+    if(pendingRush){
+      if(available+1e-9<required){say('Es fehlen noch '+Math.ceil(required-available)+' kg '+order.material+'.');renderWarehouseOrderContext();return;}
+      const machine=machineAt(pendingRush.bay);
+      if(!machine){say('Die für den Eilauftrag gewählte Maschine ist nicht mehr verfügbar.');renderWarehouseOrderContext();return;}
+      const reason=rushAssignmentBlockReason(machine,order,pendingRush.interrupt);
+      if(reason||!plannedMachineLoad(machine).shifts.length){
+        say(reason||'Für diese Maschine ist keine besetzte Schicht geplant.');renderWarehouseOrderContext();return;
+      }
+      state.pendingRushAssignment=null;
+      const started=startOrder(order.id,pendingRush.bay,{rushEvent:true,interrupt:pendingRush.interrupt});
+      if(!started){state.pendingRushAssignment=pendingRush;save();renderWarehouseOrderContext();}
+      return;
+    }
+    if(available+1e-9<required){say('Es fehlen noch '+Math.ceil(required-available)+' kg '+order.material+'.');renderWarehouseOrderContext();return;}
     if(!state.machines.some(m=>compatible(m,order)&&!machineOrderBlockReason(m,order))){
       say('Keine passende Maschine ist gerade aufnahmebereit.');return;
     }
@@ -2423,6 +2474,7 @@
       enqueueNcProgram(accepted);
       if(state.programmer.hired)reassessActiveProgrammingRoutes();
       if(state.warehouseOrderSnapshot?.id===accepted.id)state.warehouseOrderSnapshot=null;
+      if(state.pendingRushAssignment?.orderId===accepted.id)state.pendingRushAssignment=null;
       if(!options.automatic)state.selected=null;
       save();renderOrders();renderBusiness();render();
       if(!options.automatic)say(`${accepted.part} für Platz ${m.bay} vorgemerkt (${m.orderQueue.length}/${MAX_QUEUED_ORDERS}). Material wurde reserviert.`);
@@ -2435,6 +2487,7 @@
     if(m.ncProgramPending){scheduleActiveOrderProgramming(m,accepted);reassessActiveProgrammingRoutes();}
     m.deadlineAt=Number.isFinite(accepted.deadlineAt)?accepted.deadlineAt:state.gameMinutes+accepted.deadlineHours*60;
     if(state.warehouseOrderSnapshot?.id===accepted.id)state.warehouseOrderSnapshot=null;
+    if(state.pendingRushAssignment?.orderId===accepted.id)state.pendingRushAssignment=null;
     if(!options.automatic)state.selected=null;
     save();renderOrders();renderBusiness();render();
     if(!options.automatic){closeDrawer();showMachine(m.bay);if(m.ncProgramPending)tab('machine');say(options.interrupt
