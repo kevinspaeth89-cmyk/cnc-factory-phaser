@@ -281,7 +281,7 @@
       (1+.05*skillLevel(employee))*recruitmentSystem.productionMultiplier(employee,catalog[m.type].kind);
   };
   const productionFactor=m=>productionFactorForShift(m,shiftAt(state.gameMinutes)||1);
-  function plannedMachineLoad(machine){
+  function plannedMachineLoad(machine,additionalOrder=null){
     const shifts=[1,2].filter(shift=>machine['operator'+shift]||(shift===2&&machine.loadingRobot));
     const capacityMinutes=shifts.length*8*60;
     const factor=shifts.length
@@ -292,6 +292,7 @@
     for(const entry of machine.orderQueue){
       if(Number.isFinite(entry.order?.duration))plannedMinutes+=entry.order.duration*6/factor;
     }
+    if(Number.isFinite(additionalOrder?.duration))plannedMinutes+=additionalOrder.duration*6/factor;
     return {shifts,capacityMinutes,plannedMinutes,percent:capacityMinutes?plannedMinutes/capacityMinutes*100:null};
   }
   const remainingMinutes=(m,o)=>o?Math.max(0,(100-m.progress)*o.duration*6/(100*productionFactor(m))):0;
@@ -660,17 +661,45 @@
     $('order-machine-chooser').hidden=false;
     $('order-machine-chooser').scrollIntoView({block:'nearest',behavior:'smooth'});
   }
+  function updateAssignmentLoadLine(line,machine,order){
+    const current=plannedMachineLoad(machine),projected=plannedMachineLoad(machine,order);
+    const currentValue=line.querySelector('[data-load-current]'),projectedValue=line.querySelector('[data-load-projected]');
+    const percentLabel=load=>load.percent===null?'keine Schicht':`${Math.round(load.percent)} %`;
+    currentValue.textContent=`Jetzt ${percentLabel(current)}`;
+    projectedValue.textContent=projected.percent===null
+      ?`Mit Auftrag ${percentLabel(projected)} · ${(projected.plannedMinutes/60).toLocaleString('de-DE',{maximumFractionDigits:1})} h geplant`
+      :`Mit Auftrag ${percentLabel(projected)}`;
+    currentValue.classList.toggle('assignment-overloaded',current.percent!==null&&current.percent>100);
+    projectedValue.classList.toggle('assignment-overloaded',projected.percent!==null&&projected.percent>100);
+    line.setAttribute('aria-label',`Theoretische Tagesauslastung: aktuell ${percentLabel(current)}, mit diesem Auftrag ${percentLabel(projected)}`);
+  }
+  function updateAssignmentLoads(){
+    if(!pendingOrderAssignmentId||$('order-machine-chooser').hidden)return;
+    const order=orderMarketSystem.getAvailable(state).find(item=>item.id===pendingOrderAssignmentId);
+    if(!order)return;
+    document.querySelectorAll('[data-assignment-load]').forEach(line=>{
+      const machine=machineAt(Number(line.dataset.bay));
+      if(machine)updateAssignmentLoadLine(line,machine,order);
+    });
+  }
   function renderOrderMachineChooser(){
     const panel=$('order-machine-chooser');
     if(!pendingOrderAssignmentId){panel.hidden=true;return;}
     const order=orderMarketSystem.getAvailable(state).find(item=>item.id===pendingOrderAssignmentId);
     if(!order){pendingOrderAssignmentId=null;panel.hidden=true;return;}
     $('assignment-title').textContent='Welche Maschine soll den Auftrag übernehmen?';
-    $('assignment-detail').textContent=`${order.part} · ${order.kind} · ${order.material}`;
+    $('assignment-detail').textContent=`${order.part} · ${order.kind} · ${order.material} · theoretische Tagesauslastung: jetzt / mit Auftrag`;
     $('assignment-options').replaceChildren(...state.machines.map(machine=>{
       const button=document.createElement('button'),reason=machineOrderBlockReason(machine,order);
+      const name=document.createElement('span'),loadLine=document.createElement('span'),currentLoad=document.createElement('span'),projectedLoad=document.createElement('strong');
       button.type='button';button.className='action assignment-option';
-      button.textContent=`Platz ${machine.bay} · ${catalog[machine.type].name} · ${catalog[machine.type].kind}${reason?` · ${reason}`:job(machine)?` · Vormerken ${machine.orderQueue.length+1}/${MAX_QUEUED_ORDERS}`:' · Direkt starten'}`;
+      name.className='assignment-option-name';
+      name.textContent=`Platz ${machine.bay} · ${catalog[machine.type].name} · ${catalog[machine.type].kind}${reason?` · ${reason}`:job(machine)?` · Vormerken ${machine.orderQueue.length+1}/${MAX_QUEUED_ORDERS}`:' · Direkt starten'}`;
+      loadLine.className='assignment-option-load';loadLine.dataset.assignmentLoad='';loadLine.dataset.bay=String(machine.bay);
+      currentLoad.dataset.loadCurrent='';projectedLoad.dataset.loadProjected='';
+      loadLine.append(currentLoad,projectedLoad);
+      button.append(name,loadLine);
+      updateAssignmentLoadLine(loadLine,machine,order);
       button.disabled=!!reason;
       button.addEventListener('click',()=>startOrder(order.id,machine.bay));
       return button;
@@ -1556,6 +1585,7 @@
     if(currentPanel==='orders'){
       updateOrderCountdowns();
       updateMachineLoadCards();
+      updateAssignmentLoads();
     }
     if(currentPanel==='business'||currentPanel==='warehouse')renderCosts();
     if(currentPanel==='business'){updateStaffDevelopment();renderCreditPanel();}
