@@ -416,7 +416,7 @@
       const active=job(machine);
       if(active&&!programReady(active))changed=scheduleActiveOrderProgramming(machine,active)||changed;
     }
-    if(state.programmer?.hired)for(const machine of state.machines)
+    for(const machine of state.machines)
       for(const entry of machine.orderQueue||[])if(!programReady(entry.order))changed=enqueueNcProgram(entry.order)||changed;
     changed=reassessActiveProgrammingRoutes()||changed;
     if(changed)save();
@@ -911,7 +911,7 @@
     $('event-eyebrow').textContent=selfRepairFailed?'SELBSTREPARATUR GESCHEITERT':event.sudden?'PLÖTZLICHER MASCHINENCRASH':warning?'MASCHINENWARNUNG':'SCHWERER MASCHINENSCHADEN';
     $('event-title').textContent=`${fault?.label||'Maschinenstörung'} · Platz ${event.bay}`;
     $('event-detail').textContent=selfRepairFailed
-      ?'Der Selbstversuch hat nicht gehalten. Die Maschine bleibt stehen. Du kannst es erneut versuchen oder einen Monteur beauftragen.'
+      ?'Der Selbstversuch ist fehlgeschlagen. Ein weiterer Selbstversuch ist für diese Störung gesperrt; beauftrage einen Monteur oder entscheide später.'
       :event.sudden
       ?'Die Maschine ist ohne vorherige Warnung ausgefallen. Die Produktion auf diesem Platz steht.'
       :warning?'Die Maschine meldet eine Störung. Entscheide jetzt, wie der Betrieb weitergeht.':'Ein schwerer Maschinenschaden hat die Produktion gestoppt.';
@@ -938,13 +938,12 @@
     };
     if(options){
       const selfDuration=options.self.downtime>options.technician.downtime?' · langsamer als Monteur':'';
-      const selfRisk=Math.round(options.self.failureChance*100);
-      addChoice('Selbst reparieren',`${euro(options.self.cost)} · ${formatMinutes(options.self.downtime)} bei Erfolg · ${selfRisk}% Fehlerrisiko${selfDuration}`, 'repairSelf',options.self.cost);
+      const selfRange=options.self.failureRange;
+      const selfRisk=selfRange?`${Math.round(selfRange.min*100)}–${Math.round(selfRange.max*100)}% Fehlerrisiko`:`${Math.round(options.self.failureChance*100)}% Fehlerrisiko`;
+      if(!selfRepairFailed)addChoice('Selbst reparieren',`${euro(options.self.cost)} · ${formatMinutes(options.self.downtime)} bei Erfolg · ${selfRisk}${selfDuration}`, 'repairSelf',options.self.cost);
       addChoice('Monteur beauftragen',`${euro(options.technician.cost)} · ${formatMinutes(options.technician.downtime)} · verlässlich`, 'repairTechnician',options.technician.cost);
       if(warning){
         if(!selfRepairFailed)addChoice('Riskant weiterproduzieren','Keine Sofortkosten · höheres Crash- und Ausschussrisiko','continueRisky');
-        const afterJob=!!machine&&!!job(machine);
-        addChoice(afterJob?'Nach aktuellem Auftrag reparieren':'Günstiger reparieren',`${euro(options.planned.cost)} · ${formatMinutes(options.planned.downtime)}${afterJob?' · Auftrag erst abschließen':''}`,'scheduleRepair',options.planned.cost);
       }
     }
     const defer=document.createElement('button');defer.type='button';defer.className='action event-choice';
@@ -1980,14 +1979,16 @@
     const faultInfo=fault?.fault?breakdownSystem.getFaultInfo(fault.fault):null;
     const repairOptions=m?breakdownSystem.getRepairOptions(state,m.bay):null;
     $('breakdown-panel').hidden=!fault||!['warning','major_failure','repairing'].includes(fault.status);
-    $('breakdown-info').textContent=!faultInfo?'':`${faultInfo.label} · ${statusFor(m)}. Selbstreparatur kostet weniger, kann aber scheitern; der Monteur arbeitet verlässlich.`;
-    $('repair-self-detail').textContent=repairOptions?`${euro(repairOptions.self.cost)} · ${formatMinutes(repairOptions.self.downtime)} bei Erfolg · ${Math.round(repairOptions.self.failureChance*100)}% Risiko`:'Fehlerrisiko';
+    $('breakdown-info').textContent=!faultInfo?'':`${faultInfo.label} · ${statusFor(m)}. ${fault?.selfRepairFailed?'Selbstversuch fehlgeschlagen; ein weiterer ist nicht möglich.':'Selbstreparatur kostet weniger, kann aber scheitern.'} Der Monteur arbeitet verlässlich.`;
+    const selfRange=repairOptions?.self.failureRange;
+    $('repair-self-detail').textContent=repairOptions?`${euro(repairOptions.self.cost)} · ${formatMinutes(repairOptions.self.downtime)} bei Erfolg · ${selfRange?`${Math.round(selfRange.min*100)}–${Math.round(selfRange.max*100)}% Risiko`:`${Math.round(repairOptions.self.failureChance*100)}% Risiko`}`:'Fehlerrisiko';
     $('repair-technician-detail').textContent=repairOptions?`${euro(repairOptions.technician.cost)} · ${formatMinutes(repairOptions.technician.downtime)} · verlässlich`:'verlässlich';
     $('schedule-repair-detail').textContent=repairOptions?`${euro(repairOptions.planned.cost)} · ${formatMinutes(repairOptions.planned.downtime)}`:'';
-    $('repair-now').disabled=!repairOptions||state.money<repairOptions.self.cost;
+    $('repair-now').firstChild.textContent=fault?.selfRepairFailed?'Selbstversuch fehlgeschlagen':'Selbst reparieren';
+    $('repair-now').disabled=!repairOptions||!repairOptions.self.allowed||state.money<repairOptions.self.cost;
     $('repair-technician').disabled=!repairOptions||state.money<repairOptions.technician.cost;
     $('continue-risky').disabled=fault?.status!=='warning'||fault.riskyContinue||fault.scheduledRepair;
-    $('schedule-repair').disabled=!repairOptions||fault?.status!=='warning'||fault.scheduledRepair||state.money<repairOptions.planned.cost;
+    $('schedule-repair').disabled=!repairOptions||fault?.status!=='warning'||fault.scheduledRepair||!!job(m)||state.money<repairOptions.planned.cost;
     const hallImage=$('hall-image');
     const artwork=layout.asset+'?v=1';
     if(hallImage.getAttribute('src')!==artwork)hallImage.src=artwork;
@@ -2162,7 +2163,8 @@
     if((job(m)&&!options.interrupt)||(!options.interrupt&&m.qualityReworkQueue.length)){
       m.orderQueue.push({order:accepted,material:materialResult.consumed,
         deadlineAt:Number.isFinite(accepted.deadlineAt)?accepted.deadlineAt:state.gameMinutes+accepted.deadlineHours*60});
-      if(state.programmer.hired){enqueueNcProgram(accepted);reassessActiveProgrammingRoutes();}
+      enqueueNcProgram(accepted);
+      if(state.programmer.hired)reassessActiveProgrammingRoutes();
       if(state.warehouseOrderSnapshot?.id===accepted.id)state.warehouseOrderSnapshot=null;
       if(!options.automatic)state.selected=null;
       save();renderOrders();renderBusiness();render();

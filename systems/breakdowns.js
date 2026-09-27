@@ -41,7 +41,8 @@
     repairRemainingMinutes: 0,
     plannedRepair: false,
     repairMethod: null,
-    repairWillFail: false
+    repairWillFail: false,
+    selfRepairFailed: false
   });
 
   function machineList(state) {
@@ -77,7 +78,8 @@
       repairRemainingMinutes: status === 'repairing' ? Math.max(0, Number(source.repairRemainingMinutes) || 0) : 0,
       plannedRepair: status === 'repairing' && source.plannedRepair === true,
       repairMethod: status === 'repairing' && ['self', 'technician', 'planned'].includes(source.repairMethod) ? source.repairMethod : null,
-      repairWillFail: status === 'repairing' && source.repairMethod === 'self' && source.repairWillFail === true
+      repairWillFail: status === 'repairing' && source.repairMethod === 'self' && source.repairWillFail === true,
+      selfRepairFailed: status !== 'ok' && source.selfRepairFailed === true
     };
   }
 
@@ -213,14 +215,26 @@
     const machine = machineAt(state, bay);
     if (!machine || !record) return 0;
     const factors = conditionFactors(state, machine, record);
-    let chance = record.severity >= 2 || record.status === 'major_failure' ? 0.34 : 0.18;
-    if (COMPLEX_SELF_REPAIR_FAULTS.has(record.fault)) chance += 0.05;
-    if (factors.maintenance < 50) chance += 0.1;
+    let chance = record.severity >= 2 || record.status === 'major_failure' ? 0.62 : 0.38;
+    if (COMPLEX_SELF_REPAIR_FAULTS.has(record.fault)) chance += 0.12;
+    if (factors.maintenance < 20) chance += 0.16;
+    else if (factors.maintenance < 50) chance += 0.1;
     else if (factors.maintenance < 80) chance += 0.04;
-    if (factors.tool < 20) chance += 0.06;
-    else if (factors.tool < 50) chance += 0.025;
-    chance += clamp((factors.reliabilityFactor - 1) * 0.1, -0.04, 0.1);
-    return clamp(chance, 0.08, 0.65);
+    if (factors.tool < 20) chance += 0.1;
+    else if (factors.tool < 50) chance += 0.04;
+    if (factors.runtimeFactor >= 2.2) chance += 0.08;
+    else if (factors.runtimeFactor >= 1.65) chance += 0.05;
+    else if (factors.runtimeFactor >= 1.25) chance += 0.02;
+    chance += clamp((factors.reliabilityFactor - 1) * 0.08, -0.05, 0.08);
+    return clamp(chance, 0.25, 0.88);
+  }
+
+  function selfRepairFailureRange(state, bay, record) {
+    const expected = selfRepairFailureChance(state, bay, record);
+    return {
+      min: clamp(expected - 0.12, 0.2, 0.92),
+      max: clamp(expected + 0.12, 0.2, 0.92)
+    };
   }
 
   function startRepair(record, downtime, planned, method, willFail) {
@@ -240,8 +254,9 @@
   function getRepairOptions(state, bay) {
     const record = recordAt(state, bay);
     if (!record || !record.fault || !['warning', 'major_failure'].includes(record.status)) return null;
+    const failureChance = selfRepairFailureChance(state, bay, record);
     return {
-      self: { ...repairNumbers(record, 'self'), failureChance: selfRepairFailureChance(state, bay, record) },
+      self: { ...repairNumbers(record, 'self'), failureChance, failureRange: selfRepairFailureRange(state, bay, record), allowed: !record.selfRepairFailed },
       technician: repairNumbers(record, 'technician'),
       planned: repairNumbers(record, 'planned')
     };
@@ -250,13 +265,15 @@
   function repairSelf(state, bay) {
     const machine = machineAt(state, bay);
     const record = recordAt(state, bay);
-    if (!machine || !record || !record.fault || !['warning', 'major_failure'].includes(record.status)) return null;
+    if (!machine || !record || record.selfRepairFailed || !record.fault || !['warning', 'major_failure'].includes(record.status)) return null;
     const { cost, downtime } = repairNumbers(record, 'self');
     const failureChance = selfRepairFailureChance(state, bay, record);
-    const willFail = randomValue(state) < failureChance;
+    const failureRange = selfRepairFailureRange(state, bay, record);
+    const attemptFailureChance = failureRange.min + randomValue(state) * (failureRange.max - failureRange.min);
+    const willFail = randomValue(state) < attemptFailureChance;
     const fault = record.fault;
     startRepair(record, downtime, false, 'self', willFail);
-    return { event: 'repair', method: 'self', bay, fault, cost, downtime, failureChance, planned: false, blocksProduction: true };
+    return { event: 'repair', method: 'self', bay, fault, cost, downtime, failureChance, failureRange, planned: false, blocksProduction: true };
   }
 
   function repairTechnician(state, bay) {
@@ -279,16 +296,14 @@
   function scheduleRepair(state, bay) {
     const machine = machineAt(state, bay);
     const record = recordAt(state, bay);
-    if (!machine || !record || !record.fault || !['warning', 'major_failure'].includes(record.status) || record.scheduledRepair) return null;
-    const wasWarning = record.status === 'warning';
+    if (!machine || machineHasJob(machine) || !record || !record.fault || !['warning', 'major_failure'].includes(record.status) || record.scheduledRepair) return null;
     const { cost, downtime } = repairNumbers(record, 'planned');
-    const scheduledAfterJob = wasWarning && machineHasJob(machine);
     record.riskyContinue = false;
-    record.scheduledRepair = scheduledAfterJob;
-    if (!scheduledAfterJob) startRepair(record, downtime, true, 'planned', false);
+    record.scheduledRepair = false;
+    startRepair(record, downtime, true, 'planned', false);
     return {
       event: 'repair_scheduled', bay, fault: record.fault, cost, downtime,
-      planned: true, scheduledAfterJob, blocksProduction: !scheduledAfterJob
+      planned: true, scheduledAfterJob: false, blocksProduction: true
     };
   }
 
@@ -325,6 +340,7 @@
     record.since = eventTime(state, dt);
     record.riskyContinue = false;
     record.scheduledRepair = false;
+    record.selfRepairFailed = false;
     record.warningAgeMinutes = 0;
     return {
       event: 'warning', bay, fault, faultLabel: info.label, severity: 1,
@@ -359,6 +375,7 @@
     record.since = eventTime(state, dt);
     record.riskyContinue = false;
     record.scheduledRepair = false;
+    record.selfRepairFailed = false;
     record.warningAgeMinutes = 0;
     const cost = Math.round(info.cost * 2.6 + 750);
     const downtime = Math.round(info.downtime * 3.6 + 55);
@@ -403,6 +420,7 @@
           record.repairMethod = null;
           record.repairWillFail = false;
           if (selfRepairFailed) {
+            record.selfRepairFailed = true;
             record.status = record.severity >= 2 ? 'major_failure' : 'warning';
             record.since = now;
             events.push({
@@ -411,6 +429,7 @@
               blocksProduction: true
             });
           } else {
+            record.selfRepairFailed = false;
             record.status = 'ok';
             record.fault = null;
             record.severity = 0;
