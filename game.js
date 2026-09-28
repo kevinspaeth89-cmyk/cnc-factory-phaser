@@ -920,8 +920,15 @@
       +(load.reworkMinutes>0?' · '+formatEstimateMinutes(load.reworkMinutes)+' Nacharbeit':'')
       +(late?' · '+late+' vsl. zu spät':' · alle vsl. pünktlich');
   };
-  const loadPercentText=check=>!check?'keine Prognose':!Number.isFinite(check.percent)
-    ?'keine Zeit vor Frist':check.percent>200?'>200 %':Math.round(check.percent)+' %';
+  const loadPercentText=(check,ownOrder=false)=>{
+    if(!check)return 'keine Prognose';
+    const percent=ownOrder
+      ?check.availableMinutes>0?check.workMinutes/check.availableMinutes*100:check.workMinutes>0?Infinity:0
+      :check.percent;
+    return !Number.isFinite(percent)||percent>200?'>200 %':Math.round(percent)+' %';
+  };
+  const candidateLoadSummary=check=>!check?'keine Prognose':
+    formatEstimateMinutes(check.workMinutes)+' zusätzliche Arbeit · '+formatEstimateMinutes(check.availableMinutes)+' Schichtzeit bis Frist · Auftrag allein '+loadPercentText(check,true)+' / mit Voraufträgen '+loadPercentText(check)+' · '+planDeadlineStatus(check);
   const planFreeText=load=>{
     if(!load.shifts.length)return 'keine Schicht besetzt';
     if(!Number.isFinite(load.freeAt))return 'mit aktueller Besetzung nicht absehbar';
@@ -2008,6 +2015,16 @@
       const risks=compatibleMachines.map(machine=>qualityRiskFor(machine,o)).sort((a,b)=>a-b);
       const qualityHint=` · ${programmingQuality.toleranceClass(o)}${risks.length?` · Qualitätsrisiko ${risks[0]}${risks.length>1&&risks[0]!==risks[risks.length-1]?`–${risks[risks.length-1]}`:''} %`:''}`;
       card.innerHTML=`<div class="top"><span>${o.customer}</span><span>${o.kind} · #${o.id}</span></div><h3>${o.part}</h3><p>${customerType}${o.material} · ${o.qty} Teile${difficulty}${qualityHint}</p><div class="values"><span>${o.kg} kg · Frist ${o.deadlineHours} h${o.reputationBonusPct?` · Kundenbonus ${o.reputationBonusPct>0?'+':''}${o.reputationBonusPct} %`:''}</span><b>${euro(o.reward)}</b></div><div class="order-economics${materialContribution!==null&&materialContribution<0?' loss':''}"><div class="order-economics-grid"><span>Material zum Tageskurs<strong>${materialCost===null?'—':euro(materialCost)}</strong></span><span>Nach Material<strong>${materialContribution===null?'—':euro(materialContribution)}</strong></span></div><p>${contributionPerHour===null?'':`Etwa ${euro(contributionPerHour)} je Maschinenstunde · ${formatMinutes(estimateMinutes)} Rüst- und Maschinenzeit`}</p><small>Grundmaschine, ohne Lohn, Strom und Verschleiß</small></div>`;
+      const loadPreviews=compatibleMachines.filter(machine=>!machineOrderBlockReason(machine,o)).map(machine=>({machine,load:plannedMachineLoad(machine,o)}))
+        .filter(entry=>entry.load.shifts.length&&entry.load.candidateCheck);
+      loadPreviews.sort((a,b)=>b.load.candidateCheck.bufferMinutes-a.load.candidateCheck.bufferMinutes);
+      if(loadPreviews.length){
+        const best=loadPreviews[0],preview=document.createElement('p');
+        preview.className='order-load-preview';
+        preview.classList.toggle('late',best.load.candidateCheck.bufferMinutes<0);
+        preview.textContent='Planung auf Platz '+best.machine.bay+': '+candidateLoadSummary(best.load.candidateCheck);
+        card.append(preview);
+      }
       if(o.isRushOrder){
         card.classList.add('rush-order-card');
         const badge=document.createElement('strong');badge.className='rush-order-badge';
@@ -2095,7 +2112,7 @@
     const candidate=projected.candidateCheck;
     activeValue.textContent='Laufend: '+activePlanText(current);
     queueValue.textContent='Warteschlange: '+queuedPlanText(current);
-    projectedValue.textContent='Neuer Auftrag: '+loadPercentText(candidate)+' Schichtauslastung · '+planDeadlineStatus(candidate);
+    projectedValue.textContent='Neuer Auftrag: '+candidateLoadSummary(candidate);
     activeValue.classList.toggle('assignment-overloaded',!!current.activeCheck&&current.activeCheck.bufferMinutes<0);
     queueValue.classList.toggle('assignment-overloaded',current.queuedChecks.some(check=>check.bufferMinutes<0));
     projectedValue.classList.toggle('assignment-overloaded',!candidate||candidate.bufferMinutes<0||candidate.percent>100);
