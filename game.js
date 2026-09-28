@@ -1542,7 +1542,14 @@
     $('hall-preview-time').hidden=!order;
     $('hall-preview-time').textContent=order?`Rest ${formatMinutes(remainingMinutes(machine,order))}${deadlineLeft===null?'':` · Frist ${deadlineLeft<0?`${formatMinutes(-deadlineLeft)} überfällig`:formatMinutes(deadlineLeft)}`}`:'';
     $('hall-preview-condition').textContent=`Werkzeug ${conditionLabel(machine.tool)} · Wartung ${Math.round(machine.maintenance)} %${machine.maintenanceRemainingMinutes>0?` · Wartung läuft ${formatMinutes(machine.maintenanceRemainingMinutes)}`:''} · Geplant ${machine.orderQueue.length}/${MAX_QUEUED_ORDERS}`;
-    $('hall-preview-operators').textContent=`Bediener S1 ${machine.operator1?'✓':'–'} · S2 ${machine.loadingRobot?'Roboter':machine.operator2?'✓':'–'}`;
+    const operatorDetails=[1,2].flatMap(operatorShift=>{
+      if(operatorShift===2&&machine.loadingRobot)return [];
+      const employee=machine['operator'+operatorShift]?assignedEmployee(machine,operatorShift):null;
+      if(!employee)return [];
+      const familiarity=recruitmentSystem.familiarityFor(employee,machine.type);
+      return [`S${operatorShift}: ${employee.name} · ${familiarity.label} · ${Math.floor(familiarity.workMinutes/60)} h`];
+    });
+    $('hall-preview-operators').textContent=`Bediener S1 ${machine.operator1?'✓':'–'} · S2 ${machine.loadingRobot?'Roboter':machine.operator2?'✓':'–'}${operatorDetails.length?' · '+operatorDetails.join(' · '):''}`;
     const slot=expansionSystem.getBayLayout(state).find(item=>item.bay===machine.bay);
     const hall=$('hall-map'),width=hall.clientWidth,height=hall.clientHeight;
     if(!slot||!width||!height)return;
