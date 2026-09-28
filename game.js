@@ -1848,6 +1848,44 @@
     state.selectedBay=bay;
     save();renderOrders();renderBusiness();render();
   }
+  function renderHallOverview(){
+    const panel=$('hall-overview'),selected=$('selected-readout'),cards=$('hall-machine-cards');
+    const hallVisible=!$('hall-view').hidden;
+    panel.hidden=!hallVisible;selected.hidden=hallVisible;
+    if(!hallVisible)return;
+    $('hall-clock').textContent=clock();
+    const bayKey=state.machines.map(machine=>machine.bay).join(',');
+    if(cards.dataset.bays!==bayKey){
+      cards.dataset.bays=bayKey;
+      cards.replaceChildren(...state.machines.map(machine=>{
+        const button=document.createElement('button'),name=document.createElement('span'),status=document.createElement('span'),track=document.createElement('span'),fill=document.createElement('span');
+        button.type='button';button.className='hall-machine-card';button.dataset.overviewBay=String(machine.bay);
+        name.className='overview-name';status.className='overview-state';track.className='overview-track';fill.className='overview-fill';
+        track.append(fill);button.append(name,status,track);
+        button.addEventListener('click',()=>tapHallBay(machine.bay));
+        return button;
+      }));
+      if(!state.machines.length){
+        const empty=document.createElement('p');empty.className='hall-machine-empty';empty.textContent='Noch keine Maschine gekauft.';cards.append(empty);
+      }
+    }
+    cards.style.setProperty('--hall-machine-count',String(Math.max(1,state.machines.length)));
+    for(const machine of state.machines){
+      const button=cards.querySelector('[data-overview-bay="'+machine.bay+'"]'),order=job(machine);
+      const progress=order?Math.max(0,Math.min(100,orderProgressPercent(machine,order))):0;
+      const fault=breakdownSystem.getRecord(state,machine.bay);
+      const issue=!!fault&&['warning','major_failure','repairing'].includes(fault.status);
+      const label=issue?'Störung':machine.maintenanceRemainingMinutes>0?'Wartung':order
+        ?(machine.setupRemainingMinutes>0?'Rüsten · ':'')+Math.floor(progress)+' %':'Bereit';
+      button.querySelector('.overview-name').textContent='Platz '+machine.bay+' · '+catalog[machine.type].name;
+      button.querySelector('.overview-state').textContent=label;
+      button.querySelector('.overview-fill').style.width=progress+'%';
+      button.classList.toggle('selected',state.selectedBay===machine.bay);
+      button.classList.toggle('issue',issue);
+      button.title='Platz '+machine.bay+' · '+catalog[machine.type].name+' · '+(order?order.part+' · '+Math.floor(progress)+' %':'Kein laufender Auftrag')+' · '+statusFor(machine);
+      button.setAttribute('aria-label',button.title);
+    }
+  }
   function renderHallPreview(){
     const machine=machineAt(hallPreviewBay),panel=$('hall-preview');
     panel.hidden=!machine;
@@ -1913,6 +1951,7 @@
     zoomTimer=setTimeout(()=>{
       $('hall-view').hidden=true;
       $('detail-view').hidden=false;
+      renderHallOverview();
       ensureGame();
       visual?.scale.refresh();
     },window.matchMedia('(prefers-reduced-motion: reduce)').matches?0:300);
@@ -1922,6 +1961,7 @@
     clearTimeout(zoomTimer);
     $('detail-view').hidden=true;
     $('hall-view').hidden=false;
+    renderHallOverview();
     $('hall-map').classList.remove('zooming');
     hallPreviewBay=null;renderHallPreview();
   }
@@ -3533,6 +3573,7 @@
     $('progress').style.width=pct+'%';
     $('progress-label').textContent=o?(m.setupRemainingMinutes>0?`${m.setupDelayMinutes?`Einrichtungsproblem +${formatMinutes(m.setupDelayMinutes)} · `:''}Rüstphase · ${formatMinutes(m.setupRemainingMinutes)} · ${m.produced} / ${o.qty} Teile`:`${Math.floor(pct)} % · ${m.produced} / ${o.qty} · ${statusFor(m)}`):m?statusFor(m):'Öffne Betrieb und wähle deine erste Maschine.';
     $('clock').textContent=clock();
+    renderHallOverview();
     $('status').textContent='● '+statusFor(m);
     $('status').classList.toggle('paused',state.paused);
     const rushPlanningLocked=!!state.pendingRushAssignment;
