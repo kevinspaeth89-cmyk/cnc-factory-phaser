@@ -6,6 +6,9 @@
   const SAVE_KEY = 'cnc_factory_save_v3';
   const START = Date.UTC(2026, 0, 5, 6);
   const GAME_MINUTES_PER_REAL_SECOND = 10;
+  const EMPLOYEE_REMARK_VISIBLE_MS = 5000;
+  const EMPLOYEE_REMARK_COOLDOWN_MS = 9000;
+  const EMPLOYEE_REMARK_HISTORY_LIMIT = 3;
   const RUSH_OVERTIME_WAGE_MULTIPLIER = 1.5;
   const RUSH_SATURDAY_WAGE_MULTIPLIER = 2;
   const HIRING_FEE = 150;
@@ -1037,7 +1040,7 @@
     return changed;
   }
   const conditionLabel=value=>value>0&&value<1?'<1 %':Math.round(value)+' %';
-  let visual=null, currentPanel=null, businessSection='factory', messageTimer, zoomTimer, phaserGame=null, hallPreviewBay=null, employeeCardContext=null, shiftLeaderPanelShift=1, shiftLeaderAdviceKey='', operatorPickerShift=null, dismissalPickerShift=null, qualityPickerShift=null, rushWorkMode='regular', rushWorkModeEventId=null;
+  let visual=null, currentPanel=null, businessSection='factory', messageTimer, zoomTimer, phaserGame=null, hallPreviewBay=null, employeeCardContext=null, employeeRemarkState=new Map(), employeeRemarkHistory=[], shiftLeaderPanelShift=1, shiftLeaderAdviceKey='', operatorPickerShift=null, dismissalPickerShift=null, qualityPickerShift=null, rushWorkMode='regular', rushWorkModeEventId=null;
   function say(message){
     $('message').textContent=message;
     clearTimeout(messageTimer);
@@ -2338,16 +2341,75 @@
     }):[Object.assign(document.createElement('span'),{textContent:'Noch keine besonderen Ereignisse – die Geschichte beginnt gerade.'})]));
     card.hidden=false;
   }
+  function renderEmployeeRemarkHistory(){
+    const panel=$('employee-remark-history'),lines=$('employee-remark-history-lines');
+    if(!panel||!lines)return;
+    panel.hidden=!employeeRemarkHistory.length;
+    lines.replaceChildren(...employeeRemarkHistory.map(item=>{
+      const line=document.createElement('div');
+      const name=document.createElement('strong'),text=document.createElement('span');
+      name.textContent=item.name+':';
+      text.textContent=' „'+item.text+'“';
+      line.append(name,text);
+      return line;
+    }));
+  }
+  function employeeRemarkImportance(machine){
+    if(!machine)return 'casual';
+    if(machine.tool<=12||machine.maintenance<=12)return 'urgent';
+    const active=job(machine);
+    if(active){
+      const remaining=Math.max(0,(active.qty||0)-(machine.produced||0));
+      if(remaining>0&&remaining<=Math.max(3,Math.ceil((active.qty||0)*.12)))return 'notable';
+    }
+    return 'casual';
+  }
+  function pushEmployeeRemarkHistory(employee,text){
+    if(!employee||!text)return;
+    const last=employeeRemarkHistory[0];
+    if(last&&last.employeeId===employee.id&&last.text===text)return;
+    employeeRemarkHistory.unshift({employeeId:employee.id,name:employee.name||'Bediener',text});
+    employeeRemarkHistory=employeeRemarkHistory.slice(0,EMPLOYEE_REMARK_HISTORY_LIMIT);
+    renderEmployeeRemarkHistory();
+  }
   function hallEmployeeRemark(machine,employee){
     if(!machine||!employee||typeof recruitmentSystem.workRemark!=='function')return '';
+    const key=machine.bay+':'+employee.id;
+    const now=Date.now();
+    const entry=employeeRemarkState.get(key)||{text:'',expiresAt:0,nextAllowedAt:0,lastTriggerKey:''};
+    if(entry.text&&entry.expiresAt>now)return entry.text;
+    if(entry.text&&entry.expiresAt<=now)entry.text='';
+
+    const importance=employeeRemarkImportance(machine);
+    if(state.speed>=5&&importance==='casual'){
+      employeeRemarkState.set(key,entry);
+      return '';
+    }
+    if(entry.nextAllowedAt>now){
+      employeeRemarkState.set(key,entry);
+      return '';
+    }
+
     const slot=Math.floor(state.gameMinutes/20);
-    const urgent=machine.tool<=12||machine.maintenance<=12;
-    const show=urgent
-      ? (slot+employee.id+machine.bay)%3===0
-      : (slot+employee.id*3+machine.bay*5)%10===0;
-    if(!show)return '';
+    const cadence=importance==='urgent'?3:importance==='notable'?5:10;
+    const triggerKey=slot+':'+importance;
+    if(entry.lastTriggerKey===triggerKey){
+      employeeRemarkState.set(key,entry);
+      return '';
+    }
+    entry.lastTriggerKey=triggerKey;
+    const show=importance==='urgent'
+      ? (slot+employee.id+machine.bay)%cadence===0
+      : importance==='notable'
+        ? (slot+employee.id*2+machine.bay)%cadence===0
+        : (slot+employee.id*3+machine.bay*5)%cadence===0;
+    if(!show){
+      employeeRemarkState.set(key,entry);
+      return '';
+    }
+
     const active=job(machine);
-    return recruitmentSystem.workRemark(employee,{
+    const remark=recruitmentSystem.workRemark(employee,{
       timeBucket:slot,
       machineType:machine.type,
       machineName:catalog[machine.type]?.name||'die Maschine',
@@ -2356,7 +2418,19 @@
       produced:machine.produced,
       quantity:active?.qty||0
     });
+    if(!remark){
+      employeeRemarkState.set(key,entry);
+      return '';
+    }
+
+    entry.text=remark;
+    entry.expiresAt=now+EMPLOYEE_REMARK_VISIBLE_MS;
+    entry.nextAllowedAt=now+EMPLOYEE_REMARK_COOLDOWN_MS;
+    employeeRemarkState.set(key,entry);
+    pushEmployeeRemarkHistory(employee,remark);
+    return remark;
   }
+
   function renderStaffDevelopment(){
     $('staff-development').replaceChildren(...[1,2].flatMap(shift=>state.staffRoster['shift'+shift].map(employee=>{
       const row=document.createElement('div'),portrait=document.createElement('img'),details=document.createElement('div');
@@ -3744,6 +3818,9 @@
     }catch(_){}
     state=defaults();
     hallPreviewBay=null;
+    employeeRemarkState=new Map();
+    employeeRemarkHistory=[];
+    renderEmployeeRemarkHistory();
     ensureEconomyState();
     clearTimeout(zoomTimer);
     closeDrawer();
