@@ -162,3 +162,25 @@ test('generated applicants expose personality without changing legacy specialty 
   const employee = recruitment.createEmployee(candidate, 99);
   assert.deepEqual(employee.personality, recruitment.derivePersonality(employee.skills));
 });
+
+test('personality changes quality risk and incident learning in a predictable way', () => {
+  const careful = {
+    profileVersion: 2,
+    name: 'Mira Test',
+    skills: { turning: 8, milling: 4, precision: 9, learning: 9 },
+    personality: recruitment.derivePersonality({ turning: 8, milling: 4, precision: 9, learning: 9 })
+  };
+  const pragmatic = {
+    profileVersion: 2,
+    name: 'Tarek Test',
+    skills: { turning: 7, milling: 3, precision: 2, learning: 2 },
+    personality: recruitment.derivePersonality({ turning: 7, milling: 3, precision: 2, learning: 2 })
+  };
+
+  assert.equal(recruitment.qualityRiskModifier(careful), -2);
+  assert.equal(recruitment.qualityRiskModifier(pragmatic), 1);
+  assert.ok(recruitment.incidentExperience(careful, 'repairSelf') > recruitment.incidentExperience(pragmatic, 'repairSelf'));
+  assert.equal(recruitment.breakdownAdvice(careful, 'warning').action, 'repairSelf');
+  assert.equal(recruitment.breakdownAdvice(pragmatic, 'warning').action, 'continueRisky');
+  assert.equal(recruitment.breakdownAdvice(pragmatic, 'major_failure').action, 'repairTechnician');
+});
