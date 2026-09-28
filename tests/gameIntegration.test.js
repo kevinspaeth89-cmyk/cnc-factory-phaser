@@ -35,7 +35,12 @@ function boot(storage,options={}){
     insertBefore(child,before){const index=before?this.children.indexOf(before):-1;if(index<0)this.children.push(child);else this.children.splice(index,0,child);child.parentElement=this;if(child.id)elements.set(child.id,child);return child}
     prepend(...children){this.children.unshift(...children)}
     replaceChildren(...children){this.children=children}
-    querySelector(q){return q==='span'?this.children.find(x=>x.tagName==='span')||this.children[0]:this.children.find(x=>x.className===q.slice(1))||null}
+    get firstElementChild(){return this.children.find(child=>child&&typeof child==='object')||null}
+    querySelector(q){
+      const matches=node=>q==='span'?node.tagName==='span':q.startsWith('.')?node.className===q.slice(1):false;
+      const visit=node=>{for(const child of node.children||[]){if(matches(child))return child;const nested=visit(child);if(nested)return nested}return null};
+      return visit(this);
+    }
     querySelectorAll(q){const matches=[];const visit=node=>{for(const child of node.children||[]){if(q==='[data-office-key]'&&child.dataset?.officeKey)matches.push(child);visit(child)}};visit(this);return matches}
     getAttribute(name){return this.attrs[name]||null}
     setAttribute(name,value){this.attrs[name]=value}
