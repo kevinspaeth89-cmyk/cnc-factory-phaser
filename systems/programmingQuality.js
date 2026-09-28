@@ -88,7 +88,7 @@
     const safeTrained = clamp(Number(trained) || 0, 0, 3);
     if (hasQualityAssurance) {
       const selected = inspectionPolicy(policy);
-      return clamp(.78 + safePrecision * .018 + safeTrained * .015 + selected.detectionModifier, .70, .995);
+      return clamp(.78 + safePrecision * .018 + safeTrained * .015 + selected.detectionModifier, .70, .99);
     }
     return clamp(.32 + safePrecision * .04 + safeTrained * .025, .36, .78);
   }
