@@ -174,21 +174,89 @@
     return bonus;
   }
 
-  function breakdownAdvice(employee, eventType = 'warning') {
+  function normalizeMachineHistory(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+    const result = {};
+    for (const [machineType, entry] of Object.entries(value)) {
+      if (!machineType || !entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+      result[machineType] = {
+        machineType,
+        machineName: typeof entry.machineName === 'string' && entry.machineName.trim() ? entry.machineName.trim().slice(0, 80) : machineType,
+        incidents: Math.max(0, Math.floor(Number(entry.incidents) || 0)),
+        selfRepairs: Math.max(0, Math.floor(Number(entry.selfRepairs) || 0)),
+        technicianRepairs: Math.max(0, Math.floor(Number(entry.technicianRepairs) || 0)),
+        riskyContinues: Math.max(0, Math.floor(Number(entry.riskyContinues) || 0)),
+        firstAt: Number.isFinite(entry.firstAt) ? entry.firstAt : null,
+        lastAt: Number.isFinite(entry.lastAt) ? entry.lastAt : null,
+        lastFault: typeof entry.lastFault === 'string' ? entry.lastFault : null,
+        lastAction: typeof entry.lastAction === 'string' ? entry.lastAction : null,
+        lastBay: Number.isInteger(entry.lastBay) ? entry.lastBay : null
+      };
+    }
+    return result;
+  }
+
+  function machineExperience(employee, machineType) {
+    if (!employee || typeof machineType !== 'string' || !machineType) return null;
+    const history = normalizeMachineHistory(employee.machineHistory);
+    return history[machineType] || null;
+  }
+
+  function recordMachineIncident(employee, context = {}) {
+    if (!employee || employee.profileVersion !== 2 || typeof context.machineType !== 'string' || !context.machineType) return null;
+    employee.machineHistory = normalizeMachineHistory(employee.machineHistory);
+    const type = context.machineType;
+    const previous = employee.machineHistory[type] || {
+      machineType: type,
+      machineName: typeof context.machineName === 'string' && context.machineName.trim() ? context.machineName.trim().slice(0, 80) : type,
+      incidents: 0,
+      selfRepairs: 0,
+      technicianRepairs: 0,
+      riskyContinues: 0,
+      firstAt: Number.isFinite(context.gameMinutes) ? context.gameMinutes : null,
+      lastAt: null,
+      lastFault: null,
+      lastAction: null,
+      lastBay: null
+    };
+    previous.machineName = typeof context.machineName === 'string' && context.machineName.trim()
+      ? context.machineName.trim().slice(0, 80)
+      : previous.machineName;
+    previous.incidents += 1;
+    if (context.action === 'repairSelf') previous.selfRepairs += 1;
+    if (context.action === 'repairTechnician') previous.technicianRepairs += 1;
+    if (context.action === 'continueRisky') previous.riskyContinues += 1;
+    previous.lastAt = Number.isFinite(context.gameMinutes) ? context.gameMinutes : previous.lastAt;
+    previous.lastFault = typeof context.fault === 'string' ? context.fault : previous.lastFault;
+    previous.lastAction = typeof context.action === 'string' ? context.action : previous.lastAction;
+    // Hallenplatz is only historical context. Recognition is keyed exclusively by machineType.
+    previous.lastBay = Number.isInteger(context.bay) ? context.bay : previous.lastBay;
+    employee.machineHistory[type] = previous;
+    return { ...previous };
+  }
+
+  function breakdownAdvice(employee, eventType = 'warning', context = {}) {
     if (employee?.profileVersion !== 2) return null;
     const ids = personalityIds(employee);
     const name = typeof employee.name === 'string' && employee.name.trim() ? employee.name.trim() : 'Bediener';
     const major = eventType === 'major_failure';
+    const experience = machineExperience(employee, context.machineType);
+    const machineName = typeof context.machineName === 'string' && context.machineName.trim() ? context.machineName.trim() : experience?.machineName;
+    const memoryLead = experience?.incidents > 0
+      ? experience.incidents === 1
+        ? `Mit ${machineName || 'diesem Maschinentyp'} hatten wir schon einmal eine Störung. `
+        : `Mit ${machineName || 'diesem Maschinentyp'} hatten wir schon ${experience.incidents} Störungen. `
+      : '';
 
     if (major) {
       return {
         employeeName: name,
         action: 'repairTechnician',
-        text: ids.includes('neugierig')
+        text: memoryLead + (ids.includes('neugierig')
           ? 'Die Maschine steht. Ich würde die Ursache dokumentieren und den Monteur dazuholen – dabei kann ich mir den Fehler genau ansehen.'
           : ids.includes('routineorientiert')
             ? 'Das ist kein normaler Ablauf mehr. Ich würde den Monteur holen und nach bewährtem Verfahren reparieren lassen.'
-            : 'Bei einem schweren Schaden würde ich nichts erzwingen und den Monteur holen.'
+            : 'Bei einem schweren Schaden würde ich nichts erzwingen und den Monteur holen.')
       };
     }
 
@@ -196,26 +264,26 @@
       return {
         employeeName: name,
         action: 'repairSelf',
-        text: ids.includes('neugierig')
+        text: memoryLead + (ids.includes('neugierig')
           ? 'Ich würde sofort stoppen und selbst nachsehen. So finden wir die Ursache, bevor daraus ein größerer Schaden wird.'
-          : 'Ich würde die Maschine stoppen und die Ursache erst prüfen, bevor wir weiterproduzieren.'
+          : 'Ich würde die Maschine stoppen und die Ursache erst prüfen, bevor wir weiterproduzieren.')
       };
     }
     if (ids.includes('pragmatisch')) {
       return {
         employeeName: name,
         action: 'continueRisky',
-        text: ids.includes('routineorientiert')
+        text: memoryLead + (ids.includes('routineorientiert')
           ? 'Wenn Lauf und Maß noch stimmen, würde ich den Auftrag erst weiterfahren und die Störung danach angehen.'
-          : 'Wenn die Maschine noch sauber läuft, würde ich den Auftrag erstmal weiterfahren und die Störung beobachten.'
+          : 'Wenn die Maschine noch sauber läuft, würde ich den Auftrag erstmal weiterfahren und die Störung beobachten.')
       };
     }
     return {
       employeeName: name,
       action: 'repairSelf',
-      text: ids.includes('neugierig')
+      text: memoryLead + (ids.includes('neugierig')
         ? 'Ich würde kurz stoppen und selbst prüfen. Vielleicht sehen wir direkt, was sich verändert hat.'
-        : 'Ich würde kurz prüfen, bevor wir entscheiden, ob die Maschine sicher weiterlaufen kann.'
+        : 'Ich würde kurz prüfen, bevor wir entscheiden, ob die Maschine sicher weiterlaufen kann.')
     };
   }
 
@@ -322,6 +390,8 @@
       xp: 0,
       trained: 0,
       assignedBay: null,
+      machineHistory: {},
+      memories: [],
       profileVersion: 2,
       name: candidate.name,
       gender,
@@ -372,6 +442,8 @@
       xp: Number.isFinite(entry?.xp) ? Math.max(0, entry.xp) : 0,
       trained: Number.isInteger(entry?.trained) ? clamp(entry.trained, 0, 3) : 0,
       assignedBay: Number.isInteger(entry?.assignedBay) ? entry.assignedBay : null,
+      machineHistory: normalizeMachineHistory(entry?.machineHistory),
+      memories: Array.isArray(entry?.memories) ? entry.memories.slice(0, 5).map(memory => ({ ...memory })) : [],
       ...profile
     };
   }
@@ -402,6 +474,9 @@
     personalityIds,
     qualityRiskModifier,
     incidentExperience,
+    normalizeMachineHistory,
+    machineExperience,
+    recordMachineIncident,
     breakdownAdvice,
     deriveProfile,
     ensureState,
