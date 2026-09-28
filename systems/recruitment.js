@@ -629,6 +629,7 @@
       xp: 0,
       trained: 0,
       assignedBay: null,
+      assignedRole: null,
       machineHistory: {},
       memories: [],
       baseHourlyWage: Number.isFinite(candidate.baseHourlyWage)
@@ -685,6 +686,7 @@
       xp: Number.isFinite(entry?.xp) ? Math.max(0, entry.xp) : 0,
       trained: Number.isInteger(entry?.trained) ? clamp(entry.trained, 0, 3) : 0,
       assignedBay: Number.isInteger(entry?.assignedBay) ? entry.assignedBay : null,
+      assignedRole: entry?.assignedRole === 'quality' ? 'quality' : null,
       machineHistory: normalizeMachineHistory(entry?.machineHistory),
       memories: normalizeMemories(entry?.memories),
       baseHourlyWage: Number.isFinite(entry?.baseHourlyWage)
