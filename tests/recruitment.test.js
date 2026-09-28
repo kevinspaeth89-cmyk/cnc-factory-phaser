@@ -702,3 +702,42 @@ test('legacy and quality profiles do not receive machine-floor remarks', () => {
   assert.equal(recruitment.workRemark({ id: 1, profileVersion: 0 }, {}), '');
   assert.equal(recruitment.workRemark({ id: 2, profileVersion: 2, profileType: 'quality' }, {}), '');
 });
+
+
+test('shift remarks are deterministic and differ between start and end', () => {
+  const employee = {
+    id: 31,
+    profileVersion: 2,
+    name: 'Mira Test',
+    skills: { turning: 7, milling: 4, precision: 9, learning: 8 },
+    personality: recruitment.derivePersonality({ turning: 7, milling: 4, precision: 9, learning: 8 })
+  };
+  const start = recruitment.eventRemark(employee, 'shift_start', { shift: 1, timeBucket: 11 });
+  const startAgain = recruitment.eventRemark(employee, 'shift_start', { shift: 1, timeBucket: 11 });
+  const end = recruitment.eventRemark(employee, 'shift_end', { shift: 1, timeBucket: 11 });
+  assert.equal(start, startAgain);
+  assert.ok(start.length > 0);
+  assert.ok(end.length > 0);
+  assert.notEqual(start, end);
+});
+
+test('decision remarks react to rush orders, robots and risky continuation', () => {
+  const employee = {
+    id: 32,
+    profileVersion: 2,
+    name: 'Tarek Test',
+    skills: { turning: 8, milling: 5, precision: 3, learning: 4 },
+    personality: recruitment.derivePersonality({ turning: 8, milling: 5, precision: 3, learning: 4 })
+  };
+  const rush = recruitment.eventRemark(employee, 'rush_order', { part: 'Wellenflansch', timeBucket: 8 });
+  const robot = recruitment.eventRemark(employee, 'robot_purchase', { machineName: 'Nexora NX-420', timeBucket: 8 });
+  const risky = recruitment.eventRemark(employee, 'continue_risky', { machineName: 'Nexora NX-420', timeBucket: 8 });
+  assert.match(rush, /Eilauftrag|Schnell|Qualität|Ablauf|Reihenfolge/);
+  assert.match(robot, /Roboter|Automatik|Spätschicht/);
+  assert.match(risky, /beobachten|Auge|stoppen|Weiterfahren|Reißleine|Geräusch|Maß/i);
+});
+
+test('legacy and quality profiles do not receive shift or decision remarks', () => {
+  assert.equal(recruitment.eventRemark({ id: 1, profileVersion: 0 }, 'shift_start', {}), '');
+  assert.equal(recruitment.eventRemark({ id: 2, profileVersion: 2, profileType: 'quality' }, 'training', {}), '');
+});
