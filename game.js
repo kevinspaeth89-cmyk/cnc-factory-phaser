@@ -1986,7 +1986,8 @@
       details.className='staff-profile-details';
       const profile=employee.profileVersion===2?employee.specialty:'Altbestand';
       name.className='staff-profile-name';
-      name.textContent='S'+shift+' · '+employee.name+' · '+profile+' · '+(employee.assignedBay?'Platz '+employee.assignedBay:'frei');
+      const assignmentLabel=employee.assignedRole==='quality'?'QS':employee.assignedBay?'Platz '+employee.assignedBay:'frei';
+      name.textContent='S'+shift+' · '+employee.name+' · '+profile+' · '+assignmentLabel;
       const personality=personalitySummary(employee);
       const familiarTypes=Object.values(employee.machineHistory||{}).filter(item=>item&&(item.workMinutes>0||item.incidents>0))
         .sort((a,b)=>(b.workMinutes||0)-(a.workMinutes||0)||(b.incidents||0)-(a.incidents||0));
@@ -2502,8 +2503,10 @@
     const index=roster.findIndex(employee=>employee.id===employeeId);
     if(index<0)return false;
     const employee=roster[index];
-    if(employee.assignedBay!==null){
-      say(`${employee.name} ist noch einer Maschine zugewiesen. Ziehe die Person zuerst dort ab.`);
+    if(employee.assignedBay!==null||employee.assignedRole){
+      say(employee.assignedRole==='quality'
+        ?`${employee.name} arbeitet aktuell in der QS. Ziehe die Person zuerst dort ab.`
+        :`${employee.name} ist noch einer Maschine zugewiesen. Ziehe die Person zuerst dort ab.`);
       return false;
     }
     roster.splice(index,1);
@@ -2533,8 +2536,9 @@
       const empty=document.createElement('p');empty.className='operator-picker-empty';empty.textContent='In dieser Schicht arbeitet niemand.';
       list.append(empty);
     }else{
-      for(const employee of roster.slice().sort((a,b)=>(a.assignedBay!==null)-(b.assignedBay!==null)||employeeHourlyWage(b,shift)-employeeHourlyWage(a,shift))){
-        const row=document.createElement('div');row.className='operator-choice'+(employee.assignedBay!==null?' assigned':'');
+      for(const employee of roster.slice().sort((a,b)=>(employeeIsFree(a)?0:1)-(employeeIsFree(b)?0:1)||employeeHourlyWage(b,shift)-employeeHourlyWage(a,shift))){
+        const occupied=!employeeIsFree(employee);
+        const row=document.createElement('div');row.className='operator-choice'+(occupied?' assigned':'');
         const portrait=document.createElement('img');portrait.src=employee.portrait||recruitmentSystem.portraitFor(employee.id,employee.gender);
         portrait.alt='Porträt von '+employee.name;portrait.loading='lazy';
         const main=document.createElement('div');main.className='operator-choice-main';
@@ -2545,10 +2549,11 @@
           .sort((a,b)=>(b.workMinutes||0)-(a.workMinutes||0))[0];
         const experience=known?recruitmentSystem.familiarityFor(employee,known.machineType):null;
         const machineText=known&&experience?` · ${known.machineName}: ${experience.label}, ${Math.floor(experience.workMinutes/60)} h`:'';
-        detail.textContent=`${personality||employee.specialty} · ${employeeHourlyWage(employee,shift)} €/h${machineText}${employee.assignedBay!==null?` · aktuell Platz ${employee.assignedBay}`:''}`;
+        const assignmentText=employee.assignedRole==='quality'?' · aktuell QS':employee.assignedBay!==null?` · aktuell Platz ${employee.assignedBay}`:'';
+        detail.textContent=`${personality||employee.specialty} · ${employeeHourlyWage(employee,shift)} €/h${machineText}${assignmentText}`;
         main.append(name,detail);
-        const action=document.createElement('button');action.type='button';action.className='action'+(employee.assignedBay===null?' danger':'');
-        if(employee.assignedBay===null){
+        const action=document.createElement('button');action.type='button';action.className='action'+(employeeIsFree(employee)?' danger':'');
+        if(employeeIsFree(employee)){
           action.textContent='Entlassen';
           action.addEventListener('click',()=>dismissEmployee(shift,employee.id));
         }else{
@@ -2559,6 +2564,110 @@
       }
     }
     panel.replaceChildren(title,list);panel.hidden=false;
+  }
+
+  function qualityDetectionChance(machine,shift){
+    const qs=qualityEmployee(shift),operator=machine?assignedEmployee(machine,shift):null;
+    if(qs){
+      const precision=Math.max(1,Math.min(10,Number(qs.skills?.precision)||5));
+      return Math.min(.99,.78+precision*.018+skillLevel(qs)*.015);
+    }
+    const precision=Math.max(1,Math.min(10,Number(operator?.skills?.precision)||5));
+    return Math.min(.78,.32+precision*.04+skillLevel(operator)*.025);
+  }
+
+  function assignQualityEmployee(shift,employeeId){
+    const roster=state.staffRoster['shift'+shift]||[];
+    const employee=roster.find(person=>person.id===employeeId);
+    if(!employee||!employeeIsFree(employee)||qualityEmployee(shift))return false;
+    employee.assignedRole='quality';
+    qualityPickerShift=null;operatorPickerShift=null;dismissalPickerShift=null;
+    save();renderBusiness();render();
+    say(`${employee.name} übernimmt die QS in Schicht ${shift} · Präzision ${employee.skills?.precision||5}/10 · ${employeeHourlyWage(employee,shift)} €/h.`);
+    return true;
+  }
+
+  function removeQualityEmployee(shift){
+    const employee=qualityEmployee(shift);
+    if(!employee)return false;
+    employee.assignedRole=null;
+    qualityPickerShift=null;
+    save();renderBusiness();render();
+    say(`${employee.name} ist nicht mehr in der QS von Schicht ${shift} eingeteilt.`);
+    return true;
+  }
+
+  function renderQualityAssurance(){
+    const parent=$('business-staff-section');
+    if(!parent)return;
+    let panel=$('quality-assurance-panel');
+    if(!panel){
+      panel=document.createElement('section');panel.id='quality-assurance-panel';panel.className='office-panel quality-assurance-panel';
+      const anchor=$('staff-development')?.nextElementSibling;
+      parent.insertBefore(panel,anchor||null);
+    }
+    const title=document.createElement('h3');title.textContent='Qualitätssicherung (QS)';
+    const intro=document.createElement('p');intro.className='hint';
+    intro.textContent='Ein QS-Mitarbeiter prüft fertige Aufträge unabhängig vom Bediener. Hohe Präzision erhöht die Chance, Maßfehler vor der Auslieferung zu entdecken. Der Mitarbeiter fehlt währenddessen an der Maschine.';
+    const stats=document.createElement('p');stats.className='hint';
+    stats.textContent=`QS-Prüfungen ${state.qualityAssurance.inspections} · Fehlerteile abgefangen ${state.qualityAssurance.caughtDefects} · durch QS gerutscht ${state.qualityAssurance.escapedDefects}`;
+    const rows=document.createElement('div');
+
+    for(const shift of [1,2]){
+      const employee=qualityEmployee(shift);
+      const row=document.createElement('div');row.className='staff-row';
+      const info=document.createElement('span');
+      const label=document.createElement('strong');label.textContent=`Schicht ${shift} · ${employee?employee.name:'QS unbesetzt'}`;
+      const small=document.createElement('small');
+      small.textContent=employee
+        ?`Präzision ${employee.skills?.precision||5}/10 · ${Math.round(qualityDetectionChance(null,shift)*100)} % QS-Entdeckung · ${employeeHourlyWage(employee,shift)} €/h`
+        :'Nur Bediener-Endkontrolle aktiv';
+      info.append(label,small);
+      const button=document.createElement('button');button.type='button';button.className='action';
+      button.textContent=employee?'Aus QS abziehen':'QS besetzen';
+      button.addEventListener('click',()=>{
+        if(employee){removeQualityEmployee(shift);return;}
+        qualityPickerShift=qualityPickerShift===shift?null:shift;
+        operatorPickerShift=null;dismissalPickerShift=null;
+        renderQualityAssurance();renderOperatorPicker();renderDismissalPicker();
+      });
+      row.append(info,button);rows.append(row);
+    }
+
+    const picker=document.createElement('div');picker.className='operator-picker';picker.hidden=![1,2].includes(qualityPickerShift);
+    if([1,2].includes(qualityPickerShift)){
+      const shift=qualityPickerShift;
+      const free=(state.staffRoster['shift'+shift]||[]).filter(employee=>employeeIsFree(employee))
+        .sort((a,b)=>(Number(b.skills?.precision)||0)-(Number(a.skills?.precision)||0)||(b.rating||0)-(a.rating||0));
+      const pickerTitle=document.createElement('div');pickerTitle.className='operator-picker-title';
+      const pickerText=document.createElement('strong');pickerText.textContent=`QS Schicht ${shift} · Mitarbeiter wählen`;
+      const close=document.createElement('button');close.type='button';close.className='action';close.textContent='×';
+      close.addEventListener('click',()=>{qualityPickerShift=null;renderQualityAssurance();});
+      pickerTitle.append(pickerText,close);
+      const list=document.createElement('div');list.className='operator-picker-list';
+      if(!free.length){
+        const empty=document.createElement('p');empty.className='operator-picker-empty';empty.textContent='Kein freier Mitarbeiter in dieser Schicht.';
+        list.append(empty);
+      }else{
+        for(const employee of free){
+          const choice=document.createElement('div');choice.className='operator-choice';
+          const portrait=document.createElement('img');portrait.src=employee.portrait||recruitmentSystem.portraitFor(employee.id,employee.gender);
+          portrait.alt='Porträt von '+employee.name;portrait.loading='lazy';
+          const main=document.createElement('div');main.className='operator-choice-main';
+          const name=document.createElement('strong');name.textContent=employee.name;
+          const detail=document.createElement('small');
+          const precision=Number(employee.skills?.precision)||5;
+          const estimated=Math.min(.99,.78+precision*.018+skillLevel(employee)*.015);
+          detail.textContent=`${personalitySummary(employee)} · Präzision ${precision}/10 · ca. ${Math.round(estimated*100)} % Entdeckung · ${employeeHourlyWage(employee,shift)} €/h`;
+          main.append(name,detail);
+          const choose=document.createElement('button');choose.type='button';choose.className='action';choose.textContent='In QS';
+          choose.addEventListener('click',()=>assignQualityEmployee(shift,employee.id));
+          choice.append(portrait,main,choose);list.append(choice);
+        }
+      }
+      picker.append(pickerTitle,list);
+    }
+    panel.replaceChildren(title,intro,stats,rows,picker);
   }
 
   function renderBusiness(){
@@ -2575,11 +2684,12 @@
     for(const shift of [1,2]){
       const assigned=state.machines.filter(x=>x['operator'+shift]).length;
       $('fire-'+shift).disabled=state.staff['shift'+shift]<=0;
-      $('free-'+shift).textContent=`${state.staff['shift'+shift]-assigned} frei`;
+      $('free-'+shift).textContent=`${(state.staffRoster['shift'+shift]||[]).filter(employee=>employeeIsFree(employee)).length} frei`;
       const wageLabel=$('shift-wage-'+shift);
       if(wageLabel)wageLabel.textContent=state.staff['shift'+shift]?`${shiftHourlyPayroll(shift)} €/h gesamt`:'noch niemand eingestellt';
     }
     renderStaffDevelopment();
+    renderQualityAssurance();
     renderProgrammer();
     renderShiftLeader();
     renderOrderOffice();
@@ -2615,8 +2725,7 @@
     $('sell-machine-value').textContent=m?euro(resaleValue(m)):'—';
     $('sell-machine').disabled=!m||!!job(m)||!!m.orderQueue.length||!!m.qualityReworkQueue.length||m.maintenanceRemainingMinutes>0;
     for(const shift of [1,2]){
-      const assigned=state.machines.filter(x=>x['operator'+shift]).length;
-      $('operator-'+shift).disabled=!m||(shift===2&&m.loadingRobot)||(!m['operator'+shift]&&assigned>=state.staff['shift'+shift]);
+      $('operator-'+shift).disabled=!m||(shift===2&&m.loadingRobot)||(!m['operator'+shift]&&!(state.staffRoster['shift'+shift]||[]).some(employee=>employeeIsFree(employee)));
     }
     if(!m)operatorPickerShift=null;
     renderOperatorPicker();
