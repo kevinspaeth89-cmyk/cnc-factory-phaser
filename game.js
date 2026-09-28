@@ -3884,6 +3884,7 @@
     }
     breakdownSystem.init(state);
     selectBay(bay);renderBusiness();save();
+    queueDecisionReaction('machine_purchase',{subjectMachine:machineAt(bay)});
     say(`${c.name} auf Platz ${bay} gekauft. Bediener zuweisen.`);
   }
   function sellMachine(){
@@ -3946,6 +3947,7 @@
     hallPreviewBay=null;
     employeeRemarkState=new Map();
     employeeRemarkHistory=[];
+    employeeShiftRemarkKeys=new Set();
     renderEmployeeRemarkHistory();
     ensureEconomyState();
     clearTimeout(zoomTimer);
@@ -4013,6 +4015,8 @@
     if(!m||m.loadingRobot||state.money<LOADING_ROBOT_COST)return;
     if(!book('machine_purchase',-LOADING_ROBOT_COST,`Laderoboter für ${catalog[m.type].name} gekauft`,{bay:m.bay,type:m.type,robot:true}).ok)return;
     const employee=assignedEmployee(m,2);
+    const currentEmployee=shiftAt(state.gameMinutes)?assignedEmployee(m,shiftAt(state.gameMinutes)):null;
+    queueDecisionReaction('robot_purchase',{subjectMachine:m,employee:currentEmployee||employee});
     if(employee)employee.assignedBay=null;
     m.operator2=false;m.loadingRobot=true;
     save();renderBusiness();render();say(`Laderoboter auf Platz ${m.bay} installiert. Spätschicht ist automatisiert.`);
@@ -4024,6 +4028,7 @@
     if(level>=3||state.money<cost)return;
     if(!book('other',-cost,`Schulung ${employee.name}`,{employeeId:id,employeeName:employee.name,shift,skillLevel:level+1}).ok)return;
     employee.trained=level+1;
+    queueDecisionReaction('training',{subjectMachine:Number.isInteger(employee.assignedBay)?machineAt(employee.assignedBay):null,employee,shift});
     save();renderBusiness();render();say(`${employee.name}: Können ${level}/3 → ${skillLevel(employee)}/3 · +5 % Produktionstempo · ${euro(cost)} bezahlt.`);
   }
   function recordEmployeeMachineWork(employee,machine,minutes,partsProduced=0){
@@ -4229,6 +4234,7 @@
         }
       }
       state.gameMinutes+=step;left-=step;
+      maybeQueueShiftMomentRemark();
       for(const m of state.machines){
         if(m.robotRepairRemainingMinutes>0){
           m.robotRepairRemainingMinutes=Math.max(0,m.robotRepairRemainingMinutes-step);
@@ -4409,6 +4415,8 @@
       });
     }
     handleBreakdownEvent(event);
+    if(action==='continueRisky')queueDecisionReaction('continue_risky',{subjectMachine:m,employee:decisionEmployee});
+    if(action==='scheduleRepair')queueDecisionReaction('repair_scheduled',{subjectMachine:m,employee:decisionEmployee});
     const experienceText=decisionEmployee&&incidentXp>0?` · ${decisionEmployee.name} +${incidentXp} min Erfahrung`:'';
     if(event.event==='repair')say(`Platz ${m.bay}: ${event.method==='technician'?'Monteur beauftragt':'Selbstreparatur gestartet'} · ${euro(event.cost)} · ${formatMinutes(event.downtime)}.${experienceText}`);
     if(event.event==='repair_scheduled')say(`Platz ${m.bay}: Reparatur eingeplant · ${euro(event.cost)}.${experienceText}`);
