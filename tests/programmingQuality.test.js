@@ -57,3 +57,36 @@ test('active QS gives a small process-risk reduction', () => {
   assert.ok(precise < average);
   assert.ok(precise >= -1);
 });
+
+
+test('QS inspection policies trade time for detection quality', () => {
+  const common = { hasQualityAssurance: true, precision: 7, trained: 1 };
+  const sampling = quality.inspectionDetectionChance({ ...common, policy: 'sampling' });
+  const standard = quality.inspectionDetectionChance({ ...common, policy: 'standard' });
+  const full = quality.inspectionDetectionChance({ ...common, policy: 'full' });
+
+  assert.ok(sampling < standard);
+  assert.ok(standard < full);
+
+  const order = { difficulty: 4 };
+  assert.ok(quality.inspectionMinutes({ order, policy: 'sampling' }) <
+    quality.inspectionMinutes({ order, policy: 'standard' }));
+  assert.ok(quality.inspectionMinutes({ order, policy: 'standard' }) <
+    quality.inspectionMinutes({ order, policy: 'full' }));
+});
+
+test('stronger QS inspection reduces process risk more', () => {
+  const sampling = quality.qualityProcessRiskModifier({
+    hasQualityAssurance: true, precision: 7, policy: 'sampling'
+  });
+  const standard = quality.qualityProcessRiskModifier({
+    hasQualityAssurance: true, precision: 7, policy: 'standard'
+  });
+  const full = quality.qualityProcessRiskModifier({
+    hasQualityAssurance: true, precision: 7, policy: 'full'
+  });
+
+  assert.ok(sampling > standard);
+  assert.ok(standard > full);
+  assert.equal(quality.inspectionPolicy('unknown').id, 'standard');
+});
