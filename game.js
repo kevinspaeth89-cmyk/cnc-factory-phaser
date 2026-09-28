@@ -3762,7 +3762,11 @@
       if(state.pendingRushAssignment?.orderId===accepted.id)state.pendingRushAssignment=null;
       if(!options.automatic)state.selected=null;
       save();renderOrders();renderBusiness();render();
-      if(!options.automatic)say(`${accepted.part} für Platz ${m.bay} vorgemerkt (${m.orderQueue.length}/${MAX_QUEUED_ORDERS}). Material wurde reserviert.`);
+      if(!options.automatic){
+        say(`${accepted.part} für Platz ${m.bay} vorgemerkt (${m.orderQueue.length}/${MAX_QUEUED_ORDERS}). Material wurde reserviert.`);
+        if(accepted.isRushOrder)queueDecisionReaction('rush_order',{subjectMachine:m,part:accepted.part});
+        else if(m.maintenance<=25)queueDecisionReaction('maintenance_deferred',{subjectMachine:m,part:accepted.part});
+      }
       return true;
     }
     if(interrupted)m.suspendedOrder=interrupted;
@@ -3776,11 +3780,15 @@
     if(state.pendingRushAssignment?.orderId===accepted.id)state.pendingRushAssignment=null;
     if(!options.automatic)state.selected=null;
     save();renderOrders();renderBusiness();render();
-    if(!options.automatic){closeDrawer();showMachine(m.bay);if(m.ncProgramPending)tab('machine');say(options.interrupt
-      ?`Eilauftrag ${accepted.part} auf Platz ${m.bay} gestartet. ${interrupted.order.part} wird danach mit neuer Rüstzeit fortgesetzt.`
-      :m.ncProgramPending
-      ?`${accepted.part} auf Platz ${m.bay} angenommen. Die Programmierung wurde automatisch zugewiesen.`
-      :`${accepted.part} auf Platz ${m.bay} angenommen. Rüstzeit ${formatMinutes(setupPlan.totalMinutes)}${setupPlan.delayMinutes?` · Einrichtungsproblem verlängert um ${formatMinutes(setupPlan.delayMinutes)}`:''}.`);}
+    if(!options.automatic){
+      closeDrawer();showMachine(m.bay);if(m.ncProgramPending)tab('machine');say(options.interrupt
+        ?`Eilauftrag ${accepted.part} auf Platz ${m.bay} gestartet. ${interrupted.order.part} wird danach mit neuer Rüstzeit fortgesetzt.`
+        :m.ncProgramPending
+        ?`${accepted.part} auf Platz ${m.bay} angenommen. Die Programmierung wurde automatisch zugewiesen.`
+        :`${accepted.part} auf Platz ${m.bay} angenommen. Rüstzeit ${formatMinutes(setupPlan.totalMinutes)}${setupPlan.delayMinutes?` · Einrichtungsproblem verlängert um ${formatMinutes(setupPlan.delayMinutes)}`:''}.`);
+      if(accepted.isRushOrder)queueDecisionReaction('rush_order',{subjectMachine:m,part:accepted.part});
+      else if(m.maintenance<=25)queueDecisionReaction('maintenance_deferred',{subjectMachine:m,part:accepted.part});
+    }
     return true;
   }
   function maybeQueueRushOrderEvent(){
