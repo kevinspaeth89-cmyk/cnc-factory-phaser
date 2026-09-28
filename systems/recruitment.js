@@ -534,6 +534,7 @@
     const ids = personalityIds(employee);
     const name = typeof employee.name === 'string' && employee.name.trim() ? employee.name.trim() : 'Bediener';
     const major = eventType === 'major_failure';
+    const selfRepairFailed = context.selfRepairFailed === true;
     const experience = machineExperience(employee, context.machineType);
     const machineName = typeof context.machineName === 'string' && context.machineName.trim() ? context.machineName.trim() : experience?.machineName;
     const specificMemory = memoryReference(employee, context);
@@ -542,6 +543,18 @@
         ? `Mit ${machineName || 'diesem Maschinentyp'} hatten wir schon einmal eine Störung. `
         : `Mit ${machineName || 'diesem Maschinentyp'} hatten wir schon ${experience.incidents} Störungen. `
       : '');
+
+    if (selfRepairFailed) {
+      return {
+        employeeName: name,
+        action: 'repairTechnician',
+        text: ids.includes('neugierig')
+          ? 'Ich habe es selbst versucht, aber die Störung sitzt tiefer als gedacht. Bevor wir noch mehr Zeit verlieren oder etwas beschädigen, sollten wir jetzt den Monteur holen.'
+          : ids.includes('routineorientiert')
+            ? 'Mein Selbstversuch hat die Störung nicht behoben. Ich würde jetzt nach Verfahren weitermachen und den Monteur beauftragen.'
+            : 'Leider hat mein Selbstversuch nicht funktioniert. Ich würde jetzt den Monteur beauftragen, damit die Störung fachgerecht behoben wird.'
+      };
+    }
 
     if (major) {
       return {
