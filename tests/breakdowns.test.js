@@ -54,7 +54,7 @@ test('a warning can be created and repaired without changing the central money f
   assert.equal(breakdowns.getStatus(state, 1), 'warning');
   assert.equal(breakdowns.getFault(state, 1), warning.fault);
 
-  const repair = breakdowns.repairNow(state, 1);
+  const repair = breakdowns.repairTechnician(state, 1);
   assert.equal(repair.event, 'repair');
   assert.ok(repair.cost > 0);
   assert.ok(repair.downtime > 0);
@@ -86,24 +86,21 @@ test('risky continuation can escalate into a costly major failure and report scr
   assert.equal(state.money, 1000);
 });
 
-test('scheduled repair lets the active job finish, then starts cheaper maintenance', () => {
-  const state = makeState({ random: () => 0, activeId: 'A12' });
+test('planned repair starts only while idle and is cheaper than the base fault cost', () => {
+  const busy = makeState({ random: () => 0, activeId: 'A12' });
+  breakdowns.tick(busy, 1, running);
+  assert.equal(breakdowns.scheduleRepair(busy, 1), null);
+
+  const state = makeState({ random: () => 0, activeId: null });
   breakdowns.tick(state, 1, running);
   const info = breakdowns.getFaultInfo(breakdowns.getFault(state, 1));
   const scheduled = breakdowns.scheduleRepair(state, 1);
 
   assert.equal(scheduled.event, 'repair_scheduled');
-  assert.equal(scheduled.scheduledAfterJob, true);
+  assert.equal(scheduled.scheduledAfterJob, false);
   assert.ok(scheduled.cost < info.baseCost);
-  assert.equal(breakdowns.canContinueProduction(state, 1), true);
-
-  state.machines[0].activeId = null;
-  const started = breakdowns.tick(state, 1, { operatingBays: [] });
-  assert.equal(started[0].event, 'repair_started');
-  assert.equal(started[0].cost, 0); // The scheduled event already reported the cost.
   assert.equal(breakdowns.getStatus(state, 1), 'repairing');
   assert.equal(breakdowns.canContinueProduction(state, 1), false);
-
   assert.equal(breakdowns.tick(state, scheduled.downtime, { operatingBays: [] })[0].event, 'repair_complete');
 });
 
