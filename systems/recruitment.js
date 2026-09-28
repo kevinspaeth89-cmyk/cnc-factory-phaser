@@ -721,6 +721,73 @@
     return flavorChoice(lines, employee, context);
   }
 
+  function eventRemark(employee, eventType, context = {}) {
+    if (!employee || employee.profileVersion !== 2 || employee.profileType === 'quality') return '';
+    const ids = personalityIds(employee);
+    const machine = typeof context.machineName === 'string' && context.machineName.trim() ? context.machineName.trim() : 'die Maschine';
+    const shift = Number(context.shift) === 2 ? 2 : 1;
+    let lines = [];
+
+    if (eventType === 'shift_start') {
+      lines = shift === 2
+        ? ['Moin, ich übernehme.', 'Spätschicht. Mal sehen, was noch anliegt.', 'Alles klar, ich bin dran.']
+        : ['Morgen. Mal sehen, was heute anliegt.', 'Erstmal schauen, wie die Maschinen heute dastehen.', 'Los geht’s.'];
+      if (ids.includes('gruendlich')) lines.push('Ich prüfe erstmal kurz, ob alles so steht wie gestern.');
+      if (ids.includes('neugierig')) lines.push('Mal sehen, ob heute irgendwas Interessantes dabei ist.');
+      if (ids.includes('routineorientiert')) lines.push('Erst der gewohnte Rundgang, dann kann es losgehen.');
+    } else if (eventType === 'shift_end') {
+      lines = ['Für heute reicht’s. Bis morgen.', 'Schicht durch. Morgen geht’s weiter.', 'So, Feierabend.'];
+      if (ids.includes('gruendlich')) lines.push('Ich schreibe noch kurz auf, was auffällig war. Dann Feierabend.');
+      if (ids.includes('pragmatisch')) lines.push('Läuft. Den Rest macht die nächste Schicht.');
+      if (ids.includes('routineorientiert')) lines.push('Alles sauber übergeben. Jetzt ist Feierabend.');
+    } else if (eventType === 'machine_purchase') {
+      lines = ['Neue ' + machine + '. Bin gespannt, wie die sich im Alltag schlägt.'];
+      if (ids.includes('neugierig')) lines.push('Die neue ' + machine + '? Die will ich mir nachher genauer ansehen.');
+      if (ids.includes('routineorientiert')) lines.push('Neu ist neu. Mal sehen, ob die ' + machine + ' so zuverlässig läuft wie die alten.');
+      if (ids.includes('pragmatisch')) lines.push('Wenn die ' + machine + ' Teile macht, ist sie willkommen.');
+      if (ids.includes('gruendlich')) lines.push('Bei der neuen ' + machine + ' würde ich am Anfang lieber ein paar Maße mehr prüfen.');
+    } else if (eventType === 'robot_purchase') {
+      lines = ['Okay, jetzt lädt also der Roboter.', 'Dann übernimmt die Automatik künftig einen Teil der Arbeit.'];
+      if (ids.includes('neugierig')) lines.push('Den Roboter würde ich gern mal im Ablauf beobachten.');
+      if (ids.includes('routineorientiert')) lines.push('Mal sehen, ob der Roboter so zuverlässig lädt wie ein Mensch.');
+      if (ids.includes('pragmatisch')) lines.push('Wenn der die Spätschicht sauber übernimmt, spart uns das einiges.');
+      if (ids.includes('bedacht')) lines.push('Automatik ist gut. Solange wir trotzdem merken, wenn etwas nicht stimmt.');
+    } else if (eventType === 'training') {
+      lines = ['Gut, das kann ich direkt gebrauchen.', 'Schulung genommen. Jetzt muss ich es nur noch sauber anwenden.'];
+      if (ids.includes('neugierig')) lines.push('Gut. Genau sowas wollte ich mal lernen.');
+      if (ids.includes('routineorientiert')) lines.push('Schulung ist okay. Hauptsache, ich kann es danach direkt anwenden.');
+      if (ids.includes('gruendlich')) lines.push('Gut, dann kann ich das künftig noch sauberer beurteilen.');
+      if (ids.includes('pragmatisch')) lines.push('Wenn es mir an der Maschine hilft, hat sich die Schulung gelohnt.');
+    } else if (eventType === 'rush_order') {
+      const part = typeof context.part === 'string' && context.part.trim() ? context.part.trim() : 'den Eilauftrag';
+      lines = ['Eilauftrag für ' + part + '? Dann legen wir los.'];
+      if (ids.includes('gruendlich')) lines.push('Schnell ja – aber die Maße prüfe ich trotzdem.');
+      if (ids.includes('pragmatisch')) lines.push('Eilauftrag? Dann machen wir Platz und ziehen den durch.');
+      if (ids.includes('bedacht')) lines.push('Kriegen wir hin. Aber nicht auf Kosten der Qualität.');
+      if (ids.includes('neugierig')) lines.push('Mal sehen, wie viel wir aus dem Ablauf noch rausholen können.');
+      if (ids.includes('routineorientiert')) lines.push('Eilauftrag ist okay. Hauptsache, die Reihenfolge bleibt klar.');
+    } else if (eventType === 'continue_risky') {
+      lines = ['Okay. Dann behalten wir die Maschine genau im Auge.'];
+      if (ids.includes('gruendlich')) lines.push('Ich würde lieber stoppen. Wenn wir weiterfahren, kontrolliere ich umso genauer.');
+      if (ids.includes('pragmatisch')) lines.push('Okay. Wir beobachten sie und ziehen die Reißleine, wenn sich etwas ändert.');
+      if (ids.includes('bedacht')) lines.push('Weiterfahren geht. Aber nur solange Lauf, Geräusch und Maß stabil bleiben.');
+      if (ids.includes('routineorientiert')) lines.push('Gefällt mir nicht ganz. Aber ich weiß, wie sie normalerweise klingt.');
+    } else if (eventType === 'repair_scheduled') {
+      lines = ['Gut, dann machen wir die Reparatur nach der Serie.', 'Reparatur ist eingeplant. Bis dahin beobachte ich sie.'];
+      if (ids.includes('gruendlich')) lines.push('Okay. Dann kontrolliere ich bis zur Reparatur lieber einmal mehr.');
+      if (ids.includes('pragmatisch')) lines.push('Passt. Erst den Auftrag fertig, dann ran an die Reparatur.');
+      if (ids.includes('routineorientiert')) lines.push('Gut. Dann weiß ich, wann die Maschine rausgeht.');
+    } else {
+      return '';
+    }
+
+    return flavorChoice(lines, employee, {
+      ...context,
+      machineType: context.machineType || eventType,
+      timeBucket: Number.isFinite(Number(context.timeBucket)) ? Number(context.timeBucket) : 0
+    });
+  }
+
   function ratingFromSkills(skills) {
     return deriveProfile(skills).rating;
   }
@@ -1072,6 +1139,7 @@
     memoryReference,
     breakdownAdvice,
     workRemark,
+    eventRemark,
     deriveProfile,
     ensureState,
     generateApplicant,
