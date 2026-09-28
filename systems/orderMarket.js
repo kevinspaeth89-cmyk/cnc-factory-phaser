@@ -10,7 +10,7 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function createOrderMarket() {
   'use strict';
 
-  const VERSION = 3;
+  const VERSION = 4;
   const MIN_OFFERS = 3;
   const START_OFFERS = 4;
   const MAX_OFFERS = 6;
@@ -19,6 +19,7 @@
   const FOLLOW_UP_DELAY_MAX = 720;
   const FOLLOW_UP_RETRY_MINUTES = 60;
   const MAX_COMPLETED_IDS = 500;
+  const GAME_START = Date.UTC(2026, 0, 5, 6);
   const KINDS = ['Drehen', 'Fräsen'];
 
   const profiles = [
@@ -107,6 +108,35 @@
       Number.isFinite(order.expiresAt) && order.expiresAt > order.createdAt;
   }
 
+  function workingDeadlineAt(startAt, workingHours) {
+    let remaining = Math.max(1, finite(workingHours, 1)) * 60;
+    let minute = Math.max(0, startAt);
+    for (let dayIndex = 0; dayIndex < 366; dayIndex += 1) {
+      const date = new Date(GAME_START + Math.floor(minute) * 60000);
+      const dayStart = (Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()) - GAME_START) / 60000;
+      const weekday = date.getUTCDay();
+      if (weekday >= 1 && weekday <= 5) {
+        const workStart = Math.max(minute, dayStart + 360);
+        const worked = Math.min(remaining, Math.max(0, dayStart + 1320 - workStart));
+        if (worked > 0) {
+          minute = workStart + worked;
+          remaining -= worked;
+          if (remaining <= 1e-8) return minute;
+        }
+      }
+      minute = dayStart + 1440;
+    }
+    return Infinity;
+  }
+
+  function preserveOrSetDeadline(order, referenceAt) {
+    const deadlineAt = Number.isFinite(order.deadlineAt)
+      ? order.deadlineAt : workingDeadlineAt(referenceAt, order.deadlineHours);
+    const expiresAt = order.isRushOrder && Number.isFinite(order.acceptedRushAt)
+      ? order.expiresAt : Math.min(order.expiresAt, deadlineAt - 60);
+    return { ...order, deadlineAt, expiresAt, offerLifetimeMinutes: expiresAt - order.createdAt };
+  }
+
   function emptyMarket(now, seed) {
     return {
       version: VERSION,
@@ -149,11 +179,11 @@
     market.initialized = true;
     market.now = Math.max(0, finite(market.now, now));
     market.available = Array.isArray(market.available)
-      ? market.available.filter(validOrder).map(order => previousVersion < VERSION ? rebalanceLegacyOffer(order, now) : ({ ...order }))
+      ? market.available.filter(validOrder).map(order => preserveOrSetDeadline(previousVersion < 3 ? rebalanceLegacyOffer(order, now) : order, now))
       : [];
     market.pendingFollowUps = Array.isArray(market.pendingFollowUps)
       ? market.pendingFollowUps.filter(item => item && Number.isFinite(item.readyAt) && validOrder(item.order))
-        .map(item => ({ readyAt: item.readyAt, order: previousVersion < VERSION ? rebalanceLegacyOffer(item.order, now) : ({ ...item.order }) }))
+        .map(item => ({ readyAt: item.readyAt, order: preserveOrSetDeadline(previousVersion < 3 ? rebalanceLegacyOffer(item.order, now) : item.order, item.readyAt) }))
       : [];
     market.completedCustomers = market.completedCustomers && typeof market.completedCustomers === 'object' && !Array.isArray(market.completedCustomers)
       ? market.completedCustomers
@@ -300,6 +330,8 @@
     const rewardFactor = (1 + (difficulty - 1) * 0.035) * (1 + reputationBonusPct / 100);
     const reward = Math.max(100, Math.round((qty * rewardPerPart * rewardFactor) / 100) * 100);
     const lifetime = range(market, profile.lifetime);
+    const deadlineAt = workingDeadlineAt(createdAt, deadlineHours);
+    const expiresAt = Math.min(createdAt + lifetime, deadlineAt - 60);
     const isFollowUp = !!opts.isFollowUp;
     const partSuffix = String(number).padStart(4, '0');
     const partName = isFollowUp ? `${part.name} · Folgeauftrag ${partSuffix}` : `${part.name} ${partSuffix}`;
@@ -319,10 +351,11 @@
       reward,
       reputationBonusPct,
       deadlineHours,
+      deadlineAt,
       difficulty,
       createdAt,
-      expiresAt: createdAt + lifetime,
-      offerLifetimeMinutes: lifetime,
+      expiresAt,
+      offerLifetimeMinutes: expiresAt - createdAt,
       followUpChance: profile.followUpChance,
       isFollowUp,
       parentOrderId: typeof opts.parentOrderId === 'string' ? opts.parentOrderId : null
@@ -360,7 +393,9 @@
         continue;
       }
       const order = { ...item.order, createdAt: at };
-      order.expiresAt = at + Math.max(60, finite(order.offerLifetimeMinutes, 720));
+      order.deadlineAt = workingDeadlineAt(at, order.deadlineHours);
+      order.expiresAt = Math.min(at + Math.max(60, finite(order.offerLifetimeMinutes, 720)), order.deadlineAt - 60);
+      order.offerLifetimeMinutes = order.expiresAt - at;
       market.available.push(order);
     }
     market.pendingFollowUps = remaining;
@@ -446,6 +481,9 @@
     const reward = Math.round(order.reward * (1 + rushBonusPct / 100) / 100) * 100;
     const offerLifetimeMinutes = 24 * 60;
     const baseDeadlineHours = order.deadlineHours;
+    const deadlineHours = Math.max(8, Math.round(baseDeadlineHours * 0.6));
+    const deadlineAt = workingDeadlineAt(market.now, deadlineHours);
+    const expiresAt = Math.min(market.now + offerLifetimeMinutes, deadlineAt - 60);
     return {
       ...order,
       reward,
@@ -453,9 +491,10 @@
       rushBonus: reward - order.reward,
       rushBonusPct,
       baseDeadlineHours,
-      deadlineHours: Math.max(8, Math.round(baseDeadlineHours * 0.6)),
-      offerLifetimeMinutes,
-      expiresAt: market.now + offerLifetimeMinutes,
+      deadlineHours,
+      deadlineAt,
+      offerLifetimeMinutes: expiresAt - market.now,
+      expiresAt,
       isRushOrder: true
     };
   }

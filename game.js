@@ -589,7 +589,7 @@
     const precision=employees.length?employees.reduce((sum,employee)=>sum+(Number(employee.skills?.precision)||5),0)/employees.length:5;
     const trained=employees.length?employees.reduce((sum,employee)=>sum+skillLevel(employee),0)/employees.length:0;
     const planned=plannedOrderMinutes(machine,order,productionFactor(machine));
-    const slack=machine.activeId===order.id&&Number.isFinite(machine.deadlineAt)?machine.deadlineAt-state.gameMinutes:order.deadlineHours*60-planned;
+    const slack=machine.activeId===order.id&&Number.isFinite(machine.deadlineAt)?machine.deadlineAt-state.gameMinutes:(Number.isFinite(order.deadlineAt)?order.deadlineAt-state.gameMinutes:order.deadlineHours*60)-planned;
     const timePressure=slack<0?4:slack<120?3:slack<360?2:slack<720?1:0;
     const baseRisk=programmingQuality.riskPercent({order,machine,precision,trained,timePressure});
     const personalityModifier=employees.length
@@ -899,6 +899,11 @@
   };
   const formatEstimateMinutes=min=>Number.isFinite(min)?formatMinutes(Math.max(0,min)):'nicht absehbar';
   const dateAt=min=>new Date(START+Math.floor(min)*60000);
+  const formatDeliveryAt=min=>{
+    if(!Number.isFinite(min))return 'nicht festgelegt';
+    const d=dateAt(min),pad=value=>String(value).padStart(2,'0');
+    return ['So','Mo','Di','Mi','Do','Fr','Sa'][d.getUTCDay()]+' '+pad(d.getUTCDate())+'.'+pad(d.getUTCMonth()+1)+'.'+String(d.getUTCFullYear()).slice(-2)+' · '+pad(d.getUTCHours())+':'+pad(d.getUTCMinutes())+' Uhr';
+  };
   const planDeadlineStatus=check=>{
     if(!check)return 'keine Prognose';
     if(check.deadlineMinutes<0)return 'Frist '+formatEstimateMinutes(-check.deadlineMinutes)+' überfällig';
@@ -928,7 +933,7 @@
     return !Number.isFinite(percent)||percent>200?'>200 %':Math.round(percent)+' %';
   };
   const candidateLoadSummary=check=>!check?'keine Prognose':
-    formatEstimateMinutes(check.workMinutes)+' zusätzliche Arbeit · '+formatEstimateMinutes(check.availableMinutes)+' Schichtzeit bis Frist · Auftrag allein '+loadPercentText(check,true)+' / mit Voraufträgen '+loadPercentText(check)+' · bei Annahme jetzt '+(check.bufferMinutes<0?'vsl. '+formatEstimateMinutes(-check.bufferMinutes)+' zu spät':formatEstimateMinutes(check.bufferMinutes)+' Puffer');
+    formatEstimateMinutes(check.workMinutes)+' zusätzliche Arbeit · '+formatEstimateMinutes(check.availableMinutes)+' Schichtzeit bis Frist · Auftrag allein '+loadPercentText(check,true)+' / mit Voraufträgen '+loadPercentText(check)+' · '+(check.bufferMinutes<0?'vsl. '+formatEstimateMinutes(-check.bufferMinutes)+' zu spät':formatEstimateMinutes(check.bufferMinutes)+' Puffer bis Liefertermin');
   const planFreeText=load=>{
     if(!load.shifts.length)return 'keine Schicht besetzt';
     if(!Number.isFinite(load.freeAt))return 'mit aktueller Besetzung nicht absehbar';
@@ -1131,12 +1136,12 @@
     $('event-eyebrow').textContent='STAMMKUNDEN-ANFRAGE · EILAUFTRAG';
     $('event-title').textContent=`${order.customer} braucht kurzfristig ${order.part}`;
     $('event-detail').textContent=`${order.qty} Teile · ${order.kind} · ${order.material} · ${order.kg} kg. Entscheide unten direkt, ob der Auftrag hinten eingeplant oder vorgezogen wird.`;
-    $('event-consequence').textContent=`Eilzuschlag: +${order.rushBonusPct||20} % (${euro(bonus)}). Die ${order.deadlineHours}-Stunden-Frist beginnt mit deiner Zusage. Die Prognosen unten berücksichtigen Schichten, Rüst-/Programmierzeit und die aktuelle Maschinenbelegung.`;
+    $('event-consequence').textContent=`Eilzuschlag: +${order.rushBonusPct||20} % (${euro(bonus)}). Der Liefertermin ${formatDeliveryAt(order.deadlineAt)} steht bereits fest. Die Prognosen unten berücksichtigen Schichten, Rüst-/Programmierzeit und die aktuelle Maschinenbelegung.`;
     const timing=$('event-order-timing');timing.hidden=false;
-    $('event-order-deadline-label').textContent='LIEFERFRIST AB ZUSAGE';
+    $('event-order-deadline-label').textContent='FESTER LIEFERTERMIN';
     $('event-order-processing-label').textContent='REINE BEARBEITUNGSZEIT';
     $('event-order-deadline-cell').classList.remove('deadline-overdue');
-    $('event-order-deadline').textContent=`${order.deadlineHours} Std.`;
+    $('event-order-deadline').textContent=formatDeliveryAt(order.deadlineAt);
     $('event-order-processing').textContent=`Ca. ${formatMinutes(processing)}`;
     renderRushCapacityCheck(order,event);
     const actions=$('event-actions');actions.replaceChildren();
@@ -1242,7 +1247,7 @@
         interruptTag.textContent='OPTION 2 · ANNEHMEN – EILAUFTRAG SOFORT EINSCHIEBEN';
         interruptButton.append(interruptTag);
         if(interruption){
-          const rushDeadlineAt=state.gameMinutes+Math.max(0,Number(order.deadlineHours)||0)*60;
+          const rushDeadlineAt=Number.isFinite(order.deadlineAt)?order.deadlineAt:state.gameMinutes+Math.max(0,Number(order.deadlineHours)||0)*60;
           const rushLead=interruption.rushFinishAt-state.gameMinutes;
           const rushBuffer=rushDeadlineAt-interruption.rushFinishAt;
           const rushImpact=rushBuffer>=0
@@ -1533,7 +1538,7 @@
         }
       }
       offer={...offer,workMode:selectedWorkMode,acceptedRushAt:state.gameMinutes,
-        deadlineAt:state.gameMinutes+offer.deadlineHours*60};
+        deadlineAt:Number.isFinite(offer.deadlineAt)?offer.deadlineAt:state.gameMinutes+offer.deadlineHours*60};
       offer.expiresAt=Math.max(offer.expiresAt,offer.deadlineAt+24*60);
       offer.offerLifetimeMinutes=offer.expiresAt-offer.createdAt;
       const added=orderMarketSystem.acceptRushOffer(state,offer);
@@ -2014,7 +2019,7 @@
       const contributionPerHour=Number.isFinite(materialContribution)&&estimateMinutes>0?materialContribution/(estimateMinutes/60):null;
       const risks=compatibleMachines.map(machine=>qualityRiskFor(machine,o)).sort((a,b)=>a-b);
       const qualityHint=` · ${programmingQuality.toleranceClass(o)}${risks.length?` · Qualitätsrisiko ${risks[0]}${risks.length>1&&risks[0]!==risks[risks.length-1]?`–${risks[risks.length-1]}`:''} %`:''}`;
-      card.innerHTML=`<div class="top"><span>${o.customer}</span><span>${o.kind} · #${o.id}</span></div><h3>${o.part}</h3><p>${customerType}${o.material} · ${o.qty} Teile${difficulty}${qualityHint}</p><div class="values"><span>${o.kg} kg · Frist ${o.deadlineHours} h ab Annahme${o.reputationBonusPct?` · ${o.reputationBonusPct<0?'Kundenabschlag':'Kundenbonus'} ${o.reputationBonusPct>0?'+':''}${o.reputationBonusPct} %`:''}</span><b>${euro(o.reward)}</b></div><div class="order-economics${materialContribution!==null&&materialContribution<0?' loss':''}"><div class="order-economics-grid"><span>Material zum Tageskurs<strong>${materialCost===null?'—':euro(materialCost)}</strong></span><span>Nach Material<strong>${materialContribution===null?'—':euro(materialContribution)}</strong></span></div><p>${contributionPerHour===null?'':`Etwa ${euro(contributionPerHour)} je Maschinenstunde · ${formatMinutes(estimateMinutes)} Rüst- und Maschinenzeit`}</p><small>Grundmaschine, ohne Lohn, Strom und Verschleiß</small></div>`;
+      card.innerHTML=`<div class="top"><span>${o.customer}</span><span>${o.kind} · #${o.id}</span></div><h3>${o.part}</h3><p>${customerType}${o.material} · ${o.qty} Teile${difficulty}${qualityHint}</p><div class="values"><span>${o.kg} kg · Liefertermin ${formatDeliveryAt(o.deadlineAt)}${o.reputationBonusPct?` · ${o.reputationBonusPct<0?'Kundenabschlag':'Kundenbonus'} ${o.reputationBonusPct>0?'+':''}${o.reputationBonusPct} %`:''}</span><b>${euro(o.reward)}</b></div><div class="order-economics${materialContribution!==null&&materialContribution<0?' loss':''}"><div class="order-economics-grid"><span>Material zum Tageskurs<strong>${materialCost===null?'—':euro(materialCost)}</strong></span><span>Nach Material<strong>${materialContribution===null?'—':euro(materialContribution)}</strong></span></div><p>${contributionPerHour===null?'':`Etwa ${euro(contributionPerHour)} je Maschinenstunde · ${formatMinutes(estimateMinutes)} Rüst- und Maschinenzeit`}</p><small>Grundmaschine, ohne Lohn, Strom und Verschleiß</small></div>`;
       const loadPreviews=compatibleMachines.filter(machine=>!machineOrderBlockReason(machine,o)).map(machine=>({machine,load:plannedMachineLoad(machine,o)}))
         .filter(entry=>entry.load.shifts.length&&entry.load.candidateCheck);
       loadPreviews.sort((a,b)=>b.load.candidateCheck.bufferMinutes-a.load.candidateCheck.bufferMinutes);
@@ -2028,7 +2033,7 @@
       if(o.isRushOrder){
         card.classList.add('rush-order-card');
         const badge=document.createElement('strong');badge.className='rush-order-badge';
-        badge.textContent=`EILAUFTRAG · +${o.rushBonusPct||20} % · Lieferfrist ${o.deadlineHours} h ab Zusage`;
+        badge.textContent=`EILAUFTRAG · +${o.rushBonusPct||20} % · Liefertermin ${formatDeliveryAt(o.deadlineAt)}`;
         card.querySelector('.top').after(badge);
       }
       if(!programReady(o)){
