@@ -1895,6 +1895,14 @@
     tab('orders');
     openOrderMachineChooser(order.id);
   }
+  function personalitySummary(person){
+    const traits=Array.isArray(person?.personality)
+      ? person.personality
+      : person?.profileVersion===2 && person?.skills
+        ? recruitmentSystem.derivePersonality(person.skills)
+        : [];
+    return traits.map(item=>`${item.icon||''} ${item.label||item.id||''}`.trim()).filter(Boolean).join(' · ');
+  }
   function renderStaffDevelopment(){
     $('staff-development').replaceChildren(...[1,2].flatMap(shift=>state.staffRoster['shift'+shift].map(employee=>{
       const row=document.createElement('div'),portrait=document.createElement('img'),details=document.createElement('div');
@@ -1908,7 +1916,8 @@
       const profile=employee.profileVersion===2?employee.specialty:'Altbestand';
       name.className='staff-profile-name';
       name.textContent='S'+shift+' · '+employee.name+' · '+profile+' · '+(employee.assignedBay?'Platz '+employee.assignedBay:'frei');
-      about.className='staff-profile-about';about.textContent=`${employee.about||'Mitarbeiterprofil'} · ${Math.floor(employee.xp)} min Erfahrung · Können ${level}/3`;
+      const personality=personalitySummary(employee);
+      about.className='staff-profile-about';about.textContent=`${personality?personality+' · ':''}${employee.about||'Mitarbeiterprofil'} · ${Math.floor(employee.xp)} min Erfahrung · Können ${level}/3`;
       rating.className='staff-rating';rating.textContent=(employee.rating||recruitmentSystem.ratingFromSkills(employee.skills))+'/10';
       rating.setAttribute('aria-label','Profilbewertung '+rating.textContent);
       details.append(name,about);
@@ -1925,7 +1934,10 @@
       const employee=state.staffRoster['shift'+shift].find(person=>person.id===id);
       if(!employee)continue;
       const level=skillLevel(employee),cost=TRAINING_BASE_COST*(level+1),about=row.children[1]?.children[1],button=row.children[3];
-      if(about)about.textContent=`${employee.about||'Mitarbeiterprofil'} · ${Math.floor(employee.xp)} min Erfahrung · Können ${level}/3`;
+      if(about){
+        const personality=personalitySummary(employee);
+        about.textContent=`${personality?personality+' · ':''}${employee.about||'Mitarbeiterprofil'} · ${Math.floor(employee.xp)} min Erfahrung · Können ${level}/3`;
+      }
       if(button){
         button.textContent=level===3?'Können maximal':'Auf Stufe '+(level+1)+' schulen · '+euro(cost);
         button.title=level===3?'Höchste Könnensstufe erreicht':`Schulung auf Stufe ${level+1}: +5 % Produktionstempo für ${euro(cost)}`;
@@ -2299,7 +2311,8 @@
       const rating=document.createElement('strong');rating.className='applicant-rating';
       rating.textContent=candidate.rating+'/10';rating.setAttribute('aria-label','Profilbewertung '+rating.textContent);
       head.append(avatar,identity,rating);
-      const about=document.createElement('p');about.className='applicant-about';about.textContent=`${candidate.trait} · ${candidate.about}`;
+      const personality=personalitySummary(candidate);
+      const about=document.createElement('p');about.className='applicant-about';about.textContent=`${candidate.trait}${personality?' · '+personality:''} · ${candidate.about}`;
       const stats=document.createElement('div');stats.className='applicant-stats';
       for(const [key,label] of [['turning','Drehen'],['milling','Fräsen'],['precision','Präzision'],['learning','Lerntempo']]){
         const stat=document.createElement('div');stat.className='applicant-stat';
