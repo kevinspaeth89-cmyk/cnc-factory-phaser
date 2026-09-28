@@ -28,7 +28,7 @@ jobs:
         run: node --check game.js
 
       - name: Run module tests
-        run: node --test tests/breakdowns.test.js tests/economy.test.js tests/factory-expansion.test.js tests/materials.test.js tests/orderMarket.test.js tests/recruitment.test.js
+        run: node --test tests/breakdowns.test.js tests/economy.test.js tests/factory-expansion.test.js tests/materials.test.js tests/orderMarket.test.js tests/programmingQuality.test.js tests/recruitment.test.js
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
