@@ -629,3 +629,39 @@ assert.equal(pendingRushPause.state().gameMinutes,rushPausedMinute);
 pendingRushPause.get('pause').click();
 assert.equal(pendingRushPause.state().paused,true);
 console.log('Rush assignment lock: reload remains paused and manual resume is blocked');
+
+
+const hallOperatorBase={
+  money:14000,material:120,capacity:300,staff:{shift1:1,shift2:1},
+  staffRoster:{
+    nextId:3,
+    shift1:[{id:1,profileVersion:2,name:'Mira Test',gender:'female',skills:{turning:8,milling:4,precision:9,learning:7},xp:0,trained:0,assignedBay:1}],
+    shift2:[{id:2,profileVersion:2,name:'Tarek Test',gender:'male',skills:{turning:7,milling:3,precision:6,learning:5},xp:0,trained:0,assignedBay:1}]
+  },
+  machines:[{bay:1,type:'standard',level:1,maintenance:90,tool:90,operator1:true,operator2:true,activeId:'A12',progress:25,produced:12,deadlineAt:900}],
+  selectedBay:1,speed:1,paused:false
+};
+let hallOperator=boot({cnc_factory_save_v3:JSON.stringify({...hallOperatorBase,gameMinutes:0})});
+let hallWorker=hallOperator.get('bay-1').querySelector('.bay-operator');
+assert.ok(hallWorker);
+assert.equal(hallWorker.hidden,false);
+assert.equal(hallWorker.dataset.employeeId,'1');
+assert.equal(hallWorker.dataset.shift,'1');
+assert.equal(hallWorker.children[0].src,hallOperator.state().staffRoster.shift1[0].portrait);
+assert.match(hallWorker.children[1].textContent,/Mira Test/);
+
+hallOperator=boot({cnc_factory_save_v3:JSON.stringify({...hallOperatorBase,gameMinutes:480})});
+hallWorker=hallOperator.get('bay-1').querySelector('.bay-operator');
+assert.ok(hallWorker);
+assert.equal(hallWorker.hidden,false);
+assert.equal(hallWorker.dataset.employeeId,'2');
+assert.equal(hallWorker.dataset.shift,'2');
+assert.equal(hallWorker.children[0].src,hallOperator.state().staffRoster.shift2[0].portrait);
+
+const idleHallOperator=boot({cnc_factory_save_v3:JSON.stringify({
+  ...hallOperatorBase,gameMinutes:0,
+  machines:[{...hallOperatorBase.machines[0],activeId:null,activeOrder:null,progress:0,produced:0}]
+})});
+const idleWorker=idleHallOperator.get('bay-1').querySelector('.bay-operator');
+assert.equal(idleWorker?.hidden??true,true);
+console.log('Hall employees: active shift uses the exact employee profile portrait and idle machines hide it');
