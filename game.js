@@ -840,12 +840,12 @@
     const commitments=[];
     const active=job(machine);
     const deadlineFor=(order,at)=>Number.isFinite(at)?at:state.gameMinutes+Math.max(0,Number(order?.deadlineHours)||0)*60;
-    if(active)commitments.push({order:active,deadlineAt:deadlineFor(active,machine.deadlineAt),active:true});
+    if(active)commitments.push({order:active,deadlineAt:deadlineFor(active,machine.deadlineAt),active:true,role:'active'});
     for(const entry of machine.orderQueue||[]){
-      commitments.push({order:entry.order,deadlineAt:deadlineFor(entry.order,entry.deadlineAt),active:false});
+      commitments.push({order:entry.order,deadlineAt:deadlineFor(entry.order,entry.deadlineAt),active:false,role:'queued'});
     }
     if(Number.isFinite(additionalOrder?.duration)){
-      commitments.push({order:additionalOrder,deadlineAt:deadlineFor(additionalOrder,additionalOrder.deadlineAt),active:false});
+      commitments.push({order:additionalOrder,deadlineAt:deadlineFor(additionalOrder,additionalOrder.deadlineAt),active:false,role:'candidate'});
     }
     const reworkMinutes=(machine.qualityReworkQueue||[]).reduce((sum,task)=>sum+Math.max(0,Number(task.remainingMinutes)||0),0);
     let freeAt=active?state.gameMinutes:scheduledWorkCompletionAt(machine,state.gameMinutes,reworkMinutes,true),plannedMinutes=reworkMinutes,critical=null;
@@ -858,13 +858,19 @@
       const deadlineMinutes=item.deadlineAt-state.gameMinutes,leadMinutes=forecast.finishAt-state.gameMinutes;
       const availableMinutes=scheduledWorkMinutesBetween(machine,state.gameMinutes,item.deadlineAt,item.order.workMode||'regular');
       const percent=availableMinutes>0?plannedMinutes/availableMinutes*100:plannedMinutes>0?Infinity:0;
-      const check={orderId:item.order.id,part:item.order.part,deadlineAt:item.deadlineAt,deadlineMinutes,leadMinutes,
-        finishAt:forecast.finishAt,bufferMinutes:item.deadlineAt-forecast.finishAt,requiredMinutes:plannedMinutes,availableMinutes,percent};
+      const check={orderId:item.order.id,part:item.order.part,role:item.role,deadlineAt:item.deadlineAt,deadlineMinutes,leadMinutes,
+        finishAt:forecast.finishAt,bufferMinutes:item.deadlineAt-forecast.finishAt,workMinutes:forecast.workMinutes,
+        requiredMinutes:plannedMinutes,availableMinutes,percent};
       if(!critical||check.percent>critical.percent)critical=check;
       if(item.active&&reworkMinutes>0)freeAt=scheduledWorkCompletionAt(machine,freeAt,reworkMinutes,true);
       return check;
     });
-    return {shifts,plannedMinutes,deadlineChecks,critical,percent:!shifts.length?null:critical?.percent??0};
+    const activeCheck=deadlineChecks.find(check=>check.role==='active')||null;
+    const queuedChecks=deadlineChecks.filter(check=>check.role==='queued');
+    const candidateCheck=deadlineChecks.find(check=>check.role==='candidate')||null;
+    const planningCheck=candidateCheck||queuedChecks.reduce((worst,check)=>!worst||check.percent>worst.percent?check:worst,null);
+    return {shifts,plannedMinutes,reworkMinutes,freeAt,deadlineChecks,critical,activeCheck,queuedChecks,candidateCheck,planningCheck,
+      percent:!shifts.length?null:planningCheck?.percent??0};
   }
 
   function rushInterruptionForecast(machine,rushOrder){
@@ -893,6 +899,38 @@
   };
   const formatEstimateMinutes=min=>Number.isFinite(min)?formatMinutes(Math.max(0,min)):'nicht absehbar';
   const dateAt=min=>new Date(START+Math.floor(min)*60000);
+  const planDeadlineStatus=check=>{
+    if(!check)return 'keine Prognose';
+    if(check.deadlineMinutes<0)return 'Frist '+formatEstimateMinutes(-check.deadlineMinutes)+' überfällig';
+    if(check.bufferMinutes<0)return 'vsl. '+formatEstimateMinutes(-check.bufferMinutes)+' zu spät';
+    return 'Puffer '+formatEstimateMinutes(check.bufferMinutes);
+  };
+  const activePlanText=load=>{
+    const check=load.activeCheck;
+    return check?check.part+' · noch '+formatEstimateMinutes(check.workMinutes)+' Arbeit · '+planDeadlineStatus(check):'keine laufende Fertigung';
+  };
+  const queuedPlanText=load=>{
+    const queued=load.queuedChecks;
+    if(!queued.length)return load.reworkMinutes>0
+      ?'keine Aufträge · '+formatEstimateMinutes(load.reworkMinutes)+' Nacharbeit'
+      :'keine Aufträge vorgemerkt';
+    const work=queued.reduce((sum,check)=>sum+check.workMinutes,0);
+    const late=queued.filter(check=>check.bufferMinutes<0).length;
+    return queued.length+' '+(queued.length===1?'Auftrag':'Aufträge')+' · '+formatEstimateMinutes(work)+' Arbeit'
+      +(load.reworkMinutes>0?' · '+formatEstimateMinutes(load.reworkMinutes)+' Nacharbeit':'')
+      +(late?' · '+late+' vsl. zu spät':' · alle vsl. pünktlich');
+  };
+  const loadPercentText=check=>!check?'keine Prognose':!Number.isFinite(check.percent)
+    ?'keine Zeit vor Frist':check.percent>200?'>200 %':Math.round(check.percent)+' %';
+  const planFreeText=load=>{
+    if(!load.shifts.length)return 'keine Schicht besetzt';
+    if(!Number.isFinite(load.freeAt))return 'mit aktueller Besetzung nicht absehbar';
+    if(load.freeAt<=state.gameMinutes+1e-8)return 'jetzt';
+    const d=dateAt(load.freeAt),pad=value=>String(value).padStart(2,'0');
+    return 'vsl. '+['So','Mo','Di','Mi','Do','Fr','Sa'][d.getUTCDay()]+' '+pad(d.getUTCDate())+'.'+pad(d.getUTCMonth()+1)+'.'
+      +String(d.getUTCFullYear()).slice(-2)+' · '+pad(d.getUTCHours())+':'+pad(d.getUTCMinutes());
+  };
+
   const shiftAt=min=>{
     const d=dateAt(min),day=d.getUTCDay(),hour=d.getUTCHours();
     return day===0||day===6 ? 0 : hour>=6&&hour<14 ? 1 : hour>=14&&hour<22 ? 2 : 0;
@@ -1885,32 +1923,31 @@
   function renderMachineLoadCard(machine){
     const card=document.createElement('section');
     const head=document.createElement('div'),title=document.createElement('strong'),value=document.createElement('span');
-    const bar=document.createElement('div'),fill=document.createElement('span'),meta=document.createElement('p');
     card.dataset.bay=String(machine.bay);
     card.className='machine-load-card';
     head.className='machine-load-head';
-    title.textContent=`Platz ${machine.bay} · ${catalog[machine.type].name}`;
+    title.textContent='Platz '+machine.bay+' · '+catalog[machine.type].name;
     value.className='machine-load-value';
     head.append(title,value);
-    bar.className='machine-load-bar';bar.setAttribute('role','progressbar');
-    bar.setAttribute('aria-label',`Geplante Maschinenarbeit geteilt durch verfügbare Schichtzeit bis zur Frist · Platz ${machine.bay}`);
-    bar.setAttribute('aria-valuemin','0');bar.setAttribute('aria-valuemax','100');bar.append(fill);
-    meta.className='machine-load-meta';card.append(head,bar,meta);
+    const makeRow=(label,key)=>{
+      const row=document.createElement('div'),caption=document.createElement('small'),detail=document.createElement('span');
+      row.className='machine-load-row';row.dataset[key]='';
+      caption.textContent=label;row.append(caption,detail);
+      return row;
+    };
+    card.append(head,makeRow('Laufend','planActive'),makeRow('Warteschlange','planQueue'),makeRow('Danach frei','planFree'));
     updateMachineLoadCard(card,machine);return card;
   }
   function updateMachineLoadCard(card,machine){
-    const load=plannedMachineLoad(machine),rounded=load.percent===null?null:Math.round(load.percent);
-    const value=card.querySelector('.machine-load-value'),bar=card.querySelector('.machine-load-bar'),fill=bar?.firstElementChild,meta=card.querySelector('.machine-load-meta');
-    card.classList.toggle('overloaded',(rounded!==null&&rounded>100)||(load.critical?.bufferMinutes<0));
-    value.textContent=rounded===null?'—':!Number.isFinite(rounded)?'keine Zeit':rounded>200?'>200 %':`${rounded} %`;
-    bar.setAttribute('aria-valuenow',String(Math.max(0,Math.min(100,rounded||0))));
-    fill.style.width=`${Math.max(0,Math.min(100,load.percent||0))}%`;
-    const plannedHours=(load.plannedMinutes/60).toLocaleString('de-DE',{maximumFractionDigits:1});
-    if(load.percent===null)meta.textContent=`${plannedHours} h geplant · keine Schicht zugewiesen`;
-    else if(!load.critical)meta.textContent=`Schichtauslastung · ${plannedHours} h Maschinenarbeit · keine offenen Lieferfristen`;
-    else meta.textContent=load.critical.bufferMinutes>=0
-      ?`Schichtauslastung · ${plannedHours} h Maschinenarbeit · Puffer ${formatEstimateMinutes(load.critical.bufferMinutes)} bei ${load.critical.part}`
-      :`Schichtauslastung · ${plannedHours} h Maschinenarbeit · ${load.critical.part} vsl. ${formatEstimateMinutes(-load.critical.bufferMinutes)} zu spät`;
+    const load=plannedMachineLoad(machine);
+    const value=card.querySelector('.machine-load-value');
+    const activeRow=card.querySelector('[data-plan-active]'),queueRow=card.querySelector('[data-plan-queue]'),freeRow=card.querySelector('[data-plan-free]');
+    value.textContent=load.plannedMinutes>0?formatEstimateMinutes(load.plannedMinutes)+' Arbeit':'bereit';
+    activeRow.querySelector('span').textContent=activePlanText(load);
+    queueRow.querySelector('span').textContent=queuedPlanText(load);
+    freeRow.querySelector('span').textContent=planFreeText(load);
+    activeRow.classList.toggle('late',!!load.activeCheck&&load.activeCheck.bufferMinutes<0);
+    queueRow.classList.toggle('late',load.queuedChecks.some(check=>check.bufferMinutes<0));
   }
 
   function updateMachineLoadCards(){
@@ -2054,15 +2091,15 @@
   }
   function updateAssignmentLoadLine(line,machine,order){
     const current=plannedMachineLoad(machine),projected=plannedMachineLoad(machine,order);
-    const currentValue=line.querySelector('[data-load-current]'),projectedValue=line.querySelector('[data-load-projected]');
-    const percentLabel=load=>load.percent===null?'keine Schicht':!Number.isFinite(load.percent)?'keine Zeit vor Frist':load.percent>200?'>200 %':`${Math.round(load.percent)} %`;
-    currentValue.textContent=`Jetzt ${percentLabel(current)}`;
-    const check=projected.deadlineChecks.find(item=>item.orderId===order.id);
-    const margin=check?` · ${check.bufferMinutes>=0?'Puffer':'zu spät'} ${formatEstimateMinutes(Math.abs(check.bufferMinutes))}`:'';
-    projectedValue.textContent=`Mit Auftrag ${percentLabel(projected)}${margin}`;
-    currentValue.classList.toggle('assignment-overloaded',(current.percent!==null&&current.percent>100)||(current.critical?.bufferMinutes<0));
-    projectedValue.classList.toggle('assignment-overloaded',(projected.percent!==null&&projected.percent>100)||(projected.critical?.bufferMinutes<0));
-    line.setAttribute('aria-label',`Schichtauslastung: aktuell ${percentLabel(current)}, mit diesem Auftrag ${percentLabel(projected)}${margin}`);
+    const activeValue=line.querySelector('[data-load-current]'),queueValue=line.querySelector('[data-load-queue]'),projectedValue=line.querySelector('[data-load-projected]');
+    const candidate=projected.candidateCheck;
+    activeValue.textContent='Laufend: '+activePlanText(current);
+    queueValue.textContent='Warteschlange: '+queuedPlanText(current);
+    projectedValue.textContent='Neuer Auftrag: '+loadPercentText(candidate)+' Schichtauslastung · '+planDeadlineStatus(candidate);
+    activeValue.classList.toggle('assignment-overloaded',!!current.activeCheck&&current.activeCheck.bufferMinutes<0);
+    queueValue.classList.toggle('assignment-overloaded',current.queuedChecks.some(check=>check.bufferMinutes<0));
+    projectedValue.classList.toggle('assignment-overloaded',!candidate||candidate.bufferMinutes<0||candidate.percent>100);
+    line.setAttribute('aria-label',[activeValue.textContent,queueValue.textContent,projectedValue.textContent].join('. '));
   }
 
   function updateAssignmentLoads(){
@@ -2080,16 +2117,16 @@
     const order=orderMarketSystem.getAvailable(state).find(item=>item.id===pendingOrderAssignmentId);
     if(!order){pendingOrderAssignmentId=null;panel.hidden=true;return;}
     $('assignment-title').textContent='Welche Maschine soll den Auftrag übernehmen?';
-    $('assignment-detail').textContent=`${order.part} · ${order.kind} · ${order.material} · Schichtauslastung: geplante Maschinenarbeit / verfügbare Arbeitszeit bis zur Frist. Der Fristpuffer zeigt die Lieferprognose.`;
+    $('assignment-detail').textContent=order.part+' · '+order.kind+' · '+order.material+' · Laufender Auftrag, Warteschlange und neuer Auftrag werden getrennt bewertet. Die Prognose für den neuen Auftrag berücksichtigt die Arbeit davor.';
     $('assignment-options').replaceChildren(...state.machines.map(machine=>{
       const button=document.createElement('button'),reason=machineOrderBlockReason(machine,order);
-      const name=document.createElement('span'),loadLine=document.createElement('span'),currentLoad=document.createElement('span'),projectedLoad=document.createElement('strong');
+      const name=document.createElement('span'),loadLine=document.createElement('span'),currentLoad=document.createElement('span'),queueLoad=document.createElement('span'),projectedLoad=document.createElement('strong');
       button.type='button';button.className='action assignment-option';
       name.className='assignment-option-name';
       name.textContent=`Platz ${machine.bay} · ${catalog[machine.type].name} · ${catalog[machine.type].kind}${reason?` · ${reason}`:job(machine)||machine.qualityReworkQueue.length?` · Vormerken ${machine.orderQueue.length+1}/${MAX_QUEUED_ORDERS}`:' · Direkt starten'}`;
       loadLine.className='assignment-option-load';loadLine.dataset.assignmentLoad='';loadLine.dataset.bay=String(machine.bay);
-      currentLoad.dataset.loadCurrent='';projectedLoad.dataset.loadProjected='';
-      loadLine.append(currentLoad,projectedLoad);
+      currentLoad.dataset.loadCurrent='';queueLoad.dataset.loadQueue='';projectedLoad.dataset.loadProjected='';
+      loadLine.append(currentLoad,queueLoad,projectedLoad);
       button.append(name,loadLine);
       updateAssignmentLoadLine(loadLine,machine,order);
       button.disabled=!!reason;
