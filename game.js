@@ -6,6 +6,8 @@
   const SAVE_KEY = 'cnc_factory_save_v3';
   const START = Date.UTC(2026, 0, 5, 6);
   const GAME_MINUTES_PER_REAL_SECOND = 10;
+  const RUSH_OVERTIME_WAGE_MULTIPLIER = 1.5;
+  const RUSH_SATURDAY_WAGE_MULTIPLIER = 2;
   const HIRING_FEE = 150;
   const TRAINING_BASE_COST = 900;
   const QS_PROMOTION_TRAINING_COST = 2500;
@@ -635,7 +637,7 @@
     return hallWorkerPortraitSprites[portraitFile]||hallWorkerSprites[employee.name]||null;
   }
   function hallWorkingOperator(machine){
-    const shift=shiftAt(state.gameMinutes);
+    const shift=machineShiftAt(machine);
     if(!machine||!shift||!machine['operator'+shift]||!job(machine))return null;
     const employee=assignedEmployee(machine,shift);
     if(!employee)return null;
@@ -721,29 +723,46 @@
     const inspection=qsShift?programmingQuality.inspectionMinutes({order,policy:qualityPolicyFor(qsShift).id}):0;
     return programmingETA(order,machine)+expectedSetupMinutes(machine,order)+Math.max(0,(quantity-1)/quantity)*order.duration*6/factor+inspection;
   };
-  function scheduledWorkCompletionAt(machine,startAt,workMinutes,operatorOnly=false){
+  function scheduledWorkCompletionAt(machine,startAt,workMinutes,operatorOnly=false,workMode='regular'){
     if(!Number.isFinite(startAt)||!Number.isFinite(workMinutes))return Infinity;
     let remaining=Math.max(0,workMinutes),minuteAt=Math.max(state.gameMinutes,startAt);
     if(remaining<=1e-8)return minuteAt;
     const hasShift1=!!machine.operator1&&!!assignedEmployee(machine,1);
     const hasShift2=(!!machine.operator2&&!!assignedEmployee(machine,2))||(!operatorOnly&&!!machine.loadingRobot);
+    const humanShift2=!!machine.operator2&&!!assignedEmployee(machine,2);
+    const overtimeAvailable=!operatorOnly&&workMode==='overtime'&&humanShift2;
+    const saturdayShift=!operatorOnly&&workMode==='saturday'
+      ?hasShift1?1:humanShift2?2:0
+      :0;
     const robotReadyAt=machine.loadingRobot
       ?machine.robotFault&&!(machine.robotRepairRemainingMinutes>0)?Infinity:state.gameMinutes+Math.max(0,Number(machine.robotRepairRemainingMinutes)||0)
       :Infinity;
-    if(!hasShift1&&!hasShift2)return Infinity;
+    if(!hasShift1&&!hasShift2&&!saturdayShift)return Infinity;
+    const consumeWindow=(windowStart,windowEnd)=>{
+      if(minuteAt>=windowEnd)return false;
+      const workStart=Math.max(minuteAt,windowStart);
+      const worked=Math.min(remaining,windowEnd-workStart);
+      if(worked<=0)return false;
+      minuteAt=workStart+worked;remaining-=worked;
+      return remaining<=1e-8;
+    };
     for(let dayIndex=0;dayIndex<366;dayIndex++){
-      const date=dateAt(minuteAt),dayStart=(Date.UTC(date.getUTCFullYear(),date.getUTCMonth(),date.getUTCDate())-START)/60000;
-      if(date.getUTCDay()===0||date.getUTCDay()===6){minuteAt=dayStart+1440;continue;}
+      const date=dateAt(minuteAt),weekday=date.getUTCDay();
+      const dayStart=(Date.UTC(date.getUTCFullYear(),date.getUTCMonth(),date.getUTCDate())-START)/60000;
+      if(weekday===0){minuteAt=dayStart+1440;continue;}
+      if(weekday===6){
+        if(saturdayShift&&consumeWindow(dayStart+360,dayStart+840))return minuteAt;
+        minuteAt=dayStart+1440;continue;
+      }
       for(const shift of [1,2]){
         if(!(shift===1?hasShift1:hasShift2))continue;
         const shiftStart=dayStart+(shift===1?360:840),shiftEnd=dayStart+(shift===1?840:1320);
         if(minuteAt>=shiftEnd)continue;
-        const workStart=Math.max(minuteAt,shiftStart,shift===2&&machine.loadingRobot?robotReadyAt:0),worked=Math.min(remaining,shiftEnd-workStart);
-        if(worked<=0)continue;
-        minuteAt=workStart+worked;remaining-=worked;
-        if(remaining<=1e-8)return minuteAt;
+        const workStart=Math.max(minuteAt,shiftStart,shift===2&&machine.loadingRobot?robotReadyAt:0);
+        if(consumeWindow(workStart,shiftEnd))return minuteAt;
         minuteAt=shiftEnd;
       }
+      if(overtimeAvailable&&consumeWindow(dayStart+1320,dayStart+1440))return minuteAt;
       minuteAt=dayStart+1440;
     }
     return Infinity;
@@ -845,6 +864,38 @@
     const d=dateAt(min),day=d.getUTCDay(),hour=d.getUTCHours();
     return day===0||day===6 ? 0 : hour>=6&&hour<14 ? 1 : hour>=14&&hour<22 ? 2 : 0;
   };
+  function rushWorkModeReason(machine,mode){
+    if(mode==='overtime'&&(!machine.operator2||!assignedEmployee(machine,2)))return 'Für Überstunden fehlt Bedienpersonal in der Spätschicht.';
+    if(mode==='saturday'&&!([1,2].some(shift=>machine['operator'+shift]&&assignedEmployee(machine,shift))))return 'Samstagsarbeit benötigt einen eingeteilten Bediener.';
+    return '';
+  }
+  const machineShiftAt=(machine,minute=state.gameMinutes)=>{
+    if(!machine)return 0;
+    const regular=shiftAt(minute);
+    if(regular)return regular;
+    const order=job(machine);
+    if(!order?.isRushOrder)return 0;
+    const d=dateAt(minute),day=d.getUTCDay(),hour=d.getUTCHours();
+    if(order.workMode==='overtime'&&day>=1&&day<=5&&hour>=22&&hour<24&&machine.operator2&&assignedEmployee(machine,2))return 2;
+    if(order.workMode==='saturday'&&day===6&&hour>=6&&hour<14){
+      if(machine.operator1&&assignedEmployee(machine,1))return 1;
+      if(machine.operator2&&assignedEmployee(machine,2))return 2;
+    }
+    return 0;
+  };
+  function nextMondayRushTime(minute){
+    const d=dateAt(minute),day=d.getUTCDay();
+    const dayStart=(Date.UTC(d.getUTCFullYear(),d.getUTCMonth(),d.getUTCDate())-START)/60000;
+    return dayStart+(day===6?2:1)*1440+360;
+  }
+  function deferWeekendRushEvents(){
+    const day=dateAt(state.gameMinutes).getUTCDay();
+    if((day!==0&&day!==6)||!state.eventQueue.some(event=>event.event==='rush_order'))return false;
+    state.eventQueue=state.eventQueue.filter(event=>event.event!=='rush_order');
+    state.nextRushOrderAt=nextMondayRushTime(state.gameMinutes);
+    state.paused=state.eventQueue.length>0;
+    return true;
+  }
   const clock=()=>{
     const d=dateAt(state.gameMinutes),day=['So','Mo','Di','Mi','Do','Fr','Sa'][d.getUTCDay()];
     const date=`${String(d.getUTCDate()).padStart(2,'0')}.${String(d.getUTCMonth()+1).padStart(2,'0')}.${d.getUTCFullYear()}`;
@@ -852,8 +903,11 @@
     return `${day} ${date} · ${time}`;
   };
   const robotAvailable=m=>!!m?.loadingRobot&&!m.robotFault&&!(m.robotRepairRemainingMinutes>0);
-  const readyToRun=m=>!!job(m)&&programReady(job(m))&&!m.operatorProgramming&&!state.paused&&!(m.maintenanceRemainingMinutes>0)&&!(m.qualityInspectionRemainingMinutes>0)&&!!shiftAt(state.gameMinutes)&&
-    !!(m['operator'+shiftAt(state.gameMinutes)]||(shiftAt(state.gameMinutes)===2&&robotAvailable(m)))&&m.tool>=1&&m.maintenance>=8;
+  const readyToRun=m=>{
+    const shift=machineShiftAt(m);
+    return !!job(m)&&programReady(job(m))&&!m.operatorProgramming&&!state.paused&&!(m.maintenanceRemainingMinutes>0)&&!(m.qualityInspectionRemainingMinutes>0)&&!!shift&&
+      !!(m['operator'+shift]||(shift===2&&robotAvailable(m)))&&m.tool>=1&&m.maintenance>=8;
+  };
   const operating=m=>readyToRun(m)&&breakdownSystem.canContinueProduction(state,m.bay);
   const spareToolCount=m=>m?Math.max(0,Number(state.inventory?.tools?.[m.type])||0):0;
   function autoReplaceWornTool(machine,shift){
@@ -953,7 +1007,7 @@
     return changed;
   }
   const conditionLabel=value=>value>0&&value<1?'<1 %':Math.round(value)+' %';
-  let visual=null, currentPanel=null, businessSection='factory', messageTimer, zoomTimer, phaserGame=null, hallPreviewBay=null, shiftLeaderPanelShift=1, shiftLeaderAdviceKey='', operatorPickerShift=null, dismissalPickerShift=null, qualityPickerShift=null;
+  let visual=null, currentPanel=null, businessSection='factory', messageTimer, zoomTimer, phaserGame=null, hallPreviewBay=null, shiftLeaderPanelShift=1, shiftLeaderAdviceKey='', operatorPickerShift=null, dismissalPickerShift=null, qualityPickerShift=null, rushWorkMode='regular', rushWorkModeEventId=null;
   function say(message){
     $('message').textContent=message;
     clearTimeout(messageTimer);
@@ -965,7 +1019,7 @@
     const eyebrow=document.createElement('span'),title=document.createElement('h2'),detail=document.createElement('p');
     const consequence=document.createElement('div'),managerAdvice=document.createElement('p'),orderTiming=document.createElement('div'),rushCapacity=document.createElement('section'),actions=document.createElement('div'),count=document.createElement('p');
     const rushStyle=document.createElement('style');
-    rushStyle.textContent='.rush-machine-actions{display:grid;grid-template-columns:1fr;gap:8px;margin-top:10px}.rush-machine-choice{width:100%;min-height:64px;padding:9px 10px;text-align:left;font-size:11px;line-height:1.3}.rush-machine-choice>span{display:block;font-size:10px;font-weight:800;letter-spacing:.04em;opacity:.78;margin-bottom:2px}.rush-machine-choice small{display:block;margin-top:5px;color:#dbe5e8;font-size:9px;font-weight:650;line-height:1.45;white-space:pre-line}.rush-machine-choice.rush-option-safe{background:#173f33;border-color:#69d49e}.rush-machine-choice.rush-option-late{background:#482c2c;border-color:#f17b7b}.rush-interrupt-choice{background:#4b3523;border-color:#d3944d}.rush-interrupt-choice.rush-option-safe{background:#203b2d;border-color:#69d49e}.rush-interrupt-choice.rush-option-late{background:#4b3024;border-color:#e59a55}.rush-capacity-rows{max-height:min(44vh,390px)}.rush-capacity-row{border-color:#47626a}.rush-capacity-window{white-space:pre-line}.rush-capacity-status{font-size:9px;opacity:.78}.rush-reject-choice{width:100%;min-height:58px}.rush-reject-choice small{display:block;margin-top:4px}.rush-option-summary{font-weight:750}.shift-leader-event-advice{margin:7px 0;padding:8px 10px;border-left:3px solid #74d7a4;border-radius:5px;background:#102a31;color:#d7f0e3;font-size:11px;line-height:1.4}.shift-leader-event-advice[hidden]{display:none}';
+    rushStyle.textContent='.rush-machine-actions{display:grid;grid-template-columns:1fr;gap:8px;margin-top:10px}.rush-machine-choice{width:100%;min-height:64px;padding:9px 10px;text-align:left;font-size:11px;line-height:1.3}.rush-machine-choice>span{display:block;font-size:10px;font-weight:800;letter-spacing:.04em;opacity:.78;margin-bottom:2px}.rush-machine-choice small{display:block;margin-top:5px;color:#dbe5e8;font-size:9px;font-weight:650;line-height:1.45;white-space:pre-line}.rush-machine-choice.rush-option-safe{background:#173f33;border-color:#69d49e}.rush-machine-choice.rush-option-late{background:#482c2c;border-color:#f17b7b}.rush-interrupt-choice{background:#4b3523;border-color:#d3944d}.rush-interrupt-choice.rush-option-safe{background:#203b2d;border-color:#69d49e}.rush-interrupt-choice.rush-option-late{background:#4b3024;border-color:#e59a55}.rush-capacity-rows{max-height:min(44vh,390px)}.rush-capacity-row{border-color:#47626a}.rush-capacity-window{white-space:pre-line}.rush-capacity-status{font-size:9px;opacity:.78}.rush-reject-choice{width:100%;min-height:58px}.rush-reject-choice small{display:block;margin-top:4px}.rush-option-summary{font-weight:750}.shift-leader-event-advice{margin:7px 0;padding:8px 10px;border-left:3px solid #74d7a4;border-radius:5px;background:#102a31;color:#d7f0e3;font-size:11px;line-height:1.4}.shift-leader-event-advice[hidden]{display:none}.rush-work-mode{display:grid;gap:4px;margin:7px 0;padding:8px;border:1px solid #456a78;border-radius:8px;background:#102630}.rush-work-mode label{color:#e8f4f6;font-size:10px;font-weight:800}.rush-work-mode select{width:100%;min-height:34px;padding:5px 8px;border:1px solid #527784;border-radius:6px;background:#18343e;color:#fff;font-size:11px}.rush-work-mode small{color:#b7cbd1;font-size:9px;line-height:1.3}';
     document.head.append(rushStyle);
     overlay.id='event-window';overlay.hidden=true;overlay.setAttribute('role','dialog');overlay.setAttribute('aria-modal','true');overlay.setAttribute('aria-labelledby','event-title');
     card.className='event-card';eyebrow.id='event-eyebrow';eyebrow.className='event-eyebrow';
@@ -991,6 +1045,7 @@
     const scheduleDetail=document.createElement('b');scheduleDetail.id='schedule-repair-detail';$('schedule-repair').append(scheduleDetail);
   }
   function renderRushOrderEvent(event){
+    if(rushWorkModeEventId!==event.id){rushWorkModeEventId=event.id;rushWorkMode='regular';}
     const order=event.order,bonus=Number.isFinite(order.rushBonus)?order.rushBonus:Math.max(0,order.reward-(order.baseReward||order.reward));
     const rate=order.kind==='Fräsen'?catalog.mill3.rate:catalog.standard.rate;
     const processing=programmingETA(order)+setupMinutesForOrder(order)+Math.max(0,(order.qty-1)/Math.max(1,order.qty)*order.duration*6/rate);
@@ -1020,24 +1075,44 @@
   }
   function renderRushCapacityCheck(order,event){
     const panel=$('rush-capacity-check');panel.hidden=false;
-    const heading=document.createElement('strong'),note=document.createElement('p'),rows=document.createElement('div');
+    const heading=document.createElement('strong'),note=document.createElement('p'),rows=document.createElement('div'),modeControl=document.createElement('div');
     heading.className='rush-capacity-title';heading.textContent='Wo soll der Eilauftrag laufen?';
     note.className='rush-capacity-note';
-    note.textContent='Option 1 lässt bestehende Arbeit in Ruhe. Option 2 zieht den Eilauftrag vor und zeigt den Preis dafür.';
+    note.textContent='Eilaufträge erscheinen nur werktags. Für diesen Auftrag kannst du freiwillige Überstunden oder Samstagsarbeit einplanen.';
     rows.className='rush-capacity-rows';
     const machines=state.machines.filter(machine=>compatible(machine,order));
+    const modeLabel=document.createElement('label'),modeSelect=document.createElement('select'),modeHelp=document.createElement('small');
+    modeControl.className='rush-work-mode';
+    modeLabel.htmlFor='rush-work-mode';modeLabel.textContent='Arbeitszeit für diesen Eilauftrag';
+    modeSelect.id='rush-work-mode';
+    const addMode=(value,label,disabled=false)=>{
+      const option=document.createElement('option');option.value=value;option.textContent=label;option.disabled=disabled;modeSelect.append(option);
+    };
+    addMode('regular','Normale Schichten · Mo–Fr, 06–22 Uhr');
+    addMode('overtime','Überstunden · Mo–Fr bis 24 Uhr · +50 % Lohn',!machines.some(machine=>!rushWorkModeReason(machine,'overtime')));
+    addMode('saturday','Samstagsarbeit · 06–14 Uhr · doppelter Lohn',!machines.some(machine=>!rushWorkModeReason(machine,'saturday')));
+    modeSelect.value=rushWorkMode;
+    modeHelp.textContent='Der Zuschlag wird über die Lohnabrechnung verbucht.';
+    modeControl.append(modeLabel,modeSelect,modeHelp);
+    modeSelect.addEventListener('change',()=>{
+      rushWorkMode=modeSelect.value;
+      renderEventWindow();
+    });
     if(!machines.length){
       const empty=document.createElement('p');empty.className='rush-capacity-empty';empty.textContent='Keine passende '+order.kind+'-Maschine vorhanden.';rows.append(empty);
     }
+    const plannedOrder=rushWorkMode==='regular'?order:{...order,workMode:rushWorkMode};
     machines.forEach(machine=>{
-      const projected=plannedMachineLoad(machine,order),interruption=rushInterruptionForecast(machine,order);
+      const projected=plannedMachineLoad(machine,plannedOrder),interruption=rushInterruptionForecast(machine,plannedOrder);
       const rushCheck=projected.deadlineChecks.find(check=>check.orderId===order.id);
       const activeOrder=job(machine);
       const activeCheck=activeOrder?projected.deadlineChecks.find(check=>check.orderId===activeOrder.id):null;
       const row=document.createElement('div'),top=document.createElement('div'),name=document.createElement('strong'),status=document.createElement('strong'),window=document.createElement('p'),choices=document.createElement('div');
-      const reason=rushAssignmentBlockReason(machine,order,false,true);
+      const modeReason=rushWorkModeReason(machine,rushWorkMode);
+      const reason=modeReason||rushAssignmentBlockReason(machine,order,false,true);
       const blocked=!!reason||!projected.shifts.length;
       row.className='rush-capacity-row';
+      row.classList.toggle('over-capacity',blocked);
       top.className='rush-capacity-row-head';
       name.textContent='Platz '+machine.bay+' · '+catalog[machine.type].name;
       status.className='rush-capacity-status';
@@ -1055,7 +1130,6 @@
         window.textContent='Aktuell: Maschine frei.';
       }
       choices.className='rush-machine-actions';
-
       const materialShortage=Math.max(0,materialSystem.requiredKg(order)-materialSystem.available(state,order));
       const materialLine=materialShortage>1e-9
         ?'Material: '+Math.ceil(materialShortage)+' kg '+order.material+' fehlen – nach der Zusage öffnet sich das Materiallager.'
@@ -1080,12 +1154,12 @@
         normalDetail.textContent=(reason||(!projected.shifts.length?'Keine besetzte Schicht':'Fertigstellung nicht berechenbar.'))+'\n'+materialLine;
       }
       normalButton.append(normalDetail);normalButton.disabled=blocked;
-      normalButton.addEventListener('click',()=>resolveRushOrderEvent(event,true,machine.bay,false));
+      normalButton.addEventListener('click',()=>resolveRushOrderEvent(event,true,machine.bay,false,rushWorkMode));
       choices.append(normalButton);
 
       if(activeOrder){
         const interruptButton=document.createElement('button'),interruptTag=document.createElement('span'),interruptDetail=document.createElement('small');
-        const interruptReason=rushAssignmentBlockReason(machine,order,true,true);
+        const interruptReason=modeReason||rushAssignmentBlockReason(machine,order,true,true);
         interruptButton.type='button';interruptButton.className='action rush-machine-choice rush-interrupt-choice';
         interruptTag.textContent='OPTION 2 · ANNEHMEN – EILAUFTRAG SOFORT EINSCHIEBEN';
         interruptButton.append(interruptTag);
@@ -1108,13 +1182,13 @@
           interruptDetail.textContent=(interruptReason||'Unterbrechungsfolge nicht berechenbar.')+'\n'+materialLine;
         }
         interruptButton.append(interruptDetail);
-        interruptButton.disabled=!!interruptReason||!interruption;
-        interruptButton.addEventListener('click',()=>resolveRushOrderEvent(event,true,machine.bay,true));
+        interruptButton.disabled=!!interruptReason||!interruption||!projected.shifts.length;
+        interruptButton.addEventListener('click',()=>resolveRushOrderEvent(event,true,machine.bay,true,rushWorkMode));
         choices.append(interruptButton);
       }
       row.append(top,window,choices);rows.append(row);
     });
-    panel.replaceChildren(heading,note,rows);
+    panel.replaceChildren(heading,note,modeControl,rows);
   }
   function addQualityChoice(label,detail,callback,cost=0,risky=false){
     const button=document.createElement('button'),small=document.createElement('small');
@@ -1248,6 +1322,7 @@
   function renderEventWindow(){
     const overlay=$('event-window');
     if(!overlay)return;
+    if(deferWeekendRushEvents())save();
     const capacityPanel=$('rush-capacity-check');
     if(capacityPanel)capacityPanel.hidden=true;
     const event=state.eventQueue[0];overlay.hidden=!event;
@@ -1368,17 +1443,18 @@
   function resolveEventWithoutAction(){
     state.eventQueue.shift();state.paused=state.eventQueue.length>0;save();render();
   }
-  function resolveRushOrderEvent(event,accepted,targetBay=null,interrupt=false){
+  function resolveRushOrderEvent(event,accepted,targetBay=null,interrupt=false,workMode='regular'){
     if(!state.eventQueue.some(item=>item.id===event.id))return false;
+    const selectedWorkMode=workMode==='overtime'||workMode==='saturday'?workMode:'regular';
     let offer=event.order,materialPurchaseAssignment=null;
     if(accepted){
       if(Number.isInteger(targetBay)){
-        const machine=machineAt(targetBay),reason=machine&&rushAssignmentBlockReason(machine,offer,interrupt,true);
-        if(!machine||reason||!plannedMachineLoad(machine).shifts.length){
+        const machine=machineAt(targetBay),reason=machine&&(rushWorkModeReason(machine,selectedWorkMode)||rushAssignmentBlockReason(machine,offer,interrupt,true));
+        if(!machine||reason||!plannedMachineLoad(machine,{...offer,workMode:selectedWorkMode}).shifts.length){
           say(reason||'Für diese Maschine ist keine besetzte Schicht geplant.');return false;
         }
       }
-      offer={...offer,acceptedRushAt:state.gameMinutes,
+      offer={...offer,workMode:selectedWorkMode,acceptedRushAt:state.gameMinutes,
         deadlineAt:state.gameMinutes+offer.deadlineHours*60};
       offer.expiresAt=Math.max(offer.expiresAt,offer.deadlineAt+24*60);
       offer.offerLifetimeMinutes=offer.expiresAt-offer.createdAt;
@@ -3168,7 +3244,7 @@
       b.classList.toggle('veltron-bay',!!machine&&machine.type==='mill3');
       b.classList.toggle('orionis-bay',!!machine&&machine.type==='mill5');
       b.classList.toggle('turning-bay',turning);
-      b.classList.toggle('robot-loading',!!machine?.loadingRobot&&operating(machine)&&shiftAt(state.gameMinutes)===2);
+      b.classList.toggle('robot-loading',!!machine?.loadingRobot&&operating(machine)&&machineShiftAt(machine)===2);
 
       let machineArt=b.querySelector('.bay-machine');
       let turningFrame=b.querySelector('.bay-turning-frame');
@@ -3330,6 +3406,12 @@
   }
   function maybeQueueRushOrderEvent(){
     if(state.gameMinutes+1e-8<state.nextRushOrderAt)return false;
+    const weekday=dateAt(state.gameMinutes).getUTCDay();
+    if(weekday===0||weekday===6){
+      state.nextRushOrderAt=nextMondayRushTime(state.gameMinutes);
+      save();
+      return false;
+    }
     if(state.eventQueue.length){state.nextRushOrderAt=state.gameMinutes+6*60;save();return false;}
     const eligibleMachines=state.machines.filter(machine=>{
       const kind=catalog[machine.type]?.kind;
@@ -3634,6 +3716,11 @@
         }
         for(const machine of state.machines)autoReplaceWornTool(machine,shift);
         runShiftLeaderAutomation(shift);
+      }else{
+        for(const machine of state.machines){
+          const extraShift=machineShiftAt(machine);
+          if(extraShift)autoReplaceWornTool(machine,extraShift);
+        }
       }
       const storageCharge=state.material*STORAGE_RATE*step/1440;
       if(storageCharge>0){
@@ -3643,9 +3730,9 @@
       }
       const faultEvents=breakdownSystem.tick(state,step,{operatingBays:state.machines.filter(readyToRun).map(m=>m.bay)});
       for(const event of faultEvents)handleBreakdownEvent(event);
-      if(!state.paused&&shift===2){
+      if(!state.paused){
         for(const machine of state.machines){
-          if(!machine.loadingRobot||!robotAvailable(machine)||!readyToRun(machine)||!breakdownSystem.canContinueProduction(state,machine.bay))continue;
+          if(machineShiftAt(machine)!==2||!machine.loadingRobot||!robotAvailable(machine)||!readyToRun(machine)||!breakdownSystem.canContinueProduction(state,machine.bay))continue;
           const chance=1-Math.exp(-ROBOT_FAILURE_RATE_PER_HOUR*step/60);
           if(Math.random()<chance){
             handleRobotFailureEvent({event:'robot_failure',id:'robot_failure:'+machine.bay+':'+Math.floor(state.gameMinutes+step),bay:machine.bay,since:state.gameMinutes+step});
@@ -3696,13 +3783,18 @@
         }
         if(!m.setupPartProduced&&m.setupRemainingMinutes<=0)beginMachineSetup(m,o);
         if(!operating(m))continue;
-        const power=(MACHINE_POWER_COST_PER_HOUR+(shift===2&&m.loadingRobot?ROBOT_POWER_COST_PER_HOUR:0))*step/60;
+        const productionShift=machineShiftAt(m);
+        const power=(MACHINE_POWER_COST_PER_HOUR+(productionShift===2&&m.loadingRobot?ROBOT_POWER_COST_PER_HOUR:0))*step/60;
         const dateKey=gameDateKey();
         book('energy',-power,'Stromkosten laufende Maschinen',{gameDate:dateKey},`daily:energy:${dateKey}`);
         state.energyPaid+=power;
-        const employee=assignedEmployee(m,shift);
+        const employee=assignedEmployee(m,productionShift);
+        if(!shift&&employee){
+          const wageMultiplier=o.workMode==='saturday'?RUSH_SATURDAY_WAGE_MULTIPLIER:RUSH_OVERTIME_WAGE_MULTIPLIER;
+          state.payrollDue+=employeeHourlyWage(employee,productionShift)*wageMultiplier*step/60;
+        }
         const producedBefore=Math.max(0,Number(m.produced)||0);
-        const factor=productionFactor(m);
+        const factor=productionFactorForShift(m,productionShift||1);
         let productionStep=step;
         if(m.setupRemainingMinutes>0){
           const setupStep=Math.min(step,m.setupRemainingMinutes);
