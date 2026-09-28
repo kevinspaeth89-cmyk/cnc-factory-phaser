@@ -544,7 +544,11 @@
     const familiarityModifier=employees.length
       ? employees.reduce((sum,employee)=>sum+recruitmentSystem.familiarityQualityRiskModifier(employee,machine.type),0)/employees.length
       : 0;
-    return Math.max(2,Math.min(28,Math.round(baseRisk+personalityModifier+familiarityModifier)));
+    const qs=qualityEmployee(shiftAt(state.gameMinutes));
+    const qsProcessModifier=qs
+      ?-Math.min(1,.35+Math.max(0,(Number(qs.skills?.precision)||5)-5)*.08)
+      :0;
+    return Math.max(2,Math.min(28,Math.round(baseRisk+personalityModifier+familiarityModifier+qsProcessModifier)));
   }
   const selectedMachine=()=>state.machines.find(m=>m.bay===state.selectedBay);
   const machineAt=bay=>state.machines.find(m=>m.bay===bay);
@@ -1000,7 +1004,8 @@
     $('event-window').querySelector('.event-card').classList.add('quality-event-card');
     $('event-eyebrow').textContent='QUALITÄTSPRÜFUNG · NACHARBEIT';
     $('event-title').textContent=`Endkontrolle findet Maßfehler bei ${order.part}`;
-    $('event-detail').textContent=`${event.defectParts} von ${order.qty} Teilen liegen außerhalb der ${programmingQuality.toleranceClass(order)}-Toleranz. Die Prüfung hat den Fehler vor der Auslieferung entdeckt.`;
+    const inspectionSource=event.inspectedByName?`Die QS-Prüfung durch ${event.inspectedByName}`:'Die Bediener-Endkontrolle';
+    $('event-detail').textContent=`${event.defectParts} von ${order.qty} Teilen liegen außerhalb der ${programmingQuality.toleranceClass(order)}-Toleranz. ${inspectionSource} hat den Fehler vor der Auslieferung entdeckt.`;
     $('event-consequence').textContent=`Maschinenzustand ${Math.round(machine?.maintenance||0)} % · Werkzeug ${Math.round(machine?.tool||0)} % · geschätztes Fehlerrisiko vor Fertigung ${event.riskPct} %. Nacharbeit verlängert den Auftrag und kostet Material sowie Prüfzeit.`;
     const timing=$('event-order-timing');timing.hidden=false;
     $('event-order-deadline-label').textContent='LIEFERFRIST';
@@ -1395,7 +1400,7 @@
   }
   function finishOrder(machine,order,quality=null,completedAt=state.gameMinutes){
     const late=machine.deadlineAt!==null&&completedAt>machine.deadlineAt;
-    const qualityDiscount=quality?.defectParts?0.9:1;
+    const qualityDiscount=quality?.defectParts&&!quality?.undetected?0.9:1;
     const payout=Math.round(order.reward*(late ? .8 : 1)*qualityDiscount);
     if(!book('income',payout,`Auftrag ${order.id} abgeschlossen`,{orderId:order.id,bay:machine.bay,late,qualityDefectParts:quality?.defectParts||0},null,completedAt).ok)return false;
     if(machine.activeOrderSource==='market'){
@@ -1405,7 +1410,7 @@
     if(quality?.defectParts){
       const id=`quality_complaint:${order.id}`;
       if(!state.pendingQualityComplaints.some(item=>item.id===id))state.pendingQualityComplaints.push({id,dueAt:completedAt+12*60,
-        order:{...order},customer:order.customer,bay:machine.bay,defectParts:quality.defectParts,riskPct:quality.riskPct});
+        order:{...order},customer:order.customer,bay:machine.bay,defectParts:quality.defectParts,riskPct:quality.riskPct,undetected:!!quality.undetected});
     }
     state.completed++;
     const interrupted=machine.suspendedOrder&&order?.isRushOrder?machine.suspendedOrder:null;
@@ -1437,7 +1442,7 @@
       reassessActiveProgrammingRoutes();
     }
     save();renderOrders();renderBusiness();
-    say(`${catalog[machine.type].name}: ${order.part} fertig · ${euro(payout)}${late?' (20 % Fristabzug)':''}${quality?.defectParts?' (10 % Qualitätsabzug)':''}${resumed?` · ${machine.activeOrder.part} fortgesetzt · neue Rüstzeit ${formatMinutes(resumedSetup?.totalMinutes||0)}`:''}${next?` · Nächster Auftrag gestartet${nextSetup?` · Rüstzeit ${formatMinutes(nextSetup.totalMinutes)}`:''}`:''}`);
+    say(`${catalog[machine.type].name}: ${order.part} fertig · ${euro(payout)}${late?' (20 % Fristabzug)':''}${quality?.defectParts&&!quality?.undetected?' (10 % Qualitätsabzug)':''}${resumed?` · ${machine.activeOrder.part} fortgesetzt · neue Rüstzeit ${formatMinutes(resumedSetup?.totalMinutes||0)}`:''}${next?` · Nächster Auftrag gestartet${nextSetup?` · Rüstzeit ${formatMinutes(nextSetup.totalMinutes)}`:''}`:''}`);
     return true;
   }
   function startNextQueuedOrder(machine){
@@ -3338,12 +3343,24 @@
         if(m.progress>=100){
           if(m.qualityInspectedOrderId!==o.id){
             const riskPct=qualityRiskFor(m,o),defects=programmingQuality.defectParts(o,riskPct);
+            const inspectionShift=shiftAt(state.gameMinutes)||shift;
+            const qsInspector=qualityEmployee(inspectionShift);
+            const detectionChance=qualityDetectionChance(m,inspectionShift);
+            if(qsInspector)state.qualityAssurance.inspections+=1;
             if(defects>0){
               m.qualityInspectedOrderId=o.id;
-              const event={event:'quality_issue',id:`quality_issue:${o.id}`,bay:m.bay,order:{...o},riskPct,defectParts:defects,
-                reworkCost:Math.max(250,Math.round(o.reward*defects/Math.max(1,o.qty)*.55)),createdAt:state.gameMinutes+step};
-              if(!state.eventQueue.some(item=>item.id===event.id))state.eventQueue.push(event);
-              state.paused=true;renderEventWindow();save();break;
+              const detected=Math.random()<detectionChance;
+              if(detected){
+                if(qsInspector)state.qualityAssurance.caughtDefects+=defects;
+                const event={event:'quality_issue',id:`quality_issue:${o.id}`,bay:m.bay,order:{...o},riskPct,defectParts:defects,
+                  detectionChance,inspectedById:qsInspector?.id??null,inspectedByName:qsInspector?.name||null,
+                  reworkCost:Math.max(250,Math.round(o.reward*defects/Math.max(1,o.qty)*.55)),createdAt:state.gameMinutes+step};
+                if(!state.eventQueue.some(item=>item.id===event.id))state.eventQueue.push(event);
+                state.paused=true;renderEventWindow();save();break;
+              }
+              if(qsInspector)state.qualityAssurance.escapedDefects+=defects;
+              finishOrder(m,o,{defectParts:defects,riskPct,undetected:true},state.gameMinutes+step);
+              continue;
             }
           }
           finishOrder(m,o,null,state.gameMinutes+step);
