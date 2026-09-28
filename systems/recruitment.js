@@ -111,13 +111,15 @@
 
   function uniquePortraitFor(gender, usedPortraits = [], preferredPortrait = null) {
     const pool = portraitIdsForGender(gender);
+    const allPortraits = Array.from({ length: PORTRAIT_COUNT }, (_, index) => index + 1);
     const used = new Set((Array.isArray(usedPortraits) ? usedPortraits : [])
       .map(portraitId)
       .filter(id => id !== null));
     const preferredId = portraitId(preferredPortrait);
-    const id = preferredId && pool.includes(preferredId) && !used.has(preferredId)
+    const id = preferredId && !used.has(preferredId)
       ? preferredId
-      : pool.find(candidateId => !used.has(candidateId));
+      : pool.find(candidateId => !used.has(candidateId))
+        || allPortraits.find(candidateId => !used.has(candidateId));
     return id ? portraitPath(id) : null;
   }
 
@@ -126,24 +128,20 @@
     const entries = employees.filter(employee => employee && typeof employee === 'object');
     if (entries.length !== employees.length) return { ok: false, code: 'invalid_employees' };
 
-    const genders = entries.map(employee => genderForName(employee.name) || employee.gender || null);
-    const totals = new Map();
-    genders.forEach(gender => totals.set(gender, (totals.get(gender) || 0) + 1));
-    for (const [gender, count] of totals) {
-      const capacity = portraitIdsForGender(gender).length;
-      if (count > capacity) {
-        return { ok: false, code: 'portrait_pool_exhausted', gender, count, capacity };
-      }
+    if (entries.length > PORTRAIT_COUNT) {
+      return { ok: false, code: 'portrait_pool_exhausted', count: entries.length, capacity: PORTRAIT_COUNT };
     }
 
     const used = new Set();
-    const assignments = entries.map((employee, index) => {
-      const gender = genders[index];
+    const allPortraits = Array.from({ length: PORTRAIT_COUNT }, (_, index) => index + 1);
+    const assignments = entries.map(employee => {
+      const gender = genderForName(employee.name) || employee.gender || null;
       const pool = portraitIdsForGender(gender);
       const savedId = portraitId(employee.portrait);
-      const id = savedId && pool.includes(savedId) && !used.has(savedId)
+      const id = savedId && !used.has(savedId)
         ? savedId
-        : pool.find(candidateId => !used.has(candidateId));
+        : pool.find(candidateId => !used.has(candidateId))
+          || allPortraits.find(candidateId => !used.has(candidateId));
       used.add(id);
       return { employee, id };
     });
@@ -928,9 +926,8 @@
     const qualityProfile = entry?.profileType === 'quality' && entry?.qualitySkills
       ? deriveQualityProfile(entry.qualitySkills)
       : null;
-    const profileGender = profile.gender;
     const savedPortraitId = portraitId(entry?.portrait);
-    const savedPortrait = savedPortraitId && portraitIdsForGender(profileGender).includes(savedPortraitId)
+    const savedPortrait = savedPortraitId
       ? portraitPath(savedPortraitId)
       : profile.portrait;
     return {

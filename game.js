@@ -3531,7 +3531,7 @@
       currentWorkers.map(person=>person.portrait),
       candidate.portrait
     );
-    if(!portrait){say('Für diese Portraitgruppe ist kein unbenutztes Mitarbeiterportrait mehr verfügbar.');return;}
+    if(!portrait){say('Es ist kein unbenutztes Mitarbeiterportrait mehr verfügbar.');return;}
     employee.portrait=portrait;
     if(!book('other',-HIRING_FEE,`Bediener ${candidate.name} für Schicht ${shift} eingestellt`,{
       employeeId:employee.id,applicantId,employeeName:candidate.name,shift,setupFee:true,skills:{...candidate.skills}

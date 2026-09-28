@@ -77,6 +77,9 @@ test('profile ratings use all four skills and portraits remain stable per employ
 test('generated applicants and legacy identities use matching portrait groups', () => {
   const femalePortraits = new Set([4, 5, 6, 7, 9, 10, 11, 12]);
   const malePortraits = new Set([1, 2, 3, 8, 13, 14, 15, 16]);
+  assert.equal(recruitment.PORTRAIT_COUNT, 16);
+  assert.equal(recruitment.portraitIdsForGender('female').length, 8);
+  assert.equal(recruitment.portraitIdsForGender('male').length, 8);
   for (let id = 1; id <= 100; id += 1) {
     const candidate = recruitment.generateApplicant(id);
     const portraitId = Number(candidate.portrait.match(/employee-portrait-(\d+)/)[1]);
@@ -116,16 +119,30 @@ test('preserves a saved portrait when it matches the employee gender', () => {
 });
 
 test('reports portrait-pool exhaustion without partially changing the saved roster', () => {
+  const workers = Array.from({ length: 17 }, (_, index) => ({
+    id: index + 1,
+    name: `${index % 2 ? 'Tarek' : 'Mira'} Worker${index + 1}`,
+    gender: index % 2 ? 'male' : 'female',
+    portrait: recruitment.portraitFor(index + 1, index % 2 ? 'male' : 'female')
+  }));
+  const before = JSON.parse(JSON.stringify(workers));
+  const result = recruitment.ensureUniquePortraits(workers);
+  assert.deepEqual(result, { ok: false, code: 'portrait_pool_exhausted', count: 17, capacity: 16 });
+  assert.deepEqual(workers, before);
+});
+
+test('uses remaining portraits from the full set after one gender group is exhausted', () => {
   const workers = Array.from({ length: 9 }, (_, index) => ({
     id: index + 1,
     name: `Mira Worker${index + 1}`,
     gender: 'female',
     portrait: recruitment.portraitFor(index + 1, 'female')
   }));
-  const before = JSON.parse(JSON.stringify(workers));
   const result = recruitment.ensureUniquePortraits(workers);
-  assert.deepEqual(result, { ok: false, code: 'portrait_pool_exhausted', gender: 'female', count: 9, capacity: 8 });
-  assert.deepEqual(workers, before);
+  const ids = workers.map(worker => recruitment.portraitId(worker.portrait));
+  assert.deepEqual(result, { ok: true, count: 9 });
+  assert.equal(new Set(ids).size, 9);
+  assert.ok(ids.some(id => [1, 2, 3, 8, 13, 14, 15, 16].includes(id)));
 });
 
 test('corrects a saved applicant portrait from the name when an old save mismatches', () => {
@@ -142,7 +159,7 @@ test('corrects a saved applicant portrait from the name when an old save mismatc
     skills: { turning: 5, milling: 5, precision: 5, learning: 5 }
   }, 1);
   assert.equal(employee.gender, 'male');
-  assert.equal(employee.portrait, recruitment.portraitFor(1, 'male'));
+  assert.equal(employee.portrait, recruitment.portraitFor(1, 'female'));
 });
 
 test('migrates saved five-point applicant and employee skills to the ten-point scale', () => {
