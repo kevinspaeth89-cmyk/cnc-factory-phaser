@@ -829,7 +829,7 @@
         }
       }
     }
-    const finishAt=scheduledWorkCompletionAt(machine,startsAt,processMinutes);
+    const finishAt=scheduledWorkCompletionAt(machine,startsAt,processMinutes,false,order.workMode||'regular');
     return {finishAt,programReadyAt,workMinutes:processMinutes+operatorProgrammingMinutes};
   }
   function plannedMachineLoad(machine,additionalOrder=null){
@@ -886,7 +886,7 @@
       ?Math.max(0,(100-Math.max(0,Number(machine.progress)||0))*duration*6/(100*factor))
       :Math.max(0,(quantity-1)/quantity*duration*6/factor);
     const resumedSetup=setupMinutesForOrder(interrupted);
-    const finishAt=scheduledWorkCompletionAt(machine,rush.finishAt,resumedSetup+remainingProduction);
+    const finishAt=scheduledWorkCompletionAt(machine,rush.finishAt,resumedSetup+remainingProduction,false,interrupted.workMode||'regular');
     const deadlineAt=Number.isFinite(machine.deadlineAt)?machine.deadlineAt:state.gameMinutes+Math.max(0,Number(interrupted.deadlineHours)||0)*60;
     return {interrupted,rushFinishAt:rush.finishAt,finishAt,deadlineAt,bufferMinutes:deadlineAt-finishAt,
       resumedSetup,hasProduced,shifts,factor};
