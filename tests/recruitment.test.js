@@ -184,3 +184,77 @@ test('personality changes quality risk and incident learning in a predictable wa
   assert.equal(recruitment.breakdownAdvice(pragmatic, 'warning').action, 'continueRisky');
   assert.equal(recruitment.breakdownAdvice(pragmatic, 'major_failure').action, 'repairTechnician');
 });
+
+test('machine experience follows the machine type across different hall bays', () => {
+  const employee = {
+    profileVersion: 2,
+    name: 'Mira Test',
+    skills: { turning: 8, milling: 4, precision: 9, learning: 9 },
+    personality: recruitment.derivePersonality({ turning: 8, milling: 4, precision: 9, learning: 9 }),
+    machineHistory: {}
+  };
+
+  recruitment.recordMachineIncident(employee, {
+    machineType: 'standard',
+    machineName: 'Nexora NX-350',
+    action: 'repairSelf',
+    fault: 'sensor_error',
+    gameMinutes: 120,
+    bay: 2
+  });
+  recruitment.recordMachineIncident(employee, {
+    machineType: 'standard',
+    machineName: 'Nexora NX-350',
+    action: 'repairTechnician',
+    fault: 'tool_break',
+    gameMinutes: 360,
+    bay: 7
+  });
+
+  const sameType = recruitment.machineExperience(employee, 'standard');
+  assert.equal(sameType.incidents, 2);
+  assert.equal(sameType.selfRepairs, 1);
+  assert.equal(sameType.technicianRepairs, 1);
+  assert.equal(sameType.lastBay, 7);
+  assert.equal(Object.keys(employee.machineHistory).length, 1);
+
+  const advice = recruitment.breakdownAdvice(employee, 'warning', {
+    machineType: 'standard',
+    machineName: 'Nexora NX-350'
+  });
+  assert.match(advice.text, /Nexora NX-350/);
+  assert.match(advice.text, /2 Störungen/);
+
+  recruitment.recordMachineIncident(employee, {
+    machineType: 'rapid',
+    machineName: 'Nexora NX-420',
+    action: 'continueRisky',
+    gameMinutes: 500,
+    bay: 2
+  });
+  assert.equal(Object.keys(employee.machineHistory).length, 2);
+  assert.equal(recruitment.machineExperience(employee, 'rapid').incidents, 1);
+});
+
+test('employee normalization preserves machine-type experience in saved games', () => {
+  const normalized = recruitment.normalizeEmployee({
+    profileVersion: 2,
+    name: 'Mira Stahlwind',
+    skills: { turning: 8, milling: 4, precision: 9, learning: 9 },
+    machineHistory: {
+      standard: {
+        machineName: 'Nexora NX-350',
+        incidents: 3,
+        selfRepairs: 2,
+        technicianRepairs: 1,
+        riskyContinues: 0,
+        firstAt: 100,
+        lastAt: 900,
+        lastBay: 8
+      }
+    }
+  }, 12);
+  assert.equal(normalized.machineHistory.standard.incidents, 3);
+  assert.equal(normalized.machineHistory.standard.machineType, 'standard');
+  assert.equal(normalized.machineHistory.standard.lastBay, 8);
+});
