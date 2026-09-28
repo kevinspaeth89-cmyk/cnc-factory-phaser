@@ -467,3 +467,30 @@ test('machine familiarity thresholds represent 8, 40, 120, and 300 work hours', 
     ['Neu', 'Eingearbeitet', 'Vertraut', 'Erfahren', 'Spezialist']
   );
 });
+
+
+test('wage expectations vary by profile and remain stable for the same applicant', () => {
+  const first = recruitment.generateApplicant(1);
+  const second = recruitment.generateApplicant(2);
+  const firstAgain = recruitment.generateApplicant(1);
+
+  assert.equal(first.baseHourlyWage, firstAgain.baseHourlyWage);
+  assert.ok(first.baseHourlyWage >= 20 && first.baseHourlyWage <= 31);
+  assert.ok(second.baseHourlyWage >= 20 && second.baseHourlyWage <= 31);
+  assert.equal(recruitment.hourlyWage(first, 2), recruitment.hourlyWage(first, 1) + 2);
+
+  const junior = recruitment.wageExpectation({ turning: 2, milling: 2, precision: 2, learning: 2 }, 10);
+  const expert = recruitment.wageExpectation({ turning: 9, milling: 8, precision: 9, learning: 8 }, 10);
+  assert.ok(expert > junior);
+});
+
+test('employees keep the negotiated wage when hired and reloaded', () => {
+  const candidate = recruitment.generateApplicant(7);
+  const employee = recruitment.createEmployee(candidate, 77);
+  assert.equal(employee.baseHourlyWage, candidate.baseHourlyWage);
+
+  const restored = recruitment.normalizeEmployee(JSON.parse(JSON.stringify(employee)), employee.id);
+  assert.equal(restored.baseHourlyWage, employee.baseHourlyWage);
+  assert.equal(recruitment.hourlyWage(restored, 1), employee.baseHourlyWage);
+  assert.equal(recruitment.hourlyWage(restored, 2), employee.baseHourlyWage + 2);
+});
