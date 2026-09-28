@@ -235,6 +235,142 @@
     return { ...previous };
   }
 
+  const MAX_MEMORIES = 5;
+
+  function normalizeMemory(memory) {
+    if (!memory || typeof memory !== 'object' || Array.isArray(memory)) return null;
+    const type = typeof memory.type === 'string' && memory.type ? memory.type : 'event';
+    const machineType = typeof memory.machineType === 'string' && memory.machineType ? memory.machineType : null;
+    const fault = typeof memory.fault === 'string' && memory.fault ? memory.fault : null;
+    const action = typeof memory.action === 'string' && memory.action ? memory.action : null;
+    const orderId = typeof memory.orderId === 'string' && memory.orderId ? memory.orderId : null;
+    const fallbackId = [type, machineType || 'none', fault || orderId || 'general', action || memory.outcome || 'event'].join(':');
+    return {
+      id: typeof memory.id === 'string' && memory.id ? memory.id : fallbackId,
+      type,
+      machineType,
+      machineName: typeof memory.machineName === 'string' && memory.machineName.trim() ? memory.machineName.trim().slice(0, 80) : null,
+      fault,
+      faultLabel: typeof memory.faultLabel === 'string' && memory.faultLabel.trim() ? memory.faultLabel.trim().slice(0, 100) : null,
+      action,
+      outcome: typeof memory.outcome === 'string' && memory.outcome ? memory.outcome : null,
+      orderId,
+      orderPart: typeof memory.orderPart === 'string' && memory.orderPart.trim() ? memory.orderPart.trim().slice(0, 100) : null,
+      defectParts: Math.max(0, Math.floor(Number(memory.defectParts) || 0)),
+      importance: clamp(Math.floor(Number(memory.importance) || 5), 1, 10),
+      count: Math.max(1, Math.floor(Number(memory.count) || 1)),
+      firstAt: Number.isFinite(memory.firstAt) ? memory.firstAt : Number.isFinite(memory.gameMinutes) ? memory.gameMinutes : null,
+      lastAt: Number.isFinite(memory.lastAt) ? memory.lastAt : Number.isFinite(memory.gameMinutes) ? memory.gameMinutes : null,
+      lastBay: Number.isInteger(memory.lastBay) ? memory.lastBay : Number.isInteger(memory.bay) ? memory.bay : null
+    };
+  }
+
+  function normalizeMemories(value) {
+    if (!Array.isArray(value)) return [];
+    const merged = new Map();
+    for (const source of value) {
+      const memory = normalizeMemory(source);
+      if (!memory) continue;
+      const previous = merged.get(memory.id);
+      if (!previous) {
+        merged.set(memory.id, memory);
+        continue;
+      }
+      previous.count += memory.count;
+      previous.importance = Math.max(previous.importance, memory.importance);
+      if (memory.lastAt !== null && (previous.lastAt === null || memory.lastAt >= previous.lastAt)) {
+        previous.lastAt = memory.lastAt;
+        previous.lastBay = memory.lastBay;
+        previous.outcome = memory.outcome || previous.outcome;
+        previous.machineName = memory.machineName || previous.machineName;
+        previous.faultLabel = memory.faultLabel || previous.faultLabel;
+        previous.orderPart = memory.orderPart || previous.orderPart;
+        previous.defectParts = memory.defectParts || previous.defectParts;
+      }
+      if (previous.firstAt === null || (memory.firstAt !== null && memory.firstAt < previous.firstAt)) previous.firstAt = memory.firstAt;
+    }
+    return [...merged.values()]
+      .sort((a,b)=>b.importance-a.importance||(b.lastAt??-1)-(a.lastAt??-1))
+      .slice(0,MAX_MEMORIES);
+  }
+
+  function recordMemory(employee, source = {}) {
+    if (!employee || employee.profileVersion !== 2) return null;
+    const memory = normalizeMemory(source);
+    if (!memory) return null;
+    employee.memories = normalizeMemories(employee.memories);
+    const existing = employee.memories.find(item => item.id === memory.id);
+    if (existing) {
+      existing.count += 1;
+      existing.importance = Math.max(existing.importance, memory.importance);
+      existing.lastAt = memory.lastAt ?? existing.lastAt;
+      existing.lastBay = memory.lastBay ?? existing.lastBay;
+      existing.outcome = memory.outcome || existing.outcome;
+      existing.machineName = memory.machineName || existing.machineName;
+      existing.faultLabel = memory.faultLabel || existing.faultLabel;
+      existing.orderPart = memory.orderPart || existing.orderPart;
+      existing.defectParts = memory.defectParts || existing.defectParts;
+    } else {
+      employee.memories.push(memory);
+    }
+    employee.memories = normalizeMemories(employee.memories);
+    return employee.memories.find(item => item.id === memory.id) || memory;
+  }
+
+  function memoryTitle(memory) {
+    const item = normalizeMemory(memory);
+    if (!item) return '';
+    const machine = item.machineName || item.machineType || 'Maschine';
+    const fault = item.faultLabel || 'Störung';
+    if (item.type === 'major_failure') {
+      return item.outcome === 'after_risky'
+        ? `💥 ${fault} an ${machine} nach Weiterfahrt eskaliert`
+        : `💥 Schweren Schaden an ${machine} erlebt`;
+    }
+    if (item.type === 'quality_issue') {
+      const part = item.orderPart || 'Bauteil';
+      return item.action === 'ship'
+        ? `⚠️ ${part} trotz Maßfehler ausgeliefert`
+        : `📏 Maßfehler bei ${part} vor Auslieferung nachgearbeitet`;
+    }
+    if (item.type === 'machine_incident') {
+      if (item.action === 'repairSelf') return `🔧 ${fault} an ${machine} selbst geprüft`;
+      if (item.action === 'repairTechnician') return `🧰 ${fault} an ${machine}: Monteur gerufen`;
+      if (item.action === 'continueRisky') return `⚠️ ${fault} an ${machine}: weiterproduziert`;
+    }
+    return `• Erfahrung an ${machine}`;
+  }
+
+  function latestMachineMemory(employee, machineType, fault = null) {
+    if (!employee || typeof machineType !== 'string' || !machineType) return null;
+    const memories = normalizeMemories(employee.memories)
+      .filter(memory => memory.machineType === machineType && (!fault || memory.fault === fault))
+      .sort((a,b)=>(b.lastAt??-1)-(a.lastAt??-1));
+    return memories[0] || null;
+  }
+
+  function memoryReference(employee, context = {}) {
+    const exact = latestMachineMemory(employee, context.machineType, context.fault);
+    const memory = exact || latestMachineMemory(employee, context.machineType);
+    if (!memory) return '';
+    const machine = context.machineName || memory.machineName || 'diesem Maschinentyp';
+    const fault = memory.faultLabel || 'Störung';
+    if (memory.type === 'major_failure') {
+      return memory.outcome === 'after_risky'
+        ? `Bei der ${fault} an ${machine} sind wir damals weitergefahren und sie ist eskaliert. `
+        : `An ${machine} hatten wir schon einmal einen schweren Schaden. `;
+    }
+    if (memory.type === 'machine_incident') {
+      if (memory.action === 'repairSelf') return `Bei der letzten ${fault} an ${machine} habe ich selbst nachgesehen. `;
+      if (memory.action === 'repairTechnician') return `Bei der letzten ${fault} an ${machine} haben wir den Monteur geholt. `;
+      if (memory.action === 'continueRisky') return `Bei der letzten ${fault} an ${machine} sind wir zunächst weitergefahren. `;
+    }
+    if (memory.type === 'quality_issue') {
+      return `Mit ${machine} hatten wir schon einmal ein Qualitätsproblem bei ${memory.orderPart || 'einem Auftrag'}. `;
+    }
+    return '';
+  }
+
   function breakdownAdvice(employee, eventType = 'warning', context = {}) {
     if (employee?.profileVersion !== 2) return null;
     const ids = personalityIds(employee);
@@ -242,11 +378,12 @@
     const major = eventType === 'major_failure';
     const experience = machineExperience(employee, context.machineType);
     const machineName = typeof context.machineName === 'string' && context.machineName.trim() ? context.machineName.trim() : experience?.machineName;
-    const memoryLead = experience?.incidents > 0
+    const specificMemory = memoryReference(employee, context);
+    const memoryLead = specificMemory || (experience?.incidents > 0
       ? experience.incidents === 1
         ? `Mit ${machineName || 'diesem Maschinentyp'} hatten wir schon einmal eine Störung. `
         : `Mit ${machineName || 'diesem Maschinentyp'} hatten wir schon ${experience.incidents} Störungen. `
-      : '';
+      : '');
 
     if (major) {
       return {
@@ -443,7 +580,7 @@
       trained: Number.isInteger(entry?.trained) ? clamp(entry.trained, 0, 3) : 0,
       assignedBay: Number.isInteger(entry?.assignedBay) ? entry.assignedBay : null,
       machineHistory: normalizeMachineHistory(entry?.machineHistory),
-      memories: Array.isArray(entry?.memories) ? entry.memories.slice(0, 5).map(memory => ({ ...memory })) : [],
+      memories: normalizeMemories(entry?.memories),
       ...profile
     };
   }
@@ -467,6 +604,7 @@
   return {
     APPLICANT_COUNT,
     PORTRAIT_COUNT,
+    MAX_MEMORIES,
     genderForName,
     portraitFor,
     ratingFromSkills,
@@ -477,6 +615,11 @@
     normalizeMachineHistory,
     machineExperience,
     recordMachineIncident,
+    normalizeMemories,
+    recordMemory,
+    memoryTitle,
+    latestMachineMemory,
+    memoryReference,
     breakdownAdvice,
     deriveProfile,
     ensureState,
