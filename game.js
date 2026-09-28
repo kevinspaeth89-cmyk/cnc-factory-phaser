@@ -463,7 +463,7 @@
       :programmingQuality.programmingMinutes(order,'operator');
     if(![1,2].some(shift=>machine['operator'+shift]&&assignedEmployee(machine,shift)))return Infinity;
     return scheduledProgrammingETA(workload,minute=>{
-      const shift=shiftAt(minute);
+      const shift=machineShiftAt(machine,minute,order);
       return !!shift&&!!machine['operator'+shift]&&!!assignedEmployee(machine,shift)&&breakdownSystem.canContinueProduction(state,machine.bay);
     });
   }
@@ -733,8 +733,8 @@
     const hasShift1=!!machine.operator1&&!!assignedEmployee(machine,1);
     const hasShift2=(!!machine.operator2&&!!assignedEmployee(machine,2))||(!operatorOnly&&!!machine.loadingRobot);
     const humanShift2=!!machine.operator2&&!!assignedEmployee(machine,2);
-    const overtimeAvailable=!operatorOnly&&workMode==='overtime'&&humanShift2;
-    const saturdayShift=!operatorOnly&&workMode==='saturday'
+    const overtimeAvailable=workMode==='overtime'&&humanShift2;
+    const saturdayShift=workMode==='saturday'
       ?hasShift1?1:humanShift2?2:0
       :0;
     const robotReadyAt=machine.loadingRobot
@@ -814,7 +814,7 @@
     }else{
       const operatorTask=machine.operatorProgramming?.key===key;
       if(operatorTask||!state.programmer.hired){
-        programReadyAt=scheduledWorkCompletionAt(machine,startsAt,programMinutes,true);
+        programReadyAt=scheduledWorkCompletionAt(machine,startsAt,programMinutes,true,order.workMode||'regular');
         startsAt=programReadyAt;
         operatorProgrammingMinutes=programMinutes;
       }else{
@@ -823,7 +823,7 @@
         if(programmerStarted){
           programReadyAt=programmerReadyAt;startsAt=Math.max(startsAt,programReadyAt);
         }else{
-          const operatorReadyAt=scheduledWorkCompletionAt(machine,startsAt,programMinutes,true);
+          const operatorReadyAt=scheduledWorkCompletionAt(machine,startsAt,programMinutes,true,order.workMode||'regular');
           if(operatorReadyAt<programmerReadyAt){programReadyAt=operatorReadyAt;startsAt=operatorReadyAt;operatorProgrammingMinutes=programMinutes;}
           else{programReadyAt=programmerReadyAt;startsAt=Math.max(startsAt,programReadyAt);}
         }
@@ -952,11 +952,10 @@
     if(mode==='saturday'&&!([1,2].some(shift=>machine['operator'+shift]&&assignedEmployee(machine,shift))))return 'Samstagsarbeit benötigt einen eingeteilten Bediener.';
     return '';
   }
-  const machineShiftAt=(machine,minute=state.gameMinutes)=>{
+  const machineShiftAt=(machine,minute=state.gameMinutes,order=job(machine))=>{
     if(!machine)return 0;
     const regular=shiftAt(minute);
     if(regular)return regular;
-    const order=job(machine);
     if(!order?.isRushOrder)return 0;
     const d=dateAt(minute),day=d.getUTCDay(),hour=d.getUTCHours();
     if(order.workMode==='overtime'&&day>=1&&day<=5&&hour>=22&&hour<24&&machine.operator2&&assignedEmployee(machine,2))return 2;
@@ -1185,9 +1184,19 @@
       const empty=document.createElement('p');empty.className='rush-capacity-empty';empty.textContent='Keine passende '+order.kind+'-Maschine vorhanden.';rows.append(empty);
     }
     const plannedOrder=rushWorkMode==='regular'?order:{...order,workMode:rushWorkMode};
+    const modeGainText=(regularFinish,selectedFinish)=>{
+      if(rushWorkMode==='regular'||!Number.isFinite(regularFinish)||!Number.isFinite(selectedFinish))return '';
+      const gain=Math.max(0,regularFinish-selectedFinish);
+      const label=rushWorkMode==='saturday'?'Samstagsarbeit':'Überstunden';
+      return '\n'+label+': '+(gain>0?formatEstimateMinutes(gain)+' früher fertig':'kein Zeitgewinn bei dieser Einplanung');
+    };
     machines.forEach(machine=>{
       const projected=plannedMachineLoad(machine,plannedOrder),interruption=rushInterruptionForecast(machine,plannedOrder);
+      const regularOrder=rushWorkMode==='regular'?null:{...order,workMode:'regular'};
+      const regularProjected=regularOrder?plannedMachineLoad(machine,regularOrder):null;
+      const regularInterruption=regularOrder?rushInterruptionForecast(machine,regularOrder):null;
       const rushCheck=projected.deadlineChecks.find(check=>check.orderId===order.id);
+      const regularRushCheck=regularProjected?.deadlineChecks.find(check=>check.orderId===order.id);
       const activeOrder=job(machine);
       const activeCheck=activeOrder?projected.deadlineChecks.find(check=>check.orderId===activeOrder.id):null;
       const row=document.createElement('div'),top=document.createElement('div'),name=document.createElement('strong'),status=document.createElement('strong'),window=document.createElement('p'),choices=document.createElement('div');
@@ -1232,7 +1241,7 @@
         const existingLine=activeOrder
           ?'Laufender Auftrag: bleibt in seiner Reihenfolge und wird nicht unterbrochen.'
           :'Laufender Auftrag: keiner – der Eilauftrag kann direkt starten.';
-        normalDetail.textContent='Eilauftrag: fertig in '+formatEstimateMinutes(rushCheck.leadMinutes)+' → '+rushImpact+'\n'+existingLine+'\n'+materialLine;
+        normalDetail.textContent='Eilauftrag: fertig in '+formatEstimateMinutes(rushCheck.leadMinutes)+' → '+rushImpact+'\n'+existingLine+modeGainText(regularRushCheck?.finishAt,rushCheck.finishAt)+'\n'+materialLine;
       }else{
         normalDetail.textContent=(reason||(!projected.shifts.length?'Keine besetzte Schicht':'Fertigstellung nicht berechenbar.'))+'\n'+materialLine;
       }
@@ -1260,7 +1269,7 @@
           interruptButton.classList.add(rushBuffer>=0?'rush-option-safe':'rush-option-late');
           interruptDetail.textContent='Eilauftrag: fertig in '+formatEstimateMinutes(rushLead)+' → '+rushImpact+'\n'+
             'Laufender Auftrag '+interruption.interrupted.part+': wird unterbrochen · danach fertig in '+formatEstimateMinutes(afterFinish)+' → '+currentImpact+'\n'+
-            'Neues Rüsten beim Fortsetzen: '+formatMinutes(interruption.resumedSetup)+'\n'+materialLine;
+            'Neues Rüsten beim Fortsetzen: '+formatMinutes(interruption.resumedSetup)+modeGainText(regularInterruption?.rushFinishAt,interruption.rushFinishAt)+'\n'+materialLine;
         }else{
           interruptDetail.textContent=(interruptReason||'Unterbrechungsfolge nicht berechenbar.')+'\n'+materialLine;
         }
@@ -4204,9 +4213,13 @@
       const qualityInspectionWorked=new Set();
       for(const m of state.machines){
         if(m.operatorProgramming){
-          const task=m.operatorProgramming;
-          if(!state.paused&&shift&&m['operator'+shift]&&assignedEmployee(m,shift)&&breakdownSystem.canContinueProduction(state,m.bay)){
-            const programmingEmployee=assignedEmployee(m,shift);
+          const task=m.operatorProgramming,programmingShift=machineShiftAt(m);
+          if(!state.paused&&programmingShift&&m['operator'+programmingShift]&&assignedEmployee(m,programmingShift)&&breakdownSystem.canContinueProduction(state,m.bay)){
+            const programmingEmployee=assignedEmployee(m,programmingShift);
+            if(!shift){
+              const wageMultiplier=job(m)?.workMode==='saturday'?RUSH_SATURDAY_WAGE_MULTIPLIER:RUSH_OVERTIME_WAGE_MULTIPLIER;
+              state.payrollDue+=employeeHourlyWage(programmingEmployee,programmingShift)*wageMultiplier*step/60;
+            }
             recordEmployeeMachineWork(programmingEmployee,m,step,0);
             task.remainingMinutes=Math.max(0,task.remainingMinutes-step);
             if(task.remainingMinutes<=1e-8){
