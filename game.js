@@ -1085,7 +1085,7 @@
     return changed;
   }
   const conditionLabel=value=>value>0&&value<1?'<1 %':Math.round(value)+' %';
-  let visual=null, currentPanel=null, businessSection='factory', messageTimer, zoomTimer, phaserGame=null, hallPreviewBay=null, employeeCardContext=null, employeeRemarkState=new Map(), employeeRemarkHistory=[], shiftLeaderPanelShift=1, shiftLeaderAdviceKey='', operatorPickerShift=null, dismissalPickerShift=null, qualityPickerShift=null, rushWorkMode='regular', rushWorkModeEventId=null;
+  let visual=null, currentPanel=null, businessSection='factory', messageTimer, zoomTimer, phaserGame=null, hallPreviewBay=null, employeeCardContext=null, employeeRemarkState=new Map(), employeeRemarkHistory=[], employeeShiftRemarkKeys=new Set(), shiftLeaderPanelShift=1, shiftLeaderAdviceKey='', operatorPickerShift=null, dismissalPickerShift=null, qualityPickerShift=null, rushWorkMode='regular', rushWorkModeEventId=null;
   function say(message){
     $('message').textContent=message;
     clearTimeout(messageTimer);
@@ -2426,13 +2426,102 @@
     employeeRemarkHistory=employeeRemarkHistory.slice(0,EMPLOYEE_REMARK_HISTORY_LIMIT);
     renderEmployeeRemarkHistory();
   }
+  function queueEmployeeRemark(employee,machine,text){
+    if(!employee||!text)return false;
+    pushEmployeeRemarkHistory(employee,text);
+    if(!machine)return true;
+    const key=machine.bay+':'+employee.id;
+    const entry=employeeRemarkState.get(key)||{text:'',expiresAt:0,nextAllowedAt:0,lastTriggerKey:'',pendingText:''};
+    if(entry.text===text&&entry.expiresAt>Date.now())return true;
+    entry.pendingText=text;
+    employeeRemarkState.set(key,entry);
+    return true;
+  }
+  function reactionTarget(subjectMachine=null,preferredEmployee=null){
+    if(preferredEmployee){
+      const assigned=Number.isInteger(preferredEmployee.assignedBay)?machineAt(preferredEmployee.assignedBay):null;
+      return {employee:preferredEmployee,machine:assigned||subjectMachine};
+    }
+    const currentShift=shiftAt(state.gameMinutes);
+    if(subjectMachine&&currentShift){
+      const direct=assignedEmployee(subjectMachine,currentShift);
+      if(direct)return {employee:direct,machine:subjectMachine};
+    }
+    if(currentShift){
+      for(const machine of state.machines){
+        const employee=assignedEmployee(machine,currentShift);
+        if(employee&&job(machine))return {employee,machine};
+      }
+    }
+    for(const shift of [1,2]){
+      for(const employee of state.staffRoster['shift'+shift]||[]){
+        if(!Number.isInteger(employee.assignedBay))continue;
+        const machine=machineAt(employee.assignedBay);
+        if(machine)return {employee,machine};
+      }
+    }
+    return null;
+  }
+  function queueDecisionReaction(eventType,{subjectMachine=null,employee=null,part='',shift=null}={}){
+    if(typeof recruitmentSystem.eventRemark!=='function')return false;
+    const target=reactionTarget(subjectMachine,employee);
+    if(!target?.employee)return false;
+    const remark=recruitmentSystem.eventRemark(target.employee,eventType,{
+      timeBucket:Math.floor(state.gameMinutes/20),
+      machineType:subjectMachine?.type||target.machine?.type||eventType,
+      machineName:subjectMachine?catalog[subjectMachine.type]?.name:target.machine?catalog[target.machine.type]?.name:'',
+      part,
+      shift:shift||shiftAt(state.gameMinutes)||1
+    });
+    return queueEmployeeRemark(target.employee,target.machine,remark);
+  }
+  function maybeQueueShiftMomentRemark(){
+    if(typeof recruitmentSystem.eventRemark!=='function')return;
+    const d=dateAt(state.gameMinutes),weekday=d.getUTCDay();
+    if(weekday===0||weekday===6)return;
+    const minuteOfDay=d.getUTCHours()*60+d.getUTCMinutes();
+    const moments=[
+      {shift:1,phase:'shift_start',from:360,to:365},
+      {shift:1,phase:'shift_end',from:830,to:835},
+      {shift:2,phase:'shift_start',from:840,to:845},
+      {shift:2,phase:'shift_end',from:1310,to:1315}
+    ];
+    const dateKey=gameDateKey();
+    for(const moment of moments){
+      if(minuteOfDay<moment.from||minuteOfDay>=moment.to)continue;
+      const key=dateKey+':'+moment.shift+':'+moment.phase;
+      if(employeeShiftRemarkKeys.has(key))continue;
+      employeeShiftRemarkKeys.add(key);
+      const candidates=(state.staffRoster['shift'+moment.shift]||[]).map(employee=>({employee,machine:Number.isInteger(employee.assignedBay)?machineAt(employee.assignedBay):null}))
+        .filter(item=>item.machine&&item.machine['operator'+moment.shift]&&job(item.machine));
+      if(!candidates.length)continue;
+      const daySeed=Math.floor(state.gameMinutes/1440)+moment.shift*17+(moment.phase==='shift_end'?11:3);
+      if(Math.abs(daySeed)%3===0)continue;
+      const target=candidates[Math.abs(daySeed)%candidates.length];
+      const remark=recruitmentSystem.eventRemark(target.employee,moment.phase,{
+        shift:moment.shift,
+        timeBucket:Math.floor(state.gameMinutes/20),
+        machineType:target.machine.type,
+        machineName:catalog[target.machine.type]?.name||''
+      });
+      queueEmployeeRemark(target.employee,target.machine,remark);
+    }
+  }
   function hallEmployeeRemark(machine,employee){
     if(!machine||!employee||typeof recruitmentSystem.workRemark!=='function')return '';
     const key=machine.bay+':'+employee.id;
     const now=Date.now();
-    const entry=employeeRemarkState.get(key)||{text:'',expiresAt:0,nextAllowedAt:0,lastTriggerKey:''};
+    const entry=employeeRemarkState.get(key)||{text:'',expiresAt:0,nextAllowedAt:0,lastTriggerKey:'',pendingText:''};
     if(entry.text&&entry.expiresAt>now)return entry.text;
     if(entry.text&&entry.expiresAt<=now)entry.text='';
+    if(entry.pendingText&&!$('hall-view').hidden){
+      entry.text=entry.pendingText;
+      entry.pendingText='';
+      entry.expiresAt=now+EMPLOYEE_REMARK_VISIBLE_MS;
+      entry.nextAllowedAt=now+EMPLOYEE_REMARK_COOLDOWN_MS;
+      employeeRemarkState.set(key,entry);
+      return entry.text;
+    }
 
     const importance=employeeRemarkImportance(machine);
     if(state.speed>=5&&importance==='casual'){
@@ -3690,7 +3779,11 @@
       if(state.pendingRushAssignment?.orderId===accepted.id)state.pendingRushAssignment=null;
       if(!options.automatic)state.selected=null;
       save();renderOrders();renderBusiness();render();
-      if(!options.automatic)say(`${accepted.part} für Platz ${m.bay} vorgemerkt (${m.orderQueue.length}/${MAX_QUEUED_ORDERS}). Material wurde reserviert.`);
+      if(!options.automatic){
+        say(`${accepted.part} für Platz ${m.bay} vorgemerkt (${m.orderQueue.length}/${MAX_QUEUED_ORDERS}). Material wurde reserviert.`);
+        if(accepted.isRushOrder)queueDecisionReaction('rush_order',{subjectMachine:m,part:accepted.part});
+        else if(m.maintenance<=25)queueDecisionReaction('maintenance_deferred',{subjectMachine:m,part:accepted.part});
+      }
       return true;
     }
     if(interrupted)m.suspendedOrder=interrupted;
@@ -3704,11 +3797,15 @@
     if(state.pendingRushAssignment?.orderId===accepted.id)state.pendingRushAssignment=null;
     if(!options.automatic)state.selected=null;
     save();renderOrders();renderBusiness();render();
-    if(!options.automatic){closeDrawer();showMachine(m.bay);if(m.ncProgramPending)tab('machine');say(options.interrupt
-      ?`Eilauftrag ${accepted.part} auf Platz ${m.bay} gestartet. ${interrupted.order.part} wird danach mit neuer Rüstzeit fortgesetzt.`
-      :m.ncProgramPending
-      ?`${accepted.part} auf Platz ${m.bay} angenommen. Die Programmierung wurde automatisch zugewiesen.`
-      :`${accepted.part} auf Platz ${m.bay} angenommen. Rüstzeit ${formatMinutes(setupPlan.totalMinutes)}${setupPlan.delayMinutes?` · Einrichtungsproblem verlängert um ${formatMinutes(setupPlan.delayMinutes)}`:''}.`);}
+    if(!options.automatic){
+      closeDrawer();showMachine(m.bay);if(m.ncProgramPending)tab('machine');say(options.interrupt
+        ?`Eilauftrag ${accepted.part} auf Platz ${m.bay} gestartet. ${interrupted.order.part} wird danach mit neuer Rüstzeit fortgesetzt.`
+        :m.ncProgramPending
+        ?`${accepted.part} auf Platz ${m.bay} angenommen. Die Programmierung wurde automatisch zugewiesen.`
+        :`${accepted.part} auf Platz ${m.bay} angenommen. Rüstzeit ${formatMinutes(setupPlan.totalMinutes)}${setupPlan.delayMinutes?` · Einrichtungsproblem verlängert um ${formatMinutes(setupPlan.delayMinutes)}`:''}.`);
+      if(accepted.isRushOrder)queueDecisionReaction('rush_order',{subjectMachine:m,part:accepted.part});
+      else if(m.maintenance<=25)queueDecisionReaction('maintenance_deferred',{subjectMachine:m,part:accepted.part});
+    }
     return true;
   }
   function maybeQueueRushOrderEvent(){
@@ -3812,6 +3909,7 @@
     }
     breakdownSystem.init(state);
     selectBay(bay);renderBusiness();save();
+    queueDecisionReaction('machine_purchase',{subjectMachine:machineAt(bay)});
     say(`${c.name} auf Platz ${bay} gekauft. Bediener zuweisen.`);
   }
   function sellMachine(){
@@ -3874,6 +3972,7 @@
     hallPreviewBay=null;
     employeeRemarkState=new Map();
     employeeRemarkHistory=[];
+    employeeShiftRemarkKeys=new Set();
     renderEmployeeRemarkHistory();
     ensureEconomyState();
     clearTimeout(zoomTimer);
@@ -3941,6 +4040,8 @@
     if(!m||m.loadingRobot||state.money<LOADING_ROBOT_COST)return;
     if(!book('machine_purchase',-LOADING_ROBOT_COST,`Laderoboter für ${catalog[m.type].name} gekauft`,{bay:m.bay,type:m.type,robot:true}).ok)return;
     const employee=assignedEmployee(m,2);
+    const currentEmployee=shiftAt(state.gameMinutes)?assignedEmployee(m,shiftAt(state.gameMinutes)):null;
+    queueDecisionReaction('robot_purchase',{subjectMachine:m,employee:currentEmployee||employee});
     if(employee)employee.assignedBay=null;
     m.operator2=false;m.loadingRobot=true;
     save();renderBusiness();render();say(`Laderoboter auf Platz ${m.bay} installiert. Spätschicht ist automatisiert.`);
@@ -3952,6 +4053,7 @@
     if(level>=3||state.money<cost)return;
     if(!book('other',-cost,`Schulung ${employee.name}`,{employeeId:id,employeeName:employee.name,shift,skillLevel:level+1}).ok)return;
     employee.trained=level+1;
+    queueDecisionReaction('training',{subjectMachine:Number.isInteger(employee.assignedBay)?machineAt(employee.assignedBay):null,employee,shift});
     save();renderBusiness();render();say(`${employee.name}: Können ${level}/3 → ${skillLevel(employee)}/3 · +5 % Produktionstempo · ${euro(cost)} bezahlt.`);
   }
   function recordEmployeeMachineWork(employee,machine,minutes,partsProduced=0){
@@ -4157,6 +4259,7 @@
         }
       }
       state.gameMinutes+=step;left-=step;
+      maybeQueueShiftMomentRemark();
       for(const m of state.machines){
         if(m.robotRepairRemainingMinutes>0){
           m.robotRepairRemainingMinutes=Math.max(0,m.robotRepairRemainingMinutes-step);
@@ -4337,6 +4440,8 @@
       });
     }
     handleBreakdownEvent(event);
+    if(action==='continueRisky')queueDecisionReaction('continue_risky',{subjectMachine:m,employee:decisionEmployee});
+    if(action==='scheduleRepair')queueDecisionReaction('repair_scheduled',{subjectMachine:m,employee:decisionEmployee});
     const experienceText=decisionEmployee&&incidentXp>0?` · ${decisionEmployee.name} +${incidentXp} min Erfahrung`:'';
     if(event.event==='repair')say(`Platz ${m.bay}: ${event.method==='technician'?'Monteur beauftragt':'Selbstreparatur gestartet'} · ${euro(event.cost)} · ${formatMinutes(event.downtime)}.${experienceText}`);
     if(event.event==='repair_scheduled')say(`Platz ${m.bay}: Reparatur eingeplant · ${euro(event.cost)}.${experienceText}`);
