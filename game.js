@@ -1037,7 +1037,7 @@
     return changed;
   }
   const conditionLabel=value=>value>0&&value<1?'<1 %':Math.round(value)+' %';
-  let visual=null, currentPanel=null, businessSection='factory', messageTimer, zoomTimer, phaserGame=null, hallPreviewBay=null, shiftLeaderPanelShift=1, shiftLeaderAdviceKey='', operatorPickerShift=null, dismissalPickerShift=null, qualityPickerShift=null, rushWorkMode='regular', rushWorkModeEventId=null;
+  let visual=null, currentPanel=null, businessSection='factory', messageTimer, zoomTimer, phaserGame=null, hallPreviewBay=null, employeeCardContext=null, shiftLeaderPanelShift=1, shiftLeaderAdviceKey='', operatorPickerShift=null, dismissalPickerShift=null, qualityPickerShift=null, rushWorkMode='regular', rushWorkModeEventId=null;
   function say(message){
     $('message').textContent=message;
     clearTimeout(messageTimer);
@@ -1757,6 +1757,7 @@
     }
   }
   function tab(name){
+    closeEmployeeCard();
     if(name!=='orders'&&pendingOrderAssignmentId)closeOrderMachineChooser();
     currentPanel=name;
     $('drawer-body').scrollTop=0;
@@ -1848,6 +1849,7 @@
     renderHallPreview();
   }
   function showMachine(bay=state.selectedBay){
+    closeEmployeeCard();
     if(!machineAt(bay))return;
     selectBay(bay);
     if(typeof Phaser==='undefined'){say('Maschinenansicht konnte nicht geladen werden. Bitte neu laden.');return;}
@@ -1863,6 +1865,7 @@
     },window.matchMedia('(prefers-reduced-motion: reduce)').matches?0:300);
   }
   function showHall(){
+    closeEmployeeCard();
     clearTimeout(zoomTimer);
     $('detail-view').hidden=true;
     $('hall-view').hidden=false;
@@ -2267,6 +2270,73 @@
         ? recruitmentSystem.derivePersonality(person.skills)
         : [];
     return traits.map(item=>`${item.icon||''} ${item.label||item.id||''}`.trim()).filter(Boolean).join(' · ');
+  }
+  function employeeTraits(person){
+    return Array.isArray(person?.personality)&&person.personality.length
+      ? person.personality
+      : person?.profileVersion===2&&person?.skills
+        ? recruitmentSystem.derivePersonality(person.skills)
+        : [];
+  }
+  function closeEmployeeCard(){
+    employeeCardContext=null;
+    const card=$('employee-card');
+    if(card)card.hidden=true;
+  }
+  function openEmployeeCard(employee,machine,shift){
+    const card=$('employee-card');
+    if(!card||!employee||!machine)return;
+    employeeCardContext={employeeId:employee.id,bay:machine.bay,shift};
+    $('employee-card-portrait').src=employee.portrait||recruitmentSystem.portraitFor(employee.id,employee.gender);
+    $('employee-card-portrait').alt='Porträt von '+employee.name;
+    $('employee-card-name').textContent=employee.name;
+    $('employee-card-role').textContent=`Schicht ${shift} · ${employee.specialty||'Maschinenbediener'} · ${employeeHourlyWage(employee,shift)} €/h`;
+    let rating=card.querySelector('.employee-card-rating');
+    if(!rating){
+      rating=document.createElement('span');
+      rating.className='employee-card-rating';
+      card.querySelector('.employee-card-head').insertBefore(rating,$('employee-card-close'));
+    }
+    rating.textContent=(employee.rating||recruitmentSystem.ratingFromSkills(employee.skills))+'/10';
+
+    const traitWrap=$('employee-card-traits');
+    traitWrap.replaceChildren(...employeeTraits(employee).map(trait=>{
+      const chip=document.createElement('span');
+      chip.textContent=`${trait.icon||''} ${trait.label||trait.id||''}`.trim();
+      chip.title=trait.about||'';
+      return chip;
+    }));
+
+    const active=job(machine);
+    $('employee-card-current').textContent=active
+      ? `Arbeitet an ${catalog[machine.type].name}, Platz ${machine.bay} · ${active.part} · ${machine.produced}/${active.qty} Teile`
+      : `Eingeteilt an ${catalog[machine.type].name}, Platz ${machine.bay}`;
+
+    const familiarity=recruitmentSystem.familiarityFor(employee,machine.type);
+    $('employee-card-machine').textContent=`${familiarity.label} an ${familiarity.machineName} · ${Math.floor(familiarity.workMinutes/60)} h · ${familiarity.partsProduced} Teile`;
+
+    const quote=typeof recruitmentSystem.workRemark==='function'
+      ? recruitmentSystem.workRemark(employee,{
+        timeBucket:Math.floor(state.gameMinutes/20),
+        machineType:machine.type,
+        machineName:catalog[machine.type]?.name||'die Maschine',
+        tool:machine.tool,
+        maintenance:machine.maintenance,
+        produced:machine.produced,
+        quantity:active?.qty||0
+      })
+      :'';
+    $('employee-card-quote').hidden=!quote;
+    $('employee-card-quote').textContent=quote?`„${quote}“`:'';
+
+    const memories=recruitmentSystem.normalizeMemories(employee.memories);
+    const chronicle=$('employee-card-chronicle');
+    chronicle.replaceChildren(...(memories.length?memories.slice(0,3).map(memory=>{
+      const line=document.createElement('span');
+      line.textContent=recruitmentSystem.memoryTitle(memory);
+      return line;
+    }):[Object.assign(document.createElement('span'),{textContent:'Noch keine besonderen Ereignisse – die Geschichte beginnt gerade.'})]));
+    card.hidden=false;
   }
   function hallEmployeeRemark(machine,employee){
     if(!machine||!employee||typeof recruitmentSystem.workRemark!=='function')return '';
@@ -3369,9 +3439,20 @@
       const workingOperator=machine?hallWorkingOperator(machine):null;
       let operatorBadge=b.querySelector('.bay-operator');
       let workerSprite=b.querySelector('.bay-worker-sprite');
+      let workerName=b.querySelector('.bay-worker-name');
       let remarkBubble=b.querySelector('.bay-worker-remark');
       if(workingOperator){
         const employee=workingOperator.employee;
+        if(!workerName){
+          workerName=document.createElement('div');
+          workerName.className='bay-worker-name bay-worker-hit';
+          b.append(workerName);
+        }
+        workerName.textContent=employee.name;
+        workerName.title=employee.name+' · Mitarbeiterprofil öffnen';
+        workerName.dataset.employeeId=String(employee.id);
+        workerName.dataset.shift=String(workingOperator.shift);
+        workerName.hidden=false;
         const remark=hallEmployeeRemark(machine,employee);
         if(remark){
           if(!remarkBubble){
@@ -3387,7 +3468,7 @@
         if(workingSprite){
           if(!workerSprite){
             workerSprite=document.createElement('img');
-            workerSprite.className='bay-worker-sprite';
+            workerSprite.className='bay-worker-sprite bay-worker-hit';
             workerSprite.alt='';
             workerSprite.loading='lazy';
             b.append(workerSprite);
@@ -3427,6 +3508,11 @@
           operatorBadge.hidden=true;
           delete operatorBadge.dataset.employeeId;
           delete operatorBadge.dataset.shift;
+        }
+        if(workerName){
+          workerName.hidden=true;
+          delete workerName.dataset.employeeId;
+          delete workerName.dataset.shift;
         }
         if(remarkBubble)remarkBubble.hidden=true;
       }
@@ -4140,14 +4226,25 @@
   $('open-warehouse-from-business').addEventListener('click',()=>tab('warehouse'));
   $('recruitment-back').addEventListener('click',()=>tab('business'));
   $('close-drawer').addEventListener('click',closeDrawer);
+  $('employee-card-close').addEventListener('click',closeEmployeeCard);
   $('scrim').addEventListener('click',closeDrawer);
   for(let bay=5;bay<=8;bay++){
     const button=document.createElement('button'),label=document.createElement('span');
     button.id='bay-'+bay;button.className='bay bay-'+bay;button.type='button';
     label.textContent=`+ Platz ${bay}`;button.append(label);$('hall-map').append(button);
   }
-  for(let bay=1;bay<=8;bay++)$('bay-'+bay).addEventListener('click',()=>{
+  for(let bay=1;bay<=8;bay++)$('bay-'+bay).addEventListener('click',event=>{
     if(bay>expansionSystem.getUnlockedBays(state))return;
+    const hit=event.target?.closest?.('.bay-worker-hit');
+    if(hit){
+      const machine=machineAt(bay),working=machine?hallWorkingOperator(machine):null;
+      if(working){
+        hallPreviewBay=null;renderHallPreview();
+        openEmployeeCard(working.employee,machine,working.shift);
+        return;
+      }
+    }
+    closeEmployeeCard();
     tapHallBay(bay);
   });
   $('hall-preview-close').addEventListener('click',()=>{hallPreviewBay=null;renderHallPreview();});
@@ -4172,7 +4269,7 @@
     $('speed-menu').hidden=!opening;
     $('speed-toggle').setAttribute('aria-expanded',String(opening));
   });
-  document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeDrawer();$('speed-menu').hidden=true;}});
+  document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeEmployeeCard();closeDrawer();$('speed-menu').hidden=true;}});
   $('buy-material').addEventListener('click',()=>{
     const type=state.selectedMaterialType,quantity=Number($('material-quantity').value);
     const price=materialSystem.quote(type,quantity,state.gameMinutes);
