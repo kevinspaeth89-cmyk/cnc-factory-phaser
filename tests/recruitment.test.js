@@ -71,12 +71,12 @@ test('profile ratings use all four skills and portraits remain stable per employ
   assert.equal(recruitment.ratingFromSkills({ turning: 1, milling: 1, precision: 1, learning: 1 }), 1);
   assert.equal(recruitment.ratingFromSkills({ turning: 10, milling: 10, precision: 10, learning: 10 }), 10);
   assert.notEqual(recruitment.portraitFor(1), recruitment.portraitFor(2));
-  assert.equal(recruitment.portraitFor(1), recruitment.portraitFor(9));
+  assert.equal(recruitment.portraitFor(1), recruitment.portraitFor(17));
 });
 
 test('generated applicants and legacy identities use matching portrait groups', () => {
-  const femalePortraits = new Set([4, 5, 6, 7]);
-  const malePortraits = new Set([1, 2, 3, 8]);
+  const femalePortraits = new Set([4, 5, 6, 7, 9, 10, 11, 12]);
+  const malePortraits = new Set([1, 2, 3, 8, 13, 14, 15, 16]);
   for (let id = 1; id <= 100; id += 1) {
     const candidate = recruitment.generateApplicant(id);
     const portraitId = Number(candidate.portrait.match(/employee-portrait-(\d+)/)[1]);
@@ -87,6 +87,45 @@ test('generated applicants and legacy identities use matching portrait groups', 
   assert.equal(recruitment.legacyProfile(2).gender, 'male');
   assert.ok(femalePortraits.has(Number(recruitment.legacyProfile(1).portrait.match(/employee-portrait-(\d+)/)[1])));
   assert.ok(malePortraits.has(Number(recruitment.legacyProfile(2).portrait.match(/employee-portrait-(\d+)/)[1])));
+});
+
+test('allocates each worker a unique portrait while preserving valid existing choices', () => {
+  const workers = [
+    { id: 1, name: 'Mira Stahlwind', gender: 'female', portrait: recruitment.portraitFor(1, 'female') },
+    { id: 2, name: 'Elira Kupferhand', gender: 'female', portrait: recruitment.portraitFor(1, 'female') },
+    { id: 3, name: 'Tarek Feilensang', gender: 'male', portrait: recruitment.portraitFor(1, 'male') }
+  ];
+  const result = recruitment.ensureUniquePortraits(workers);
+  assert.equal(result.ok, true);
+  assert.deepEqual(workers.map(worker => recruitment.portraitId(worker.portrait)), [4, 5, 1]);
+  assert.equal(new Set(workers.map(worker => worker.portrait)).size, workers.length);
+  const saved = workers.map(worker => worker.portrait);
+  assert.equal(recruitment.ensureUniquePortraits(workers).ok, true);
+  assert.deepEqual(workers.map(worker => worker.portrait), saved);
+});
+
+test('preserves a saved portrait when it matches the employee gender', () => {
+  const employee = recruitment.normalizeEmployee({
+    profileVersion: 2,
+    name: 'Tarek Stahlwind',
+    gender: 'male',
+    portrait: recruitment.portraitFor(5, 'male'),
+    skills: { turning: 5, milling: 5, precision: 5, learning: 5 }
+  }, 1);
+  assert.equal(recruitment.portraitId(employee.portrait), 13);
+});
+
+test('reports portrait-pool exhaustion without partially changing the saved roster', () => {
+  const workers = Array.from({ length: 9 }, (_, index) => ({
+    id: index + 1,
+    name: `Mira Worker${index + 1}`,
+    gender: 'female',
+    portrait: recruitment.portraitFor(index + 1, 'female')
+  }));
+  const before = JSON.parse(JSON.stringify(workers));
+  const result = recruitment.ensureUniquePortraits(workers);
+  assert.deepEqual(result, { ok: false, code: 'portrait_pool_exhausted', gender: 'female', count: 9, capacity: 8 });
+  assert.deepEqual(workers, before);
 });
 
 test('corrects a saved applicant portrait from the name when an old save mismatches', () => {

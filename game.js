@@ -373,6 +373,10 @@
     expansionSystem.init(state);
     ensureStaffRoster();
     ensureQualityStaff();
+    recruitmentSystem.ensureUniquePortraits([
+      ...(state.staffRoster.shift1||[]),
+      ...(state.staffRoster.shift2||[])
+    ]);
     ensureOrderOfficeState();
     ensureShiftLeaderState();
     ensureCreditState();
@@ -614,6 +618,22 @@
     'Vaska Feilensang':'assets/vaska-working.webp?v=2',
     'Kael Drehkamm':'assets/kael-working.webp?v=2'
   });
+  const hallWorkerPortraitSprites=Object.freeze(Object.fromEntries(
+    Array.from({length:recruitmentSystem.PORTRAIT_COUNT},(_,index)=>{
+      const id=String(index+1).padStart(2,'0');
+      const sprite=id==='02'
+        ? 'assets/kael-working.webp?v=2'
+        : id==='04'
+          ? 'assets/vaska-working.webp?v=2'
+          : `assets/employee-worker-${id}.webp?v=1`;
+      return [`employee-portrait-${id}.webp`,sprite];
+    })
+  ));
+  function hallWorkerSpriteFor(employee){
+    if(!employee)return null;
+    const portraitFile=String(employee.portrait||'').split('?')[0].split('/').pop();
+    return hallWorkerPortraitSprites[portraitFile]||hallWorkerSprites[employee.name]||null;
+  }
   function hallWorkingOperator(machine){
     const shift=shiftAt(state.gameMinutes);
     if(!machine||!shift||!machine['operator'+shift]||!job(machine))return null;
@@ -3195,7 +3215,7 @@
       let workerSprite=b.querySelector('.bay-worker-sprite');
       if(workingOperator){
         const employee=workingOperator.employee;
-        const workingSprite=hallWorkerSprites[employee.name]||null;
+        const workingSprite=hallWorkerSpriteFor(employee);
         if(workingSprite){
           if(!workerSprite){
             workerSprite=document.createElement('img');
@@ -3504,7 +3524,16 @@
     const shiftKey=`shift${shift}`,limit=expansionSystem.getUnlockedBays(state);
     if(!candidate||candidate.profileType==='quality'||state.money<HIRING_FEE||state.staff[shiftKey]>=limit)return;
     const employee=recruitmentSystem.createEmployee(candidate,state.staffRoster.nextId);
-    if(!employee||!book('other',-HIRING_FEE,`Bediener ${candidate.name} für Schicht ${shift} eingestellt`,{
+    if(!employee)return;
+    const currentWorkers=[...(state.staffRoster.shift1||[]),...(state.staffRoster.shift2||[])];
+    const portrait=recruitmentSystem.uniquePortraitFor(
+      employee.gender,
+      currentWorkers.map(person=>person.portrait),
+      candidate.portrait
+    );
+    if(!portrait){say('Für diese Portraitgruppe ist kein unbenutztes Mitarbeiterportrait mehr verfügbar.');return;}
+    employee.portrait=portrait;
+    if(!book('other',-HIRING_FEE,`Bediener ${candidate.name} für Schicht ${shift} eingestellt`,{
       employeeId:employee.id,applicantId,employeeName:candidate.name,shift,setupFee:true,skills:{...candidate.skills}
     }).ok)return;
     const hired=recruitmentSystem.takeApplicant(state,applicantId);
