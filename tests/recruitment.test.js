@@ -558,3 +558,31 @@ test('QS precision comes from measurement and inspection, not machining skills',
   assert.equal(low.skills.turning, 1);
   assert.equal(low.skills.milling, 1);
 });
+
+
+test('failed self repair changes employee recommendation to technician', () => {
+  const careful = {
+    profileVersion: 2,
+    name: 'Mira Test',
+    skills: { turning: 8, milling: 4, precision: 9, learning: 9 },
+    personality: recruitment.derivePersonality({ turning: 8, milling: 4, precision: 9, learning: 9 })
+  };
+
+  const before = recruitment.breakdownAdvice(careful, 'warning', {
+    machineType: 'standard',
+    machineName: 'Nexora NX-350',
+    fault: 'sensor_error'
+  });
+  assert.equal(before.action, 'repairSelf');
+
+  const after = recruitment.breakdownAdvice(careful, 'warning', {
+    machineType: 'standard',
+    machineName: 'Nexora NX-350',
+    fault: 'sensor_error',
+    selfRepairFailed: true
+  });
+  assert.equal(after.action, 'repairTechnician');
+  assert.match(after.text, /Selbstversuch|selbst versucht/);
+  assert.match(after.text, /Monteur/);
+  assert.doesNotMatch(after.text, /selbst nachsehen|selbst prüfen/);
+});
