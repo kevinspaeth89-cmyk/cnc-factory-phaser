@@ -122,6 +122,7 @@
       const pendingRush=stored.pendingRushAssignment;
       state.pendingRushAssignment=pendingRush&&typeof pendingRush.orderId==='string'&&Number.isInteger(pendingRush.bay)&&pendingRush.bay>0
         ?{orderId:pendingRush.orderId,bay:pendingRush.bay,interrupt:!!pendingRush.interrupt}:null;
+      if(state.pendingRushAssignment)state.paused=true;
       expansionSystem.init(state);
       state.machines=stored.machines.filter(validMachine).map(m=>{
         const hasSetupState=Object.prototype.hasOwnProperty.call(m,'setupDurationMinutes');
@@ -1366,6 +1367,7 @@
       state.selected=offer.id;
       state.warehouseOrderSnapshot={...offer};
       state.selectedMaterialType=materialSystem.typeForOrder(offer)||state.selectedMaterialType;
+      state.paused=true;
     }
     save();render();
     if(accepted){
@@ -2069,7 +2071,15 @@
       }
       state.pendingRushAssignment=null;
       const started=startOrder(order.id,pendingRush.bay,{rushEvent:true,interrupt:pendingRush.interrupt});
-      if(!started){state.pendingRushAssignment=pendingRush;save();renderWarehouseOrderContext();}
+      if(!started){
+        state.pendingRushAssignment=pendingRush;
+        state.paused=true;
+        save();render();renderWarehouseOrderContext();
+        return;
+      }
+      state.paused=state.eventQueue.length>0;
+      save();render();
+      if(state.paused)renderEventWindow();
       return;
     }
     if(available+1e-9<required){say('Es fehlen noch '+Math.ceil(required-available)+' kg '+order.material+'.');renderWarehouseOrderContext();return;}
@@ -3043,8 +3053,11 @@
     $('clock').textContent=clock();
     $('status').textContent='● '+statusFor(m);
     $('status').classList.toggle('paused',state.paused);
-    $('pause').textContent=state.paused?'▶ Weiter':'⏸ Pause';
+    const rushPlanningLocked=!!state.pendingRushAssignment;
+    $('pause').textContent=rushPlanningLocked?'⏸ Eilauftrag einplanen':state.paused?'▶ Weiter':'⏸ Pause';
     $('pause').classList.toggle('active',state.paused);
+    $('pause').disabled=rushPlanningLocked;
+    $('pause').title=rushPlanningLocked?'Das Spiel läuft erst weiter, wenn der angenommene Eilauftrag vollständig eingeplant ist.':'';
     document.querySelectorAll('[data-speed]').forEach(b=>b.classList.toggle('active',Number(b.dataset.speed)===state.speed));
     $('speed-value').textContent=state.speed+'×';
     $('machine-heading').textContent=m?catalog[m.type].name:'Keine Maschine';
@@ -3938,7 +3951,14 @@
     syncMaterialMirror();
     save();renderBusiness();render();say('Lager um 200 kg erweitert.');
   });
-  $('pause').addEventListener('click',()=>{state.paused=!state.paused;save();render();say(state.paused?'Spiel pausiert.':'Spiel fortgesetzt.');});
+  $('pause').addEventListener('click',()=>{
+    if(state.pendingRushAssignment){
+      state.paused=true;save();render();
+      say('Der angenommene Eilauftrag muss zuerst mit Material versorgt und an der gewählten Maschine eingeplant werden.');
+      return;
+    }
+    state.paused=!state.paused;save();render();say(state.paused?'Spiel pausiert.':'Spiel fortgesetzt.');
+  });
   document.querySelectorAll('[data-speed]').forEach(b=>b.addEventListener('click',()=>{
     state.speed=Number(b.dataset.speed);save();render();
     $('speed-menu').hidden=true;$('speed-toggle').setAttribute('aria-expanded','false');
