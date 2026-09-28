@@ -3818,6 +3818,9 @@
     }catch(_){}
     state=defaults();
     hallPreviewBay=null;
+    employeeRemarkState=new Map();
+    employeeRemarkHistory=[];
+    renderEmployeeRemarkHistory();
     ensureEconomyState();
     clearTimeout(zoomTimer);
     closeDrawer();
