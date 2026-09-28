@@ -930,7 +930,7 @@
     const eyebrow=document.createElement('span'),title=document.createElement('h2'),detail=document.createElement('p');
     const consequence=document.createElement('div'),managerAdvice=document.createElement('p'),orderTiming=document.createElement('div'),rushCapacity=document.createElement('section'),actions=document.createElement('div'),count=document.createElement('p');
     const rushStyle=document.createElement('style');
-    rushStyle.textContent='.rush-machine-actions{display:grid;grid-template-columns:1fr;gap:5px;margin-top:6px}.rush-machine-choice{width:100%;min-height:38px;padding:6px 8px;text-align:left;font-size:10px;line-height:1.25}.rush-machine-choice small{display:block;margin-top:3px;color:#d1dcdf;font-size:9px;font-weight:600;line-height:1.3}.rush-interrupt-choice{background:#644426;border-color:#d3944d}.rush-capacity-rows{max-height:min(38vh,330px)}.shift-leader-event-advice{margin:7px 0;padding:8px 10px;border-left:3px solid #74d7a4;border-radius:5px;background:#102a31;color:#d7f0e3;font-size:11px;line-height:1.4}.shift-leader-event-advice[hidden]{display:none}';
+    rushStyle.textContent='.rush-machine-actions{display:grid;grid-template-columns:1fr;gap:8px;margin-top:10px}.rush-machine-choice{width:100%;min-height:64px;padding:9px 10px;text-align:left;font-size:11px;line-height:1.3}.rush-machine-choice>span{display:block;font-size:10px;font-weight:800;letter-spacing:.04em;opacity:.78;margin-bottom:2px}.rush-machine-choice small{display:block;margin-top:5px;color:#dbe5e8;font-size:9px;font-weight:650;line-height:1.45;white-space:pre-line}.rush-machine-choice.rush-option-safe{background:#173f33;border-color:#69d49e}.rush-machine-choice.rush-option-late{background:#482c2c;border-color:#f17b7b}.rush-interrupt-choice{background:#4b3523;border-color:#d3944d}.rush-interrupt-choice.rush-option-safe{background:#203b2d;border-color:#69d49e}.rush-interrupt-choice.rush-option-late{background:#4b3024;border-color:#e59a55}.rush-capacity-rows{max-height:min(44vh,390px)}.rush-capacity-row{border-color:#47626a}.rush-capacity-window{white-space:pre-line}.rush-capacity-status{font-size:9px;opacity:.78}.rush-reject-choice{width:100%;min-height:58px}.rush-reject-choice small{display:block;margin-top:4px}.rush-option-summary{font-weight:750}.shift-leader-event-advice{margin:7px 0;padding:8px 10px;border-left:3px solid #74d7a4;border-radius:5px;background:#102a31;color:#d7f0e3;font-size:11px;line-height:1.4}.shift-leader-event-advice[hidden]{display:none}';
     document.head.append(rushStyle);
     overlay.id='event-window';overlay.hidden=true;overlay.setAttribute('role','dialog');overlay.setAttribute('aria-modal','true');overlay.setAttribute('aria-labelledby','event-title');
     card.className='event-card';eyebrow.id='event-eyebrow';eyebrow.className='event-eyebrow';
@@ -962,34 +962,33 @@
     $('event-window').querySelector('.event-card').classList.add('rush-event-card');
     $('event-eyebrow').textContent='STAMMKUNDEN-ANFRAGE · EILAUFTRAG';
     $('event-title').textContent=`${order.customer} braucht kurzfristig ${order.part}`;
-    $('event-detail').textContent=`${order.qty} Teile · ${order.kind} · ${order.material} · ${order.kg} kg. Du hast bereits für diesen Kunden gearbeitet.`;
-    $('event-consequence').textContent=`Eilzuschlag: +${order.rushBonusPct||20} % (${euro(bonus)}). Lieferfrist ${order.deadlineHours} Stunden ab Zusage. Pünktlich fertig: stärkerer Vertrauensgewinn; verspätet: stärkerer Vertrauensverlust.`;
+    $('event-detail').textContent=`${order.qty} Teile · ${order.kind} · ${order.material} · ${order.kg} kg. Entscheide unten direkt, ob der Auftrag hinten eingeplant oder vorgezogen wird.`;
+    $('event-consequence').textContent=`Eilzuschlag: +${order.rushBonusPct||20} % (${euro(bonus)}). Die ${order.deadlineHours}-Stunden-Frist beginnt mit deiner Zusage. Die Prognosen unten berücksichtigen Schichten, Rüst-/Programmierzeit und die aktuelle Maschinenbelegung.`;
     const timing=$('event-order-timing');timing.hidden=false;
     $('event-order-deadline-label').textContent='LIEFERFRIST AB ZUSAGE';
-    $('event-order-processing-label').textContent='BEARBEITUNGSZEIT';
+    $('event-order-processing-label').textContent='REINE BEARBEITUNGSZEIT';
     $('event-order-deadline-cell').classList.remove('deadline-overdue');
     $('event-order-deadline').textContent=`${order.deadlineHours} Std.`;
     $('event-order-processing').textContent=`Ca. ${formatMinutes(processing)}`;
     renderRushCapacityCheck(order,event);
     const actions=$('event-actions');actions.replaceChildren();
-    const addChoice=(label,detail,accepted,risky=false)=>{
-      const button=document.createElement('button'),small=document.createElement('small');
-      button.type='button';button.className='action event-choice'+(risky?' event-risk':'');
-      button.append(document.createTextNode(label));small.textContent=detail;button.append(small);
-      button.addEventListener('click',()=>resolveRushOrderEvent(event,accepted));actions.append(button);
-    };
-    addChoice('Zusage – später einplanen',`+${euro(bonus)} Zuschlag · Kundenzufriedenheit +6`,true);
-    addChoice('Ablehnen','Kein Zeitdruck · Kundenzufriedenheit −10',false,true);
+    const reject=document.createElement('button'),rejectDetail=document.createElement('small');
+    reject.type='button';reject.className='action event-choice event-risk rush-reject-choice';
+    reject.append(document.createTextNode('OPTION 3 · EILAUFTRAG ABLEHNEN'));
+    rejectDetail.textContent='Kein Materialkauf · keine Umplanung · Kundenzufriedenheit −10';
+    reject.append(rejectDetail);
+    reject.addEventListener('click',()=>resolveRushOrderEvent(event,false));
+    actions.append(reject);
     $('event-count').textContent=state.eventQueue.length>1
-      ?`Ereignis 1 von ${state.eventQueue.length} · Das Spiel ist pausiert.`
-      :'Das Spiel ist pausiert, bis du zusagst oder ablehnst.';
+      ?`Ereignis 1 von ${state.eventQueue.length} · Wähle Option 1, 2 oder Ablehnen.`
+      :'Wähle eine konkrete Einplanung oder lehne den Eilauftrag ab.';
   }
   function renderRushCapacityCheck(order,event){
     const panel=$('rush-capacity-check');panel.hidden=false;
     const heading=document.createElement('strong'),note=document.createElement('p'),rows=document.createElement('div');
-    heading.className='rush-capacity-title';heading.textContent='Maschine für den Eilauftrag';
+    heading.className='rush-capacity-title';heading.textContent='Wo soll der Eilauftrag laufen?';
     note.className='rush-capacity-note';
-    note.textContent='Grün: pünktlich. Rot: Frist verpasst.';
+    note.textContent='Option 1 lässt bestehende Arbeit in Ruhe. Option 2 zieht den Eilauftrag vor und zeigt den Preis dafür.';
     rows.className='rush-capacity-rows';
     const machines=state.machines.filter(machine=>compatible(machine,order));
     if(!machines.length){
@@ -998,50 +997,81 @@
     machines.forEach(machine=>{
       const projected=plannedMachineLoad(machine,order),interruption=rushInterruptionForecast(machine,order);
       const rushCheck=projected.deadlineChecks.find(check=>check.orderId===order.id);
-      const bufferMinutes=rushCheck?.bufferMinutes??-Infinity;
       const activeOrder=job(machine);
+      const activeCheck=activeOrder?projected.deadlineChecks.find(check=>check.orderId===activeOrder.id):null;
       const row=document.createElement('div'),top=document.createElement('div'),name=document.createElement('strong'),status=document.createElement('strong'),window=document.createElement('p'),choices=document.createElement('div');
       const reason=rushAssignmentBlockReason(machine,order,false,true);
       const blocked=!!reason||!projected.shifts.length;
-      const tight=bufferMinutes<0;
       row.className='rush-capacity-row';
-      row.classList.toggle('over-capacity',tight||blocked);
       top.className='rush-capacity-row-head';
       name.textContent='Platz '+machine.bay+' · '+catalog[machine.type].name;
       status.className='rush-capacity-status';
-      status.classList.toggle('rush-impact-late',!reason&&!!rushCheck&&tight);
-      status.classList.toggle('rush-impact-on-time',!reason&&!!rushCheck&&!tight);
-      status.textContent=reason||(!projected.shifts.length?'Keine besetzte Schicht':!rushCheck?'Zeitplan nicht berechenbar':tight?formatEstimateMinutes(-bufferMinutes)+' zu spät':'Pünktlich');
+      status.textContent=reason||(!projected.shifts.length?'Keine besetzte Schicht':activeOrder?'Laufender Auftrag aktiv':'Maschine frei');
       top.append(name,status);
       window.className='rush-capacity-window';
-      window.classList.toggle('rush-impact-late',tight);
-      window.textContent=rushCheck
-        ?order.part+': fertig in '+formatEstimateMinutes(rushCheck.leadMinutes)+' · '+(bufferMinutes>=0?'Bis zur Frist bleiben dann '+formatEstimateMinutes(bufferMinutes):'Zu spät um '+formatEstimateMinutes(-bufferMinutes))
-        :'Eilauftrag: Fertigstellungszeit nicht berechenbar.';
+      if(activeOrder&&activeCheck){
+        const activeImpact=activeCheck.bufferMinutes>=0
+          ?'pünktlich · '+formatEstimateMinutes(activeCheck.bufferMinutes)+' Puffer'
+          :'voraussichtlich '+formatEstimateMinutes(-activeCheck.bufferMinutes)+' zu spät';
+        window.textContent='Aktuell: '+activeOrder.part+' · fertig in '+formatEstimateMinutes(activeCheck.leadMinutes)+' · '+activeImpact;
+      }else if(activeOrder){
+        window.textContent='Aktuell: '+activeOrder.part+' läuft auf dieser Maschine.';
+      }else{
+        window.textContent='Aktuell: Maschine frei.';
+      }
       choices.className='rush-machine-actions';
-      const normalButton=document.createElement('button'),normalDetail=document.createElement('small');
-      normalButton.type='button';normalButton.className='action rush-machine-choice';
+
       const materialShortage=Math.max(0,materialSystem.requiredKg(order)-materialSystem.available(state,order));
-      normalButton.append(document.createTextNode(materialShortage>1e-9?'Material kaufen & hier einplanen':activeOrder?'Nach laufendem Auftrag einplanen':'Direkt auf dieser Maschine starten'));
-      normalDetail.textContent=reason||(!projected.shifts.length?'Keine Schicht':materialShortage>1e-9?'Material fehlt: '+Math.ceil(materialShortage)+' kg '+order.material+'.':'');
-      normalDetail.hidden=!normalDetail.textContent;
-      normalButton.append(normalDetail);normalButton.disabled=!!reason||!projected.shifts.length;
+      const materialLine=materialShortage>1e-9
+        ?'Material: '+Math.ceil(materialShortage)+' kg '+order.material+' fehlen – nach der Zusage öffnet sich das Materiallager.'
+        :'Material: vollständig vorhanden.';
+
+      const normalButton=document.createElement('button'),normalTag=document.createElement('span'),normalDetail=document.createElement('small');
+      normalButton.type='button';normalButton.className='action rush-machine-choice';
+      normalTag.textContent=activeOrder
+        ?(machine.orderQueue.length?'OPTION 1 · ANNEHMEN – ANS ENDE DER WARTESCHLANGE':'OPTION 1 · ANNEHMEN – NACH AKTUELLEM AUFTRAG')
+        :'OPTION 1 · ANNEHMEN – DIREKT STARTEN';
+      normalButton.append(normalTag);
+      if(rushCheck){
+        const rushImpact=rushCheck.bufferMinutes>=0
+          ?'PÜNKTLICH · '+formatEstimateMinutes(rushCheck.bufferMinutes)+' Puffer'
+          :'ZU SPÄT · '+formatEstimateMinutes(-rushCheck.bufferMinutes);
+        normalButton.classList.add(rushCheck.bufferMinutes>=0?'rush-option-safe':'rush-option-late');
+        const existingLine=activeOrder
+          ?'Laufender Auftrag: bleibt in seiner Reihenfolge und wird nicht unterbrochen.'
+          :'Laufender Auftrag: keiner – der Eilauftrag kann direkt starten.';
+        normalDetail.textContent='Eilauftrag: fertig in '+formatEstimateMinutes(rushCheck.leadMinutes)+' → '+rushImpact+'\n'+existingLine+'\n'+materialLine;
+      }else{
+        normalDetail.textContent=(reason||(!projected.shifts.length?'Keine besetzte Schicht':'Fertigstellung nicht berechenbar.'))+'\n'+materialLine;
+      }
+      normalButton.append(normalDetail);normalButton.disabled=blocked;
       normalButton.addEventListener('click',()=>resolveRushOrderEvent(event,true,machine.bay,false));
       choices.append(normalButton);
+
       if(activeOrder){
-        const interruptButton=document.createElement('button'),interruptDetail=document.createElement('small');
+        const interruptButton=document.createElement('button'),interruptTag=document.createElement('span'),interruptDetail=document.createElement('small');
         const interruptReason=rushAssignmentBlockReason(machine,order,true,true);
         interruptButton.type='button';interruptButton.className='action rush-machine-choice rush-interrupt-choice';
-        interruptButton.append(document.createTextNode(materialShortage>1e-9?'Material kaufen & Auftrag hier einschieben':'Jetzt starten und laufenden Auftrag unterbrechen'));
+        interruptTag.textContent='OPTION 2 · ANNEHMEN – EILAUFTRAG SOFORT EINSCHIEBEN';
+        interruptButton.append(interruptTag);
         if(interruption){
+          const rushDeadlineAt=state.gameMinutes+Math.max(0,Number(order.deadlineHours)||0)*60;
+          const rushLead=interruption.rushFinishAt-state.gameMinutes;
+          const rushBuffer=rushDeadlineAt-interruption.rushFinishAt;
+          const rushImpact=rushBuffer>=0
+            ?'PÜNKTLICH · '+formatEstimateMinutes(rushBuffer)+' Puffer'
+            :'ZU SPÄT · '+formatEstimateMinutes(-rushBuffer);
           const afterFinish=interruption.finishAt-state.gameMinutes;
-          const deadlineImpact=interruption.bufferMinutes>=0
-            ?'Danach bleiben bis zur Frist: '+formatEstimateMinutes(interruption.bufferMinutes)+'.'
-            :'Danach voraussichtlich '+formatEstimateMinutes(-interruption.bufferMinutes)+' zu spät.';
-          interruptDetail.textContent=(materialShortage>1e-9?'Material fehlt: '+Math.ceil(materialShortage)+' kg '+order.material+'. Nach dem Kauf startet der Eilauftrag zuerst.\n':'')+
-            'Laufender Auftrag nach dem Einschieben: fertig in '+formatEstimateMinutes(afterFinish)+'.\n'+
-            deadlineImpact+' Rüstzeit beim Neustart: '+formatMinutes(interruption.resumedSetup)+'.';
-        }else interruptDetail.textContent=interruptReason||'Frist des laufenden Auftrags nicht berechenbar.';
+          const currentImpact=interruption.bufferMinutes>=0
+            ?'pünktlich · '+formatEstimateMinutes(interruption.bufferMinutes)+' Puffer'
+            :'ZU SPÄT · '+formatEstimateMinutes(-interruption.bufferMinutes);
+          interruptButton.classList.add(rushBuffer>=0?'rush-option-safe':'rush-option-late');
+          interruptDetail.textContent='Eilauftrag: fertig in '+formatEstimateMinutes(rushLead)+' → '+rushImpact+'\n'+
+            'Laufender Auftrag '+interruption.interrupted.part+': wird unterbrochen · danach fertig in '+formatEstimateMinutes(afterFinish)+' → '+currentImpact+'\n'+
+            'Neues Rüsten beim Fortsetzen: '+formatMinutes(interruption.resumedSetup)+'\n'+materialLine;
+        }else{
+          interruptDetail.textContent=(interruptReason||'Unterbrechungsfolge nicht berechenbar.')+'\n'+materialLine;
+        }
         interruptButton.append(interruptDetail);
         interruptButton.disabled=!!interruptReason||!interruption;
         interruptButton.addEventListener('click',()=>resolveRushOrderEvent(event,true,machine.bay,true));
