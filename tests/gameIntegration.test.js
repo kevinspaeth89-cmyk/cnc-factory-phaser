@@ -605,3 +605,27 @@ assert.equal(missedInstallment.credit.accruedInterest,100);
 assert.equal(missedInstallment.credit.missedPayments,1);
 assert.equal(missedInstallment.finance.transactions.filter(entry=>entry.category==='loan_repayment').length,0);
 console.log('Credit: visible offer, drawdown, early repayment, monthly rate and missed-payment handling OK');
+
+
+const pendingRushPauseStorage={cnc_factory_save_v3:JSON.stringify({
+  money:14000,material:0,capacity:300,staff:{shift1:1,shift2:0},
+  machines:[{bay:1,type:'standard',level:1,maintenance:90,tool:90,operator1:true,operator2:false,
+    activeId:null,activeOrder:null,activeOrderSource:null,progress:0,produced:0,deadlineAt:null,orderQueue:[]}],
+  selectedBay:1,gameMinutes:120,speed:5,paused:false,
+  pendingRushAssignment:{orderId:'RUSH-LOCK',bay:1,interrupt:false},
+  warehouseOrderSnapshot:{
+    id:'RUSH-LOCK',kind:'Drehen',customer:'Testkunde',customerProfile:'standard',part:'Eilteil',partKey:'shaft',
+    material:'C45 Stahl',kg:40,qty:10,reward:5000,duration:10,difficulty:2,deadlineHours:12,
+    createdAt:120,expiresAt:2000,offerLifetimeMinutes:1880,isRushOrder:true,rushBonus:800,rushBonusPct:20
+  }
+})};
+const pendingRushPause=boot(pendingRushPauseStorage);
+assert.equal(pendingRushPause.state().paused,true);
+assert.equal(pendingRushPause.get('pause').disabled,true);
+assert.match(pendingRushPause.get('pause').textContent,/Eilauftrag einplanen/);
+const rushPausedMinute=pendingRushPause.state().gameMinutes;
+pendingRushPause.frame(1000);
+assert.equal(pendingRushPause.state().gameMinutes,rushPausedMinute);
+pendingRushPause.get('pause').click();
+assert.equal(pendingRushPause.state().paused,true);
+console.log('Rush assignment lock: reload remains paused and manual resume is blocked');
