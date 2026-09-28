@@ -186,6 +186,8 @@
         selfRepairs: Math.max(0, Math.floor(Number(entry.selfRepairs) || 0)),
         technicianRepairs: Math.max(0, Math.floor(Number(entry.technicianRepairs) || 0)),
         riskyContinues: Math.max(0, Math.floor(Number(entry.riskyContinues) || 0)),
+        workMinutes: Math.max(0, Number(entry.workMinutes) || 0),
+        partsProduced: Math.max(0, Math.floor(Number(entry.partsProduced) || 0)),
         firstAt: Number.isFinite(entry.firstAt) ? entry.firstAt : null,
         lastAt: Number.isFinite(entry.lastAt) ? entry.lastAt : null,
         lastFault: typeof entry.lastFault === 'string' ? entry.lastFault : null,
@@ -202,6 +204,77 @@
     return history[machineType] || null;
   }
 
+  const FAMILIARITY_LEVELS = Object.freeze([
+    Object.freeze({ level: 0, minMinutes: 0, label: 'Neu', productionMultiplier: 1, qualityRiskModifier: 0 }),
+    Object.freeze({ level: 1, minMinutes: 480, label: 'Eingearbeitet', productionMultiplier: 1.01, qualityRiskModifier: -0.25 }),
+    Object.freeze({ level: 2, minMinutes: 2400, label: 'Vertraut', productionMultiplier: 1.02, qualityRiskModifier: -0.5 }),
+    Object.freeze({ level: 3, minMinutes: 7200, label: 'Erfahren', productionMultiplier: 1.03, qualityRiskModifier: -1 }),
+    Object.freeze({ level: 4, minMinutes: 18000, label: 'Spezialist', productionMultiplier: 1.04, qualityRiskModifier: -1.5 })
+  ]);
+
+  function familiarityFor(employee, machineType) {
+    const history = machineExperience(employee, machineType);
+    const workMinutes = Math.max(0, Number(history?.workMinutes) || 0);
+    let tier = FAMILIARITY_LEVELS[0];
+    for (const candidate of FAMILIARITY_LEVELS) {
+      if (workMinutes + 1e-9 >= candidate.minMinutes) tier = candidate;
+      else break;
+    }
+    const next = FAMILIARITY_LEVELS.find(candidate => candidate.level === tier.level + 1) || null;
+    return {
+      ...tier,
+      workMinutes,
+      partsProduced: Math.max(0, Math.floor(Number(history?.partsProduced) || 0)),
+      machineName: history?.machineName || machineType || 'Maschine',
+      nextLevelMinutes: next?.minMinutes ?? null,
+      minutesToNext: next ? Math.max(0, next.minMinutes - workMinutes) : 0
+    };
+  }
+
+  function recordMachineWork(employee, context = {}) {
+    if (!employee || employee.profileVersion !== 2 || typeof context.machineType !== 'string' || !context.machineType) return null;
+    employee.machineHistory = normalizeMachineHistory(employee.machineHistory);
+    const type = context.machineType;
+    const previousLevel = familiarityFor(employee, type).level;
+    const previous = employee.machineHistory[type] || {
+      machineType: type,
+      machineName: typeof context.machineName === 'string' && context.machineName.trim() ? context.machineName.trim().slice(0, 80) : type,
+      incidents: 0,
+      selfRepairs: 0,
+      technicianRepairs: 0,
+      riskyContinues: 0,
+      workMinutes: 0,
+      partsProduced: 0,
+      firstAt: Number.isFinite(context.gameMinutes) ? context.gameMinutes : null,
+      lastAt: null,
+      lastFault: null,
+      lastAction: null,
+      lastBay: null
+    };
+    previous.machineName = typeof context.machineName === 'string' && context.machineName.trim()
+      ? context.machineName.trim().slice(0, 80)
+      : previous.machineName;
+    previous.workMinutes = Math.max(0, previous.workMinutes + Math.max(0, Number(context.minutes) || 0));
+    previous.partsProduced = Math.max(0, previous.partsProduced + Math.max(0, Math.floor(Number(context.partsProduced) || 0)));
+    previous.lastAt = Number.isFinite(context.gameMinutes) ? context.gameMinutes : previous.lastAt;
+    previous.lastBay = Number.isInteger(context.bay) ? context.bay : previous.lastBay;
+    employee.machineHistory[type] = previous;
+    const familiarity = familiarityFor(employee, type);
+    return {
+      ...familiarity,
+      previousLevel,
+      leveledUp: familiarity.level > previousLevel
+    };
+  }
+
+  function familiarityProductionMultiplier(employee, machineType) {
+    return familiarityFor(employee, machineType).productionMultiplier;
+  }
+
+  function familiarityQualityRiskModifier(employee, machineType) {
+    return familiarityFor(employee, machineType).qualityRiskModifier;
+  }
+
   function recordMachineIncident(employee, context = {}) {
     if (!employee || employee.profileVersion !== 2 || typeof context.machineType !== 'string' || !context.machineType) return null;
     employee.machineHistory = normalizeMachineHistory(employee.machineHistory);
@@ -213,6 +286,8 @@
       selfRepairs: 0,
       technicianRepairs: 0,
       riskyContinues: 0,
+      workMinutes: 0,
+      partsProduced: 0,
       firstAt: Number.isFinite(context.gameMinutes) ? context.gameMinutes : null,
       lastAt: null,
       lastFault: null,
@@ -614,6 +689,11 @@
     incidentExperience,
     normalizeMachineHistory,
     machineExperience,
+    FAMILIARITY_LEVELS,
+    familiarityFor,
+    recordMachineWork,
+    familiarityProductionMultiplier,
+    familiarityQualityRiskModifier,
     recordMachineIncident,
     normalizeMemories,
     recordMemory,
