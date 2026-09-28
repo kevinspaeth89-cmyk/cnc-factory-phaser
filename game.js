@@ -1204,7 +1204,8 @@
     const advice=employee?recruitmentSystem.breakdownAdvice(employee,event.event,{
       machineType: machine.type,
       machineName: catalog[machine.type]?.name,
-      fault: event.fault
+      fault: event.fault,
+      selfRepairFailed: event.selfRepairFailed===true
     }):null;
     return advice?{employee,...advice}:null;
   }
