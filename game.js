@@ -611,39 +611,9 @@
   const skillLevel=employee=>employee?Math.min(3,Math.max(employee.trained,employee.xp>=1500?3:employee.xp>=600?2:employee.xp>=180?1:0)):0;
   const assignedEmployee=(m,shift)=>state.staffRoster['shift'+shift].find(employee=>employee.assignedBay===m.bay);
   const hallWorkerSprites=Object.freeze({
-    'Vaska Feilensang':'assets/vaska-working.webp?v=1',
-    'Kael Drehkamm':'assets/kael-working.webp?v=1'
+    'Vaska Feilensang':'assets/vaska-working.webp?v=2',
+    'Kael Drehkamm':'assets/kael-working.webp?v=2'
   });
-  const hallWorkerSpriteCleanCache=new Map();
-  function cleanHallWorkerSprite(src){
-    if(hallWorkerSpriteCleanCache.has(src))return hallWorkerSpriteCleanCache.get(src);
-    const promise=new Promise(resolve=>{
-      const img=new Image();
-      img.decoding='async';
-      img.onload=()=>{
-        try{
-          const canvas=document.createElement('canvas');
-          canvas.width=img.naturalWidth;canvas.height=img.naturalHeight;
-          const ctx=canvas.getContext('2d',{willReadFrequently:true});
-          if(!ctx){resolve(src);return;}
-          ctx.drawImage(img,0,0);
-          const frame=ctx.getImageData(0,0,canvas.width,canvas.height);
-          const px=frame.data;
-          for(let i=3;i<px.length;i+=4){
-            const a=px[i];
-            if(a<=150)px[i]=0;
-            else if(a<235)px[i]=Math.round((a-150)/85*255);
-          }
-          ctx.putImageData(frame,0,0);
-          resolve(canvas.toDataURL('image/png'));
-        }catch(_){resolve(src);}
-      };
-      img.onerror=()=>resolve(src);
-      img.src=src;
-    });
-    hallWorkerSpriteCleanCache.set(src,promise);
-    return promise;
-  }
   function hallWorkingOperator(machine){
     const shift=shiftAt(state.gameMinutes);
     if(!machine||!shift||!machine['operator'+shift]||!job(machine))return null;
@@ -3234,15 +3204,8 @@
             workerSprite.loading='lazy';
             b.append(workerSprite);
           }
-          if(workerSprite.dataset.cleanSource!==workingSprite){
-            workerSprite.dataset.cleanSource=workingSprite;
-            workerSprite.style.visibility='hidden';
-            cleanHallWorkerSprite(workingSprite).then(cleanedSrc=>{
-              if(workerSprite.dataset.cleanSource!==workingSprite)return;
-              workerSprite.src=cleanedSrc;
-              workerSprite.style.visibility='';
-            });
-          }
+          if(workerSprite.getAttribute('src')!==workingSprite)workerSprite.src=workingSprite;
+          workerSprite.style.visibility='';
           workerSprite.dataset.employeeId=String(employee.id);
           workerSprite.dataset.shift=String(workingOperator.shift);
           workerSprite.title=`${employee.name} arbeitet an ${catalog[machine.type].name}`;
