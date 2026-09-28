@@ -1084,7 +1084,10 @@
     if(!machine||!event)return null;
     const shift=shiftAt(state.gameMinutes);
     const employee=shift?assignedEmployee(machine,shift):null;
-    const advice=employee?recruitmentSystem.breakdownAdvice(employee,event.event):null;
+    const advice=employee?recruitmentSystem.breakdownAdvice(employee,event.event,{
+      machineType: machine.type,
+      machineName: catalog[machine.type]?.name
+    }):null;
     return advice?{employee,...advice}:null;
   }
 
@@ -1937,7 +1940,9 @@
       name.className='staff-profile-name';
       name.textContent='S'+shift+' · '+employee.name+' · '+profile+' · '+(employee.assignedBay?'Platz '+employee.assignedBay:'frei');
       const personality=personalitySummary(employee);
-      about.className='staff-profile-about';about.textContent=`${personality?personality+' · ':''}${employee.about||'Mitarbeiterprofil'} · ${Math.floor(employee.xp)} min Erfahrung · Können ${level}/3`;
+      const familiarTypes=Object.values(employee.machineHistory||{}).filter(item=>item&&item.incidents>0).sort((a,b)=>b.incidents-a.incidents);
+      const machineExperience=familiarTypes.length?` · Maschinenerfahrung: ${familiarTypes.slice(0,2).map(item=>item.machineName).join(', ')}`:'';
+      about.className='staff-profile-about';about.textContent=`${personality?personality+' · ':''}${employee.about||'Mitarbeiterprofil'} · ${Math.floor(employee.xp)} min Erfahrung · Können ${level}/3${machineExperience}`;
       rating.className='staff-rating';rating.textContent=(employee.rating||recruitmentSystem.ratingFromSkills(employee.skills))+'/10';
       rating.setAttribute('aria-label','Profilbewertung '+rating.textContent);
       details.append(name,about);
@@ -1956,7 +1961,9 @@
       const level=skillLevel(employee),cost=TRAINING_BASE_COST*(level+1),about=row.children[1]?.children[1],button=row.children[3];
       if(about){
         const personality=personalitySummary(employee);
-        about.textContent=`${personality?personality+' · ':''}${employee.about||'Mitarbeiterprofil'} · ${Math.floor(employee.xp)} min Erfahrung · Können ${level}/3`;
+        const familiarTypes=Object.values(employee.machineHistory||{}).filter(item=>item&&item.incidents>0).sort((a,b)=>b.incidents-a.incidents);
+        const machineExperience=familiarTypes.length?` · Maschinenerfahrung: ${familiarTypes.slice(0,2).map(item=>item.machineName).join(', ')}`:'';
+        about.textContent=`${personality?personality+' · ':''}${employee.about||'Mitarbeiterprofil'} · ${Math.floor(employee.xp)} min Erfahrung · Können ${level}/3${machineExperience}`;
       }
       if(button){
         button.textContent=level===3?'Können maximal':'Auf Stufe '+(level+1)+' schulen · '+euro(cost);
@@ -3142,6 +3149,15 @@
     const incidentXp=decisionEmployee?recruitmentSystem.incidentExperience(decisionEmployee,action):0;
     if(decisionEmployee&&incidentXp>0){
       decisionEmployee.xp=Math.round((decisionEmployee.xp+incidentXp)*1000)/1000;
+      recruitmentSystem.recordMachineIncident(decisionEmployee,{
+        machineType: m.type,
+        machineName: catalog[m.type]?.name,
+        eventType: before?.status==='major_failure'?'major_failure':'warning',
+        action,
+        fault: before?.fault||event.fault,
+        gameMinutes: state.gameMinutes,
+        bay: m.bay
+      });
     }
     handleBreakdownEvent(event);
     const experienceText=decisionEmployee&&incidentXp>0?` · ${decisionEmployee.name} +${incidentXp} min Erfahrung`:'';
