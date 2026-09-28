@@ -19,9 +19,12 @@
   const FIRST_NAME_GENDER = Object.freeze(Object.fromEntries(
     Object.entries(FIRST_NAMES).flatMap(([gender, names]) => names.map(name => [name.toLocaleLowerCase('de-DE'), gender]))
   ));
-  const PORTRAITS_BY_GENDER = Object.freeze({ female: [4, 5, 6, 7], male: [1, 2, 3, 8] });
+  const PORTRAITS_BY_GENDER = Object.freeze({
+    female: [4, 5, 6, 7, 9, 10, 11, 12],
+    male: [1, 2, 3, 8, 13, 14, 15, 16]
+  });
   const FAMILY_NAMES = ['Stahlwind', 'Spindelruh', 'Kupferhand', 'Funkenfels', 'Drehkamm', 'Eisenherz', 'Maßstern', 'Werkfink', 'Schneidorn', 'Spanlauf', 'Feilensang', 'Fräsborn', 'Bohrhain', 'Zirkelkind', 'Taktvoll', 'Kühlwasser', 'Zahnrad', 'Stahlfeder', 'Kantenschliff', 'Werkglanz'];
-  const PORTRAIT_COUNT = 8;
+  const PORTRAIT_COUNT = 16;
   const QUALITY = {
     turning: { label: 'Drehen', trait: 'Späneflüsterer', about: 'erkennt am Schnittgeräusch, wenn die Drehbearbeitung sauber läuft' },
     milling: { label: 'Fräsen', trait: 'Werkstatt-Tüftler', about: 'findet sichere Wege für anspruchsvolle Fräsaufgaben' },
@@ -88,7 +91,62 @@
     const safeId = Number.isInteger(id) && id > 0 ? id : 1;
     const pool = PORTRAITS_BY_GENDER[gender];
     const index = pool ? pool[(safeId - 1) % pool.length] : ((safeId - 1) % PORTRAIT_COUNT) + 1;
-    return 'assets/employee-portrait-' + String(index).padStart(2, '0') + '.webp?v=1';
+    return portraitPath(index);
+  }
+
+  function portraitPath(id) {
+    return 'assets/employee-portrait-' + String(id).padStart(2, '0') + '.webp?v=1';
+  }
+
+  function portraitId(value) {
+    if (Number.isInteger(value) && value >= 1 && value <= PORTRAIT_COUNT) return value;
+    const match = typeof value === 'string' ? value.match(/employee-portrait-(\d{2})\.webp(?:\?.*)?$/) : null;
+    const id = match ? Number(match[1]) : 0;
+    return Number.isInteger(id) && id >= 1 && id <= PORTRAIT_COUNT ? id : null;
+  }
+
+  function portraitIdsForGender(gender) {
+    return PORTRAITS_BY_GENDER[gender] || Array.from({ length: PORTRAIT_COUNT }, (_, index) => index + 1);
+  }
+
+  function uniquePortraitFor(gender, usedPortraits = [], preferredPortrait = null) {
+    const pool = portraitIdsForGender(gender);
+    const allPortraits = Array.from({ length: PORTRAIT_COUNT }, (_, index) => index + 1);
+    const used = new Set((Array.isArray(usedPortraits) ? usedPortraits : [])
+      .map(portraitId)
+      .filter(id => id !== null));
+    const preferredId = portraitId(preferredPortrait);
+    const id = preferredId && !used.has(preferredId)
+      ? preferredId
+      : pool.find(candidateId => !used.has(candidateId))
+        || allPortraits.find(candidateId => !used.has(candidateId));
+    return id ? portraitPath(id) : null;
+  }
+
+  function ensureUniquePortraits(employees) {
+    if (!Array.isArray(employees)) return { ok: false, code: 'invalid_employees' };
+    const entries = employees.filter(employee => employee && typeof employee === 'object');
+    if (entries.length !== employees.length) return { ok: false, code: 'invalid_employees' };
+
+    if (entries.length > PORTRAIT_COUNT) {
+      return { ok: false, code: 'portrait_pool_exhausted', count: entries.length, capacity: PORTRAIT_COUNT };
+    }
+
+    const used = new Set();
+    const allPortraits = Array.from({ length: PORTRAIT_COUNT }, (_, index) => index + 1);
+    const assignments = entries.map(employee => {
+      const gender = genderForName(employee.name) || employee.gender || null;
+      const pool = portraitIdsForGender(gender);
+      const savedId = portraitId(employee.portrait);
+      const id = savedId && !used.has(savedId)
+        ? savedId
+        : pool.find(candidateId => !used.has(candidateId))
+          || allPortraits.find(candidateId => !used.has(candidateId));
+      used.add(id);
+      return { employee, id };
+    });
+    assignments.forEach(({ employee, id }) => { employee.portrait = portraitPath(id); });
+    return { ok: true, count: assignments.length };
   }
 
   function derivePersonality(skills) {
@@ -868,6 +926,10 @@
     const qualityProfile = entry?.profileType === 'quality' && entry?.qualitySkills
       ? deriveQualityProfile(entry.qualitySkills)
       : null;
+    const savedPortraitId = portraitId(entry?.portrait);
+    const savedPortrait = savedPortraitId
+      ? portraitPath(savedPortraitId)
+      : profile.portrait;
     return {
       id,
       xp: Number.isFinite(entry?.xp) ? Math.max(0, entry.xp) : 0,
@@ -884,6 +946,7 @@
             ? 24
             : wageExpectation(skills, id),
       ...profile,
+      portrait: savedPortrait,
       ...(qualityProfile || {})
     };
   }
@@ -911,6 +974,10 @@
     MAX_MEMORIES,
     genderForName,
     portraitFor,
+    portraitId,
+    portraitIdsForGender,
+    uniquePortraitFor,
+    ensureUniquePortraits,
     ratingFromSkills,
     deriveQualityProfile,
     qualityWageExpectation,
