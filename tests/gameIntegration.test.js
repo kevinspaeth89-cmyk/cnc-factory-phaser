@@ -665,3 +665,31 @@ const idleHallOperator=boot({cnc_factory_save_v3:JSON.stringify({
 const idleWorker=idleHallOperator.get('bay-1').querySelector('.bay-operator');
 assert.equal(idleWorker?.hidden??true,true);
 console.log('Hall employees: active shift uses the exact employee profile portrait and idle machines hide it');
+
+
+const namedWorkerSpriteBase={
+  money:14000,material:120,capacity:300,staff:{shift1:1,shift2:1},
+  staffRoster:{
+    nextId:3,
+    shift1:[{id:1,profileVersion:2,name:'Vaska Feilensang',gender:'female',skills:{turning:8,milling:4,precision:9,learning:7},xp:0,trained:0,assignedBay:1}],
+    shift2:[{id:2,profileVersion:2,name:'Kael Drehkamm',gender:'male',skills:{turning:9,milling:3,precision:7,learning:5},xp:0,trained:0,assignedBay:1}]
+  },
+  machines:[{bay:1,type:'rapid',level:1,maintenance:90,tool:90,operator1:true,operator2:true,activeId:'A12',progress:25,produced:12,deadlineAt:900}],
+  selectedBay:1,speed:1,paused:false
+};
+
+let namedWorker=boot({cnc_factory_save_v3:JSON.stringify({...namedWorkerSpriteBase,gameMinutes:0})});
+let namedSprite=namedWorker.get('bay-1').querySelector('.bay-worker-sprite');
+assert.ok(namedSprite);
+assert.equal(namedSprite.hidden,false);
+assert.equal(namedSprite.dataset.employeeId,'1');
+assert.match(namedSprite.src,/assets\/vaska-working\.webp\?v=1$/);
+assert.equal(namedWorker.get('bay-1').querySelector('.bay-operator')?.hidden??true,true);
+
+namedWorker=boot({cnc_factory_save_v3:JSON.stringify({...namedWorkerSpriteBase,gameMinutes:480})});
+namedSprite=namedWorker.get('bay-1').querySelector('.bay-worker-sprite');
+assert.ok(namedSprite);
+assert.equal(namedSprite.hidden,false);
+assert.equal(namedSprite.dataset.employeeId,'2');
+assert.match(namedSprite.src,/assets\/kael-working\.webp\?v=1$/);
+console.log('Named hall sprites: Vaska and Kael switch with the active shift');
