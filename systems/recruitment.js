@@ -27,6 +27,50 @@
     precision: { label: 'Präzision', trait: 'Maßhüter', about: 'prüft Maße sorgfältig und hält enge Toleranzen' },
     learning: { label: 'Lerntempo', trait: 'Tempo im Blut', about: 'eignet sich neue Abläufe schnell an' }
   };
+  const PERSONALITY = Object.freeze({
+    gruendlich: Object.freeze({
+      id: 'gruendlich',
+      label: 'Gründlich',
+      icon: '🔍',
+      about: 'prüft lieber einmal mehr und entdeckt Qualitätsabweichungen früh'
+    }),
+    pragmatisch: Object.freeze({
+      id: 'pragmatisch',
+      label: 'Pragmatisch',
+      icon: '⚙️',
+      about: 'entscheidet zügig und verlässt sich stärker auf Erfahrung als auf Zusatzkontrollen'
+    }),
+    bedacht: Object.freeze({
+      id: 'bedacht',
+      label: 'Bedacht',
+      icon: '🧭',
+      about: 'wägt Tempo und Sorgfalt meist ausgewogen gegeneinander ab'
+    }),
+    neugierig: Object.freeze({
+      id: 'neugierig',
+      label: 'Neugierig',
+      icon: '💡',
+      about: 'probiert neue Abläufe gern aus und nimmt neues Wissen schnell auf'
+    }),
+    routineorientiert: Object.freeze({
+      id: 'routineorientiert',
+      label: 'Routineorientiert',
+      icon: '🔁',
+      about: 'arbeitet besonders sicher mit bekannten Abläufen und bewährten Verfahren'
+    }),
+    anpassungsfaehig: Object.freeze({
+      id: 'anpassungsfaehig',
+      label: 'Anpassungsfähig',
+      icon: '🛠️',
+      about: 'kommt mit neuen Aufgaben zurecht, ohne ständig den vertrauten Ablauf zu brauchen'
+    }),
+    flexibel: Object.freeze({
+      id: 'flexibel',
+      label: 'Flexibel',
+      icon: '↔️',
+      about: 'fühlt sich sowohl beim Drehen als auch beim Fräsen wohl'
+    })
+  });
   const LEGACY_NAMES = ['Mira Altspan', 'Tarek Stahlwind', 'Elira Kupferhand', 'Joren Maßstern', 'Vaska Spindelruh', 'Neris Werkfink', 'Kael Eisenherz', 'Zora Fräsborn'];
   const SKILL_SCALE = 2;
   const clampSkill = value => Number.isInteger(value) ? Math.min(10, Math.max(1, value)) : 1;
@@ -43,6 +87,36 @@
     const pool = PORTRAITS_BY_GENDER[gender];
     const index = pool ? pool[(safeId - 1) % pool.length] : ((safeId - 1) % PORTRAIT_COUNT) + 1;
     return 'assets/employee-portrait-' + String(index).padStart(2, '0') + '.webp?v=1';
+  }
+
+  function derivePersonality(skills) {
+    const normalized = {
+      turning: clampSkill(skills?.turning),
+      milling: clampSkill(skills?.milling),
+      precision: clampSkill(skills?.precision),
+      learning: clampSkill(skills?.learning)
+    };
+
+    // Achse 1: Arbeitsstil. Präzision bestimmt, wie kontrolliert jemand vorgeht.
+    const workStyle = normalized.precision >= 8
+      ? PERSONALITY.gruendlich
+      : normalized.precision <= 3
+        ? PERSONALITY.pragmatisch
+        : PERSONALITY.bedacht;
+
+    // Achse 2: Umgang mit neuen Aufgaben. Ein echter Allrounder bekommt bewusst
+    // "Flexibel", ansonsten prägt vor allem das Lerntempo diesen Teil der Persönlichkeit.
+    const balancedMachining = Math.abs(normalized.turning - normalized.milling) <= 1 &&
+      Math.min(normalized.turning, normalized.milling) >= 5;
+    const adaptability = balancedMachining
+      ? PERSONALITY.flexibel
+      : normalized.learning >= 8
+        ? PERSONALITY.neugierig
+        : normalized.learning <= 3
+          ? PERSONALITY.routineorientiert
+          : PERSONALITY.anpassungsfaehig;
+
+    return [workStyle, adaptability].map(trait => ({ ...trait }));
   }
 
   function deriveProfile(skills) {
@@ -63,6 +137,7 @@
       specialty,
       trait: quality.trait,
       about: 'Stärkster Wert: ' + quality.label + ' (' + normalized[strongest] + '/10) – ' + quality.about + '.',
+      personality: derivePersonality(normalized),
       rating,
       skillScale: SKILL_SCALE
     };
@@ -247,6 +322,7 @@
     genderForName,
     portraitFor,
     ratingFromSkills,
+    derivePersonality,
     deriveProfile,
     ensureState,
     generateApplicant,
