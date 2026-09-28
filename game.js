@@ -1852,7 +1852,8 @@
     const panel=$('hall-overview'),selected=$('selected-readout'),cards=$('hall-machine-cards');
     const hallVisible=!$('hall-view').hidden;
     panel.hidden=!hallVisible;selected.hidden=hallVisible;
-    if(!hallVisible)return;
+    const updateMessageOffset=()=>document.querySelector('main').style.setProperty('--readout-height',$('stage-readout').offsetHeight+'px');
+    if(!hallVisible){updateMessageOffset();return;}
     $('hall-clock').textContent=clock();
     const bayKey=state.machines.map(machine=>machine.bay).join(',');
     if(cards.dataset.bays!==bayKey){
@@ -1885,6 +1886,7 @@
       button.title='Platz '+machine.bay+' · '+catalog[machine.type].name+' · '+(order?order.part+' · '+Math.floor(progress)+' %':'Kein laufender Auftrag')+' · '+statusFor(machine);
       button.setAttribute('aria-label',button.title);
     }
+    updateMessageOffset();
   }
   function renderHallPreview(){
     const machine=machineAt(hallPreviewBay),panel=$('hall-preview');
