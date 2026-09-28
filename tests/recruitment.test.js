@@ -494,3 +494,67 @@ test('employees keep the negotiated wage when hired and reloaded', () => {
   assert.equal(recruitment.hourlyWage(restored, 1), employee.baseHourlyWage);
   assert.equal(recruitment.hourlyWage(restored, 2), employee.baseHourlyWage + 2);
 });
+
+
+test('QS applicants have a dedicated non-machining profile', () => {
+  const first = recruitment.generateQualityApplicant(101);
+  const second = recruitment.generateQualityApplicant(101);
+  assert.deepEqual(first, second);
+  assert.equal(first.profileType, 'quality');
+  assert.equal(first.specialty, 'Qualitätssicherung');
+  assert.deepEqual(Object.keys(first.qualitySkills).sort(), ['analysis', 'documentation', 'inspection', 'measurement']);
+  assert.ok(Object.values(first.qualitySkills).every(value => value >= 1 && value <= 10));
+  assert.equal(Object.hasOwn(first.qualitySkills, 'turning'), false);
+  assert.equal(Object.hasOwn(first.qualitySkills, 'milling'), false);
+  assert.match(first.about, /Stärkster QS-Wert:/);
+});
+
+test('recruitment keeps separate operator and QS applicant pools', () => {
+  const state = {};
+  recruitment.ensureState(state);
+  assert.equal(state.recruitment.applicants.length, recruitment.APPLICANT_COUNT);
+  assert.equal(state.recruitment.qualityApplicants.length, recruitment.QUALITY_APPLICANT_COUNT);
+  assert.ok(state.recruitment.applicants.every(candidate => candidate.profileType !== 'quality'));
+  assert.ok(state.recruitment.qualityApplicants.every(candidate => candidate.profileType === 'quality'));
+
+  const allIds = [
+    ...state.recruitment.applicants.map(candidate => candidate.id),
+    ...state.recruitment.qualityApplicants.map(candidate => candidate.id)
+  ];
+  assert.equal(new Set(allIds).size, allIds.length);
+});
+
+test('hiring a QS applicant preserves QS skills and refills only the QS pool', () => {
+  const state = {};
+  recruitment.ensureState(state);
+  const operatorIds = state.recruitment.applicants.map(candidate => candidate.id);
+  const candidate = state.recruitment.qualityApplicants[0];
+  const taken = recruitment.takeQualityApplicant(state, candidate.id);
+
+  assert.equal(taken.id, candidate.id);
+  assert.deepEqual(state.recruitment.applicants.map(person => person.id), operatorIds);
+  assert.equal(state.recruitment.qualityApplicants.length, recruitment.QUALITY_APPLICANT_COUNT);
+  assert.equal(state.recruitment.qualityApplicants.some(person => person.id === candidate.id), false);
+
+  const employee = recruitment.createQualityEmployee(taken, 500);
+  assert.equal(employee.profileType, 'quality');
+  assert.equal(employee.specialty, 'Qualitätssicherung');
+  assert.deepEqual(employee.qualitySkills, taken.qualitySkills);
+  assert.equal(recruitment.qualityInspectionPrecision(employee) >= 1, true);
+  assert.equal(recruitment.hourlyWage(employee, 2), recruitment.hourlyWage(employee, 1) + 2);
+});
+
+test('QS precision comes from measurement and inspection, not machining skills', () => {
+  const low = recruitment.createQualityEmployee({
+    ...recruitment.generateQualityApplicant(201),
+    qualitySkills: { measurement: 2, inspection: 2, analysis: 8, documentation: 8 }
+  }, 601);
+  const high = recruitment.createQualityEmployee({
+    ...recruitment.generateQualityApplicant(202),
+    qualitySkills: { measurement: 10, inspection: 10, analysis: 2, documentation: 2 }
+  }, 602);
+
+  assert.ok(recruitment.qualityInspectionPrecision(high) > recruitment.qualityInspectionPrecision(low));
+  assert.equal(low.skills.turning, 1);
+  assert.equal(low.skills.milling, 1);
+});
