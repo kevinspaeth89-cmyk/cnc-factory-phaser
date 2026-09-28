@@ -350,6 +350,7 @@
 
   function makeMajorFailure(state, machine, record, bay, dt) {
     const info = faults[record.fault];
+    const fromRiskyContinue = record.riskyContinue === true;
     record.status = 'major_failure';
     record.severity = Math.max(2, record.severity + 1);
     record.since = eventTime(state, dt);
@@ -362,7 +363,7 @@
     return {
       event: 'major_failure', bay, fault: record.fault, faultLabel: info.label,
       severity: record.severity, since: record.since, cost, downtime, scrapParts,
-      blocksProduction: true
+      fromRiskyContinue, blocksProduction: true
     };
   }
 
