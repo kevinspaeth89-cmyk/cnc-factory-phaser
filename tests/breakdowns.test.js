@@ -78,6 +78,7 @@ test('risky continuation can escalate into a costly major failure and report scr
 
   const failure = breakdowns.tick(state, 1, running)[0];
   assert.equal(failure.event, 'major_failure');
+  assert.equal(failure.fromRiskyContinue, true);
   assert.ok(failure.cost > 0);
   assert.ok(failure.downtime > 0);
   assert.equal(failure.scrapParts, 1);
