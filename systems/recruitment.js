@@ -143,6 +143,82 @@
     };
   }
 
+  function personalityIds(employee) {
+    if (!employee || typeof employee !== 'object') return [];
+    const traits = Array.isArray(employee.personality) && employee.personality.length
+      ? employee.personality
+      : employee.skills ? derivePersonality(employee.skills) : [];
+    return traits.map(trait => typeof trait === 'string' ? trait : trait?.id).filter(Boolean);
+  }
+
+  function qualityRiskModifier(employee) {
+    if (employee?.profileVersion !== 2) return 0;
+    const ids = personalityIds(employee);
+    let modifier = 0;
+    if (ids.includes('gruendlich')) modifier -= 2;
+    else if (ids.includes('bedacht')) modifier -= 0.75;
+    else if (ids.includes('pragmatisch')) modifier += 1;
+    if (ids.includes('flexibel')) modifier -= 0.5;
+    return modifier;
+  }
+
+  function incidentExperience(employee, action) {
+    if (employee?.profileVersion !== 2) return 0;
+    const ids = personalityIds(employee);
+    let bonus = ids.includes('neugierig') ? 24 :
+      ids.includes('anpassungsfaehig') ? 14 :
+      ids.includes('flexibel') ? 12 :
+      ids.includes('routineorientiert') ? 6 : 10;
+    if (action === 'repairSelf') bonus += ids.includes('neugierig') ? 8 : 4;
+    if (action === 'continueRisky' && ids.includes('gruendlich')) bonus = Math.max(4, bonus - 4);
+    return bonus;
+  }
+
+  function breakdownAdvice(employee, eventType = 'warning') {
+    if (employee?.profileVersion !== 2) return null;
+    const ids = personalityIds(employee);
+    const name = typeof employee.name === 'string' && employee.name.trim() ? employee.name.trim() : 'Bediener';
+    const major = eventType === 'major_failure';
+
+    if (major) {
+      return {
+        employeeName: name,
+        action: 'repairTechnician',
+        text: ids.includes('neugierig')
+          ? 'Die Maschine steht. Ich würde die Ursache dokumentieren und den Monteur dazuholen – dabei kann ich mir den Fehler genau ansehen.'
+          : ids.includes('routineorientiert')
+            ? 'Das ist kein normaler Ablauf mehr. Ich würde den Monteur holen und nach bewährtem Verfahren reparieren lassen.'
+            : 'Bei einem schweren Schaden würde ich nichts erzwingen und den Monteur holen.'
+      };
+    }
+
+    if (ids.includes('gruendlich')) {
+      return {
+        employeeName: name,
+        action: 'repairSelf',
+        text: ids.includes('neugierig')
+          ? 'Ich würde sofort stoppen und selbst nachsehen. So finden wir die Ursache, bevor daraus ein größerer Schaden wird.'
+          : 'Ich würde die Maschine stoppen und die Ursache erst prüfen, bevor wir weiterproduzieren.'
+      };
+    }
+    if (ids.includes('pragmatisch')) {
+      return {
+        employeeName: name,
+        action: 'continueRisky',
+        text: ids.includes('routineorientiert')
+          ? 'Wenn Lauf und Maß noch stimmen, würde ich den Auftrag erst weiterfahren und die Störung danach angehen.'
+          : 'Wenn die Maschine noch sauber läuft, würde ich den Auftrag erstmal weiterfahren und die Störung beobachten.'
+      };
+    }
+    return {
+      employeeName: name,
+      action: 'repairSelf',
+      text: ids.includes('neugierig')
+        ? 'Ich würde kurz stoppen und selbst prüfen. Vielleicht sehen wir direkt, was sich verändert hat.'
+        : 'Ich würde kurz prüfen, bevor wir entscheiden, ob die Maschine sicher weiterlaufen kann.'
+    };
+  }
+
   function ratingFromSkills(skills) {
     return deriveProfile(skills).rating;
   }
@@ -323,6 +399,10 @@
     portraitFor,
     ratingFromSkills,
     derivePersonality,
+    personalityIds,
+    qualityRiskModifier,
+    incidentExperience,
+    breakdownAdvice,
     deriveProfile,
     ensureState,
     generateApplicant,
