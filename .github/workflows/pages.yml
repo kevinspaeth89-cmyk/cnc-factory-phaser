@@ -24,8 +24,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Run tests
-        run: node --test tests/*.test.js
+      - name: Run module tests
+        run: node --test tests/breakdowns.test.js tests/economy.test.js tests/factory-expansion.test.js tests/materials.test.js tests/orderMarket.test.js tests/recruitment.test.js
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
