@@ -772,6 +772,12 @@
       if (ids.includes('pragmatisch')) lines.push('Okay. Wir beobachten sie und ziehen die Reißleine, wenn sich etwas ändert.');
       if (ids.includes('bedacht')) lines.push('Weiterfahren geht. Aber nur solange Lauf, Geräusch und Maß stabil bleiben.');
       if (ids.includes('routineorientiert')) lines.push('Gefällt mir nicht ganz. Aber ich weiß, wie sie normalerweise klingt.');
+    } else if (eventType === 'maintenance_deferred') {
+      lines = ['Dann ziehen wir die Serie noch durch. Danach sollte die Wartung aber dran sein.'];
+      if (ids.includes('gruendlich')) lines.push('Noch eine Serie geht. Danach würde ich die Wartung nicht weiter schieben.');
+      if (ids.includes('pragmatisch')) lines.push('Okay. Auftrag zuerst, Wartung danach. Solange sie sauber läuft, passt das.');
+      if (ids.includes('bedacht')) lines.push('Können wir machen. Aber danach braucht die Maschine wirklich ihre Wartung.');
+      if (ids.includes('routineorientiert')) lines.push('Die Wartung ist bald fällig. Nach der Serie würde ich sie fest einplanen.');
     } else if (eventType === 'repair_scheduled') {
       lines = ['Gut, dann machen wir die Reparatur nach der Serie.', 'Reparatur ist eingeplant. Bis dahin beobachte ich sie.'];
       if (ids.includes('gruendlich')) lines.push('Okay. Dann kontrolliere ich bis zur Reparatur lieber einmal mehr.');
