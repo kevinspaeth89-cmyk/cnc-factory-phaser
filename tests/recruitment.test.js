@@ -130,3 +130,35 @@ test('profile descriptions identify the strongest skill and match its stored val
     assert.match(candidate.portrait, /employee-portrait-\d{2}\.webp/);
   }
 });
+
+test('derives two coherent personality traits from existing employee skills', () => {
+  const carefulLearner = recruitment.derivePersonality({
+    turning: 8, milling: 4, precision: 9, learning: 9
+  });
+  assert.deepEqual(carefulLearner.map(trait => trait.id), ['gruendlich', 'neugierig']);
+
+  const pragmaticRoutineWorker = recruitment.derivePersonality({
+    turning: 7, milling: 3, precision: 2, learning: 2
+  });
+  assert.deepEqual(pragmaticRoutineWorker.map(trait => trait.id), ['pragmatisch', 'routineorientiert']);
+
+  const balancedAllrounder = recruitment.derivePersonality({
+    turning: 7, milling: 6, precision: 6, learning: 4
+  });
+  assert.deepEqual(balancedAllrounder.map(trait => trait.id), ['bedacht', 'flexibel']);
+
+  for (const trait of balancedAllrounder) {
+    assert.equal(typeof trait.label, 'string');
+    assert.equal(typeof trait.icon, 'string');
+    assert.equal(typeof trait.about, 'string');
+  }
+});
+
+test('generated applicants expose personality without changing legacy specialty traits', () => {
+  const candidate = recruitment.generateApplicant(1);
+  assert.equal(candidate.personality.length, 2);
+  assert.ok(candidate.trait);
+  assert.ok(candidate.specialty);
+  const employee = recruitment.createEmployee(candidate, 99);
+  assert.deepEqual(employee.personality, recruitment.derivePersonality(employee.skills));
+});
