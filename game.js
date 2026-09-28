@@ -838,7 +838,7 @@
     return changed;
   }
   const conditionLabel=value=>value>0&&value<1?'<1 %':Math.round(value)+' %';
-  let visual=null, currentPanel=null, businessSection='factory', messageTimer, zoomTimer, phaserGame=null, hallPreviewBay=null, shiftLeaderPanelShift=1, shiftLeaderAdviceKey='', operatorPickerShift=null;
+  let visual=null, currentPanel=null, businessSection='factory', messageTimer, zoomTimer, phaserGame=null, hallPreviewBay=null, shiftLeaderPanelShift=1, shiftLeaderAdviceKey='', operatorPickerShift=null, dismissalPickerShift=null;
   function say(message){
     $('message').textContent=message;
     clearTimeout(messageTimer);
@@ -2482,6 +2482,70 @@
     panel.replaceChildren(title,list);panel.hidden=false;
   }
 
+  function dismissEmployee(shift,employeeId){
+    const roster=state.staffRoster['shift'+shift]||[];
+    const index=roster.findIndex(employee=>employee.id===employeeId);
+    if(index<0)return false;
+    const employee=roster[index];
+    if(employee.assignedBay!==null){
+      say(`${employee.name} ist noch einer Maschine zugewiesen. Ziehe die Person zuerst dort ab.`);
+      return false;
+    }
+    roster.splice(index,1);
+    state.staff['shift'+shift]=Math.max(0,state.staff['shift'+shift]-1);
+    dismissalPickerShift=null;
+    save();renderBusiness();render();
+    say(`${employee.name} aus Schicht ${shift} entlassen · ${employeeHourlyWage(employee,shift)} €/h Personalkosten entfallen.`);
+    return true;
+  }
+
+  function renderDismissalPicker(){
+    const panel=$('dismissal-picker');
+    if(!panel)return;
+    if(![1,2].includes(dismissalPickerShift)){
+      panel.hidden=true;panel.replaceChildren();return;
+    }
+    const shift=dismissalPickerShift,roster=state.staffRoster['shift'+shift]||[];
+    const title=document.createElement('div');title.className='operator-picker-title';
+    const titleText=document.createElement('strong');titleText.textContent=`Schicht ${shift} · Wen möchtest du entlassen?`;
+    const close=document.createElement('button');close.type='button';close.className='action';close.textContent='×';
+    close.setAttribute('aria-label','Entlassungsauswahl schließen');
+    close.addEventListener('click',()=>{dismissalPickerShift=null;renderDismissalPicker();});
+    title.append(titleText,close);
+
+    const list=document.createElement('div');list.className='operator-picker-list';
+    if(!roster.length){
+      const empty=document.createElement('p');empty.className='operator-picker-empty';empty.textContent='In dieser Schicht arbeitet niemand.';
+      list.append(empty);
+    }else{
+      for(const employee of roster.slice().sort((a,b)=>(a.assignedBay!==null)-(b.assignedBay!==null)||employeeHourlyWage(b,shift)-employeeHourlyWage(a,shift))){
+        const row=document.createElement('div');row.className='operator-choice'+(employee.assignedBay!==null?' assigned':'');
+        const portrait=document.createElement('img');portrait.src=employee.portrait||recruitmentSystem.portraitFor(employee.id,employee.gender);
+        portrait.alt='Porträt von '+employee.name;portrait.loading='lazy';
+        const main=document.createElement('div');main.className='operator-choice-main';
+        const name=document.createElement('strong');name.textContent=employee.name;
+        const detail=document.createElement('small');
+        const personality=personalitySummary(employee);
+        const known=Object.values(employee.machineHistory||{}).filter(item=>item&&(item.workMinutes>0||item.incidents>0))
+          .sort((a,b)=>(b.workMinutes||0)-(a.workMinutes||0))[0];
+        const experience=known?recruitmentSystem.familiarityFor(employee,known.machineType):null;
+        const machineText=known&&experience?` · ${known.machineName}: ${experience.label}, ${Math.floor(experience.workMinutes/60)} h`:'';
+        detail.textContent=`${personality||employee.specialty} · ${employeeHourlyWage(employee,shift)} €/h${machineText}${employee.assignedBay!==null?` · aktuell Platz ${employee.assignedBay}`:''}`;
+        main.append(name,detail);
+        const action=document.createElement('button');action.type='button';action.className='action'+(employee.assignedBay===null?' danger':'');
+        if(employee.assignedBay===null){
+          action.textContent='Entlassen';
+          action.addEventListener('click',()=>dismissEmployee(shift,employee.id));
+        }else{
+          action.textContent='Erst abziehen';
+          action.disabled=true;
+        }
+        row.append(portrait,main,action);list.append(row);
+      }
+    }
+    panel.replaceChildren(title,list);panel.hidden=false;
+  }
+
   function renderBusiness(){
     const m=selectedMachine();
     const limit=expansionSystem.getUnlockedBays(state),nextCost=expansionSystem.getExpansionCost(state);
@@ -2495,7 +2559,7 @@
     $('open-recruitment').textContent=`Bewerber ansehen · ${state.recruitment.applicants.length}`;
     for(const shift of [1,2]){
       const assigned=state.machines.filter(x=>x['operator'+shift]).length;
-      $('fire-'+shift).disabled=state.staff['shift'+shift]<=assigned;
+      $('fire-'+shift).disabled=state.staff['shift'+shift]<=0;
       $('free-'+shift).textContent=`${state.staff['shift'+shift]-assigned} frei`;
       const wageLabel=$('shift-wage-'+shift);
       if(wageLabel)wageLabel.textContent=state.staff['shift'+shift]?`${shiftHourlyPayroll(shift)} €/h gesamt`:'noch niemand eingestellt';
@@ -2541,6 +2605,7 @@
     }
     if(!m)operatorPickerShift=null;
     renderOperatorPicker();
+    renderDismissalPicker();
   }
   function renderCosts(){
     $('payroll-due').textContent=euro(state.payrollDue);
@@ -3435,13 +3500,11 @@
   for(const shift of [1,2]){
     $('operator-'+shift).addEventListener('click',()=>toggleOperator(shift));
     $('fire-'+shift).addEventListener('click',()=>{
-      if(state.staff['shift'+shift]<=state.machines.filter(m=>m['operator'+shift]).length)return;
-      const roster=state.staffRoster['shift'+shift];
-      const free=roster.filter(employee=>employee.assignedBay===null).sort((a,b)=>skillLevel(a)-skillLevel(b)||a.xp-b.xp)[0];
-      const index=roster.indexOf(free);
-      if(index<0)return;
-      roster.splice(index,1);
-      state.staff['shift'+shift]--;save();renderBusiness();render();say(`${free.name} aus Schicht ${shift} entlassen.`);
+      if(!state.staffRoster['shift'+shift]?.length)return;
+      dismissalPickerShift=dismissalPickerShift===shift?null:shift;
+      operatorPickerShift=null;
+      renderDismissalPicker();
+      renderOperatorPicker();
     });
   }
   $('storage-upgrade').addEventListener('click',()=>{
