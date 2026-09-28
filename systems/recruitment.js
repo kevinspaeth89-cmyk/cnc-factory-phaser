@@ -653,6 +653,74 @@
     };
   }
 
+
+  function flavorChoice(items, employee, context = {}) {
+    if (!Array.isArray(items) || !items.length) return '';
+    let seed = Math.floor(Number(context.timeBucket) || 0) + Math.max(1, Number(employee?.id) || 1) * 31;
+    const token = String(context.machineType || context.machineName || '');
+    for (let index = 0; index < token.length; index += 1) seed = Math.imul(seed ^ token.charCodeAt(index), 16777619);
+    return items[Math.abs(seed) % items.length];
+  }
+
+  function workRemark(employee, context = {}) {
+    if (!employee || employee.profileVersion !== 2 || employee.profileType === 'quality') return '';
+    const ids = personalityIds(employee);
+    const machine = typeof context.machineName === 'string' && context.machineName.trim() ? context.machineName.trim() : 'die Maschine';
+    const tool = Number(context.tool);
+    const maintenance = Number(context.maintenance);
+    const produced = Math.max(0, Math.floor(Number(context.produced) || 0));
+    const quantity = Math.max(0, Math.floor(Number(context.quantity) || 0));
+    const remaining = quantity > 0 ? Math.max(0, quantity - produced) : null;
+    const familiarity = typeof context.machineType === 'string' && context.machineType
+      ? familiarityFor(employee, context.machineType)
+      : null;
+
+    if (Number.isFinite(tool) && tool <= 12) {
+      const lines = ids.includes('gruendlich')
+        ? ['Die Schneide gefällt mir nicht mehr. Die würde ich bald wechseln.', 'Das Werkzeug ist ziemlich weit runter. Ich behalte das Maß im Auge.']
+        : ids.includes('pragmatisch')
+          ? ['Das Werkzeug hat nicht mehr viel Reserve, aber ich beobachte es.', 'Die Schneide ist bald fällig. Solange Maß und Oberfläche stimmen, läuft sie noch.']
+          : ['Das Werkzeug wird knapp. Beim nächsten Wechsel schaue ich genauer hin.', 'Die Schneide nähert sich dem Ende.'];
+      return flavorChoice(lines, employee, context);
+    }
+
+    if (Number.isFinite(maintenance) && maintenance <= 12) {
+      const lines = ids.includes('routineorientiert')
+        ? ['Die klingt nicht mehr ganz wie sonst. Nach der Serie würde ich Wartung machen.', 'Die kenne ich anders. Da kündigt sich etwas an.']
+        : ids.includes('neugierig')
+          ? ['Da ist ein anderes Geräusch drin. Würde mich interessieren, woher das kommt.', 'Irgendwas hat sich verändert. Nach dem Auftrag schaue ich mir das genauer an.']
+          : ['Die Maschine fühlt sich heute nicht ganz sauber an.', 'Nach dem Auftrag wäre eine Wartung keine schlechte Idee.'];
+      return flavorChoice(lines, employee, context);
+    }
+
+    if (remaining !== null && remaining > 0 && remaining <= Math.max(3, Math.ceil(quantity * 0.12))) {
+      return flavorChoice([
+        `Noch ${remaining} Teile, dann ist die Serie durch.`,
+        `Endspurt. Noch ${remaining} Stück.`,
+        `Fast geschafft – ${remaining} Teile fehlen noch.`
+      ], employee, context);
+    }
+
+    if (familiarity && familiarity.level >= 3) {
+      return flavorChoice([
+        `${machine} kenne ich inzwischen ziemlich gut.`,
+        `Bei ${machine} höre ich mittlerweile sofort, wenn etwas nicht stimmt.`,
+        `Die hier und ich kennen uns inzwischen.`
+      ], employee, context);
+    }
+
+    const lines = [];
+    if (ids.includes('gruendlich')) lines.push('Wenn das Maß stimmt, läuft der Rest.', 'Lieber einmal mehr prüfen als später nacharbeiten.');
+    if (ids.includes('pragmatisch')) lines.push('Läuft. Nicht unnötig dran herumstellen.', 'Solange Späne und Maß passen, fasse ich nichts an.');
+    if (ids.includes('bedacht')) lines.push('So kann sie weiterlaufen.', 'Tempo ist gut, aber sauber muss es bleiben.');
+    if (ids.includes('neugierig')) lines.push('Da wäre bestimmt noch ein bisschen Zykluszeit drin.', 'Ich will nachher mal schauen, warum der Schnitt so ruhig läuft.');
+    if (ids.includes('routineorientiert')) lines.push('Bekannter Ablauf. Genau so mag ich das.', 'Wenn alles seinen Platz hat, läuft die Schicht.');
+    if (ids.includes('anpassungsfaehig')) lines.push('Andere Maschine, gleicher Job. Kriegen wir hin.', 'Passt. Ich komme mit dem Ablauf klar.');
+    if (ids.includes('flexibel')) lines.push('Drehen oder Fräsen – Hauptsache, die Serie läuft.', 'Heute hier, morgen woanders. Passt für mich.');
+    if (!lines.length) lines.push('Die Serie läuft sauber.', 'Heute macht die Maschine, was sie soll.');
+    return flavorChoice(lines, employee, context);
+  }
+
   function ratingFromSkills(skills) {
     return deriveProfile(skills).rating;
   }
@@ -1003,6 +1071,7 @@
     latestMachineMemory,
     memoryReference,
     breakdownAdvice,
+    workRemark,
     deriveProfile,
     ensureState,
     generateApplicant,

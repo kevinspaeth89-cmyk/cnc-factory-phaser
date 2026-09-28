@@ -2238,6 +2238,25 @@
         : [];
     return traits.map(item=>`${item.icon||''} ${item.label||item.id||''}`.trim()).filter(Boolean).join(' · ');
   }
+  function hallEmployeeRemark(machine,employee){
+    if(!machine||!employee||typeof recruitmentSystem.workRemark!=='function')return '';
+    const slot=Math.floor(state.gameMinutes/20);
+    const urgent=machine.tool<=12||machine.maintenance<=12;
+    const show=urgent
+      ? (slot+employee.id+machine.bay)%3===0
+      : (slot+employee.id*3+machine.bay*5)%10===0;
+    if(!show)return '';
+    const active=job(machine);
+    return recruitmentSystem.workRemark(employee,{
+      timeBucket:slot,
+      machineType:machine.type,
+      machineName:catalog[machine.type]?.name||'die Maschine',
+      tool:machine.tool,
+      maintenance:machine.maintenance,
+      produced:machine.produced,
+      quantity:active?.qty||0
+    });
+  }
   function renderStaffDevelopment(){
     $('staff-development').replaceChildren(...[1,2].flatMap(shift=>state.staffRoster['shift'+shift].map(employee=>{
       const row=document.createElement('div'),portrait=document.createElement('img'),details=document.createElement('div');
@@ -2264,7 +2283,7 @@
       const memories=recruitmentSystem.normalizeMemories(employee.memories);
       memoryLine.className='staff-profile-memory';
       memoryLine.hidden=!memories.length;
-      memoryLine.textContent=memories.length?'Erinnerungen: '+memories.slice(0,2).map(recruitmentSystem.memoryTitle).join(' · '):'';
+      memoryLine.textContent=memories.length?'Chronik: '+memories.slice(0,2).map(recruitmentSystem.memoryTitle).join(' · '):'';
       rating.className='staff-rating';rating.textContent=(employee.rating||recruitmentSystem.ratingFromSkills(employee.skills))+'/10';
       rating.setAttribute('aria-label','Profilbewertung '+rating.textContent);
       details.append(name,about,memoryLine);
@@ -2295,7 +2314,7 @@
       if(memoryLine){
         const memories=recruitmentSystem.normalizeMemories(employee.memories);
         memoryLine.hidden=!memories.length;
-        memoryLine.textContent=memories.length?'Erinnerungen: '+memories.slice(0,2).map(recruitmentSystem.memoryTitle).join(' · '):'';
+        memoryLine.textContent=memories.length?'Chronik: '+memories.slice(0,2).map(recruitmentSystem.memoryTitle).join(' · '):'';
       }
       if(button){
         button.textContent=level===3?'Können maximal':'Auf Stufe '+(level+1)+' schulen · '+euro(cost);
@@ -3320,8 +3339,20 @@
       const workingOperator=machine?hallWorkingOperator(machine):null;
       let operatorBadge=b.querySelector('.bay-operator');
       let workerSprite=b.querySelector('.bay-worker-sprite');
+      let remarkBubble=b.querySelector('.bay-worker-remark');
       if(workingOperator){
         const employee=workingOperator.employee;
+        const remark=hallEmployeeRemark(machine,employee);
+        if(remark){
+          if(!remarkBubble){
+            remarkBubble=document.createElement('div');
+            remarkBubble.className='bay-worker-remark';
+            b.append(remarkBubble);
+          }
+          const firstName=(employee.name||'Bediener').split(/\s+/)[0];
+          remarkBubble.textContent=`${firstName}: „${remark}“`;
+          remarkBubble.hidden=false;
+        }else if(remarkBubble)remarkBubble.hidden=true;
         const workingSprite=hallWorkerSpriteFor(employee);
         if(workingSprite){
           if(!workerSprite){
@@ -3367,6 +3398,7 @@
           delete operatorBadge.dataset.employeeId;
           delete operatorBadge.dataset.shift;
         }
+        if(remarkBubble)remarkBubble.hidden=true;
       }
       b.querySelector('span').textContent=machine?catalog[machine.type].name:`+ Platz ${bay}`;
       b.setAttribute('aria-label',machine?`${catalog[machine.type].name}, Platz ${bay} ansehen`:`Freier Stellplatz ${bay}, Maschinen kaufen`);
