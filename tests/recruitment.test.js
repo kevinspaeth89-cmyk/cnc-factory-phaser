@@ -384,3 +384,86 @@ test('risky escalation becomes a high-priority memory with a clear later warning
   });
   assert.match(advice.text, /weitergefahren und sie ist eskaliert/);
 });
+
+
+test('machine familiarity grows from normal work on the same type across bays', () => {
+  const employee = {
+    profileVersion: 2,
+    name: 'Mira Test',
+    skills: { turning: 8, milling: 4, precision: 9, learning: 9 },
+    machineHistory: {}
+  };
+
+  let result = recruitment.recordMachineWork(employee, {
+    machineType: 'standard',
+    machineName: 'Nexora NX-350',
+    minutes: 240,
+    partsProduced: 30,
+    gameMinutes: 240,
+    bay: 2
+  });
+  assert.equal(result.level, 0);
+  assert.equal(result.label, 'Neu');
+
+  result = recruitment.recordMachineWork(employee, {
+    machineType: 'standard',
+    machineName: 'Nexora NX-350',
+    minutes: 240,
+    partsProduced: 25,
+    gameMinutes: 480,
+    bay: 7
+  });
+  assert.equal(result.level, 1);
+  assert.equal(result.label, 'Eingearbeitet');
+  assert.equal(result.leveledUp, true);
+  assert.equal(result.workMinutes, 480);
+  assert.equal(result.partsProduced, 55);
+  assert.equal(employee.machineHistory.standard.lastBay, 7);
+  assert.equal(Object.keys(employee.machineHistory).length, 1);
+
+  recruitment.recordMachineWork(employee, {
+    machineType: 'rapid',
+    machineName: 'Nexora NX-420',
+    minutes: 120,
+    partsProduced: 12,
+    gameMinutes: 600,
+    bay: 3
+  });
+  assert.equal(recruitment.familiarityFor(employee, 'rapid').level, 0);
+  assert.equal(Object.keys(employee.machineHistory).length, 2);
+});
+
+test('familiarity tiers give small capped production and quality advantages', () => {
+  const employee = {
+    profileVersion: 2,
+    name: 'Mira Test',
+    skills: { turning: 8, milling: 4, precision: 9, learning: 9 },
+    machineHistory: {
+      standard: {
+        machineType: 'standard',
+        machineName: 'Nexora NX-350',
+        workMinutes: 18000,
+        partsProduced: 2200
+      }
+    }
+  };
+
+  const familiarity = recruitment.familiarityFor(employee, 'standard');
+  assert.equal(familiarity.level, 4);
+  assert.equal(familiarity.label, 'Spezialist');
+  assert.equal(recruitment.familiarityProductionMultiplier(employee, 'standard'), 1.04);
+  assert.equal(recruitment.familiarityQualityRiskModifier(employee, 'standard'), -1.5);
+  assert.equal(recruitment.familiarityProductionMultiplier(employee, 'rapid'), 1);
+  assert.equal(recruitment.familiarityQualityRiskModifier(employee, 'rapid'), 0);
+});
+
+test('machine familiarity thresholds represent 8, 40, 120, and 300 work hours', () => {
+  assert.deepEqual(
+    recruitment.FAMILIARITY_LEVELS.map(level => level.minMinutes),
+    [0, 480, 2400, 7200, 18000]
+  );
+  assert.deepEqual(
+    recruitment.FAMILIARITY_LEVELS.map(level => level.label),
+    ['Neu', 'Eingearbeitet', 'Vertraut', 'Erfahren', 'Spezialist']
+  );
+});
