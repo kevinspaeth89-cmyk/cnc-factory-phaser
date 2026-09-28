@@ -610,6 +610,10 @@
   const resaleValue=m=>m?Math.round((Number.isFinite(m.purchasePrice)?m.purchasePrice:LEGACY_MACHINE_PRICES[m.type]||catalog[m.type].price)*SELL_BASE_RATE+upgradeInvestment(m)*SELL_UPGRADE_RATE+(m.loadingRobot?LOADING_ROBOT_COST*.4:0)):0;
   const skillLevel=employee=>employee?Math.min(3,Math.max(employee.trained,employee.xp>=1500?3:employee.xp>=600?2:employee.xp>=180?1:0)):0;
   const assignedEmployee=(m,shift)=>state.staffRoster['shift'+shift].find(employee=>employee.assignedBay===m.bay);
+  const hallWorkerSprites=Object.freeze({
+    'Vaska Feilensang':'assets/vaska-working.webp?v=1',
+    'Kael Drehkamm':'assets/kael-working.webp?v=1'
+  });
   function hallWorkingOperator(machine){
     const shift=shiftAt(state.gameMinutes);
     if(!machine||!shift||!machine['operator'+shift]||!job(machine))return null;
@@ -3188,26 +3192,53 @@
 
       const workingOperator=machine?hallWorkingOperator(machine):null;
       let operatorBadge=b.querySelector('.bay-operator');
+      let workerSprite=b.querySelector('.bay-worker-sprite');
       if(workingOperator){
-        if(!operatorBadge){
-          operatorBadge=document.createElement('div');operatorBadge.className='bay-operator';
-          const portrait=document.createElement('img'),name=document.createElement('small');
-          portrait.loading='lazy';operatorBadge.append(portrait,name);b.append(operatorBadge);
+        const employee=workingOperator.employee;
+        const workingSprite=hallWorkerSprites[employee.name]||null;
+        if(workingSprite){
+          if(!workerSprite){
+            workerSprite=document.createElement('img');
+            workerSprite.className='bay-worker-sprite';
+            workerSprite.alt='';
+            workerSprite.loading='lazy';
+            b.append(workerSprite);
+          }
+          if(workerSprite.getAttribute('src')!==workingSprite)workerSprite.src=workingSprite;
+          workerSprite.dataset.employeeId=String(employee.id);
+          workerSprite.dataset.shift=String(workingOperator.shift);
+          workerSprite.title=`${employee.name} arbeitet an ${catalog[machine.type].name}`;
+          workerSprite.hidden=false;
+          if(operatorBadge)operatorBadge.hidden=true;
+        }else{
+          if(workerSprite)workerSprite.hidden=true;
+          if(!operatorBadge){
+            operatorBadge=document.createElement('div');operatorBadge.className='bay-operator';
+            const portrait=document.createElement('img'),name=document.createElement('small');
+            portrait.loading='lazy';operatorBadge.append(portrait,name);b.append(operatorBadge);
+          }
+          const portrait=operatorBadge.children[0],name=operatorBadge.children[1];
+          const portraitSrc=employee.portrait||recruitmentSystem.portraitFor(employee.id,employee.gender);
+          if(portrait.getAttribute('src')!==portraitSrc)portrait.src=portraitSrc;
+          portrait.alt='';
+          name.textContent=employee.name;
+          operatorBadge.dataset.employeeId=String(employee.id);
+          operatorBadge.dataset.shift=String(workingOperator.shift);
+          operatorBadge.setAttribute('aria-label',`${employee.name} arbeitet in Schicht ${workingOperator.shift} an Platz ${machine.bay}`);
+          operatorBadge.title=`${employee.name} · Schicht ${workingOperator.shift} · arbeitet an ${catalog[machine.type].name}`;
+          operatorBadge.hidden=false;
         }
-        const employee=workingOperator.employee,portrait=operatorBadge.children[0],name=operatorBadge.children[1];
-        const portraitSrc=employee.portrait||recruitmentSystem.portraitFor(employee.id,employee.gender);
-        if(portrait.getAttribute('src')!==portraitSrc)portrait.src=portraitSrc;
-        portrait.alt='';
-        name.textContent=employee.name;
-        operatorBadge.dataset.employeeId=String(employee.id);
-        operatorBadge.dataset.shift=String(workingOperator.shift);
-        operatorBadge.setAttribute('aria-label',`${employee.name} arbeitet in Schicht ${workingOperator.shift} an Platz ${machine.bay}`);
-        operatorBadge.title=`${employee.name} · Schicht ${workingOperator.shift} · arbeitet an ${catalog[machine.type].name}`;
-        operatorBadge.hidden=false;
-      }else if(operatorBadge){
-        operatorBadge.hidden=true;
-        delete operatorBadge.dataset.employeeId;
-        delete operatorBadge.dataset.shift;
+      }else{
+        if(workerSprite){
+          workerSprite.hidden=true;
+          delete workerSprite.dataset.employeeId;
+          delete workerSprite.dataset.shift;
+        }
+        if(operatorBadge){
+          operatorBadge.hidden=true;
+          delete operatorBadge.dataset.employeeId;
+          delete operatorBadge.dataset.shift;
+        }
       }
       b.querySelector('span').textContent=machine?catalog[machine.type].name:`+ Platz ${bay}`;
       b.setAttribute('aria-label',machine?`${catalog[machine.type].name}, Platz ${bay} ansehen`:`Freier Stellplatz ${bay}, Maschinen kaufen`);
