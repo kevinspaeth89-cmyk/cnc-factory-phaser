@@ -55,5 +55,28 @@
     return Math.min(quantity, Math.max(1, Math.ceil(quantity * fraction)));
   }
 
-  return Object.freeze({ programKey, programmingMinutes, toleranceClass, riskPercent, defectParts });
+  function inspectionDetectionChance({ hasQualityAssurance = false, precision = 5, trained = 0 } = {}) {
+    const safePrecision = clamp(Number(precision) || 5, 1, 10);
+    const safeTrained = clamp(Number(trained) || 0, 0, 3);
+    if (hasQualityAssurance) {
+      return clamp(.78 + safePrecision * .018 + safeTrained * .015, .80, .99);
+    }
+    return clamp(.32 + safePrecision * .04 + safeTrained * .025, .36, .78);
+  }
+
+  function qualityProcessRiskModifier({ hasQualityAssurance = false, precision = 5 } = {}) {
+    if (!hasQualityAssurance) return 0;
+    const safePrecision = clamp(Number(precision) || 5, 1, 10);
+    return -Math.min(1, .35 + Math.max(0, safePrecision - 5) * .08);
+  }
+
+  return Object.freeze({
+    programKey,
+    programmingMinutes,
+    toleranceClass,
+    riskPercent,
+    defectParts,
+    inspectionDetectionChance,
+    qualityProcessRiskModifier
+  });
 });
