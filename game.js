@@ -592,7 +592,7 @@
     const qs=qualityEmployee(qsShift);
     const qsProcessModifier=programmingQuality.qualityProcessRiskModifier({
       hasQualityAssurance:!!qs,
-      precision:Number(qs?.skills?.precision)||5,
+      precision:qs?recruitmentSystem.qualityInspectionPrecision(qs):5,
       policy:policyId||qualityPolicyFor(qsShift||1).id
     });
     return Math.max(2,Math.min(28,Math.round(baseRisk+personalityModifier+familiarityModifier+qsProcessModifier)));
@@ -612,7 +612,9 @@
   const qualityEmployee=shift=>(state.qualityStaff?.['shift'+shift]||[]).find(employee=>employee.qualityCertified&&!(employee.qualityTrainingRemainingMinutes>0))||null;
   const employeeIsFree=employee=>!!employee&&employee.assignedBay===null;
   const employeeHourlyWage=(employee,shift)=>recruitmentSystem.hourlyWage(employee,shift);
-  const qualityHourlyWage=(employee,shift)=>employeeHourlyWage(employee,shift)+QS_ROLE_WAGE_PREMIUM;
+  const qualityHourlyWage=(employee,shift)=>employee?.profileType==='quality'
+    ?employeeHourlyWage(employee,shift)
+    :employeeHourlyWage(employee,shift)+QS_ROLE_WAGE_PREMIUM;
   const shiftHourlyPayroll=shift=>(state.staffRoster['shift'+shift]||[]).reduce((sum,employee)=>sum+employeeHourlyWage(employee,shift),0)+
     (state.qualityStaff?.['shift'+shift]||[]).reduce((sum,employee)=>sum+qualityHourlyWage(employee,shift),0);
   const productionFactorForShift=(m,shift)=>{
@@ -2471,9 +2473,33 @@
     save();
   }
   function renderRecruitment(){
-    const offers=state.recruitment?.applicants||[];
+    const operatorOffers=state.recruitment?.applicants||[];
+    const qualityOffers=state.recruitment?.qualityApplicants||[];
     const limit=expansionSystem.getUnlockedBays(state);
-    $('applicant-list').replaceChildren(...offers.map(candidate=>{
+    const nodes=[];
+
+    const sectionHeading=(title,text)=>{
+      const wrap=document.createElement('div');
+      const heading=document.createElement('h3');heading.textContent=title;
+      const hint=document.createElement('p');hint.className='hint';hint.textContent=text;
+      wrap.append(heading,hint);return wrap;
+    };
+    const statBlock=(skills)=>{
+      const stats=document.createElement('div');stats.className='applicant-stats';
+      for(const [key,label] of skills){
+        const stat=document.createElement('div');stat.className='applicant-stat';
+        const top=document.createElement('div');top.className='applicant-stat-head';
+        const statName=document.createElement('span');statName.textContent=label;
+        const value=document.createElement('b');value.textContent=`${skills.source[key]}/10`;
+        const track=document.createElement('div');track.className='applicant-track';
+        const fill=document.createElement('span');fill.style.width=`${skills.source[key]*10}%`;track.append(fill);
+        top.append(statName,value);stat.append(top,track);stats.append(stat);
+      }
+      return stats;
+    };
+
+    nodes.push(sectionHeading('Maschinenbediener','Dreher, Fräser und Allrounder. Diese Bewerber können nur als Maschinenbediener eingestellt und später bei Bedarf zur QS befördert werden.'));
+    for(const candidate of operatorOffers){
       const card=document.createElement('article');card.className='applicant-card';
       const head=document.createElement('div');head.className='applicant-head';
       const avatar=document.createElement('img');avatar.className='applicant-avatar';
@@ -2488,16 +2514,9 @@
       head.append(avatar,identity,rating);
       const personality=personalitySummary(candidate);
       const about=document.createElement('p');about.className='applicant-about';about.textContent=`${candidate.trait}${personality?' · '+personality:''} · ${candidate.about}`;
-      const stats=document.createElement('div');stats.className='applicant-stats';
-      for(const [key,label] of [['turning','Drehen'],['milling','Fräsen'],['precision','Präzision'],['learning','Lerntempo']]){
-        const stat=document.createElement('div');stat.className='applicant-stat';
-        const top=document.createElement('div');top.className='applicant-stat-head';
-        const statName=document.createElement('span');statName.textContent=label;
-        const value=document.createElement('b');value.textContent=`${candidate.skills[key]}/10`;
-        const track=document.createElement('div');track.className='applicant-track';
-        const fill=document.createElement('span');fill.style.width=`${candidate.skills[key]*10}%`;track.append(fill);
-        top.append(statName,value);stat.append(top,track);stats.append(stat);
-      }
+      const skillDefs=[['turning','Drehen'],['milling','Fräsen'],['precision','Präzision'],['learning','Lerntempo']];
+      skillDefs.source=candidate.skills;
+      const stats=statBlock(skillDefs);
       const actions=document.createElement('div');actions.className='applicant-actions';
       for(const shift of [1,2]){
         const button=document.createElement('button');button.type='button';button.className='action';
@@ -2509,20 +2528,47 @@
         button.disabled=state.money<HIRING_FEE||state.staff[`shift${shift}`]>=limit;
         button.addEventListener('click',()=>hireCandidate(candidate.id,shift));
         actions.append(button);
-
-        const qualityButton=document.createElement('button');qualityButton.type='button';qualityButton.className='action quality-choice';
-        const qualityWage=recruitmentSystem.hourlyWage(candidate,shift)+QS_ROLE_WAGE_PREMIUM;
-        const qualityLabel=document.createElement('span');qualityLabel.textContent=`S${shift} direkt als QS`;
-        const qualityCost=document.createElement('small');qualityCost.textContent=`qualifiziert · ${qualityWage} €/h · Präzision ${candidate.skills.precision}/10`;
-        qualityButton.append(qualityLabel,qualityCost);
-        qualityButton.title=`${candidate.name} · qualifizierte QS-Kraft Schicht ${shift}`;
-        qualityButton.disabled=state.money<HIRING_FEE||(state.qualityStaff?.[`shift${shift}`]||[]).length>=1;
-        qualityButton.addEventListener('click',()=>hireQualityCandidate(candidate.id,shift));
-        actions.append(qualityButton);
       }
-      card.append(head,about,stats,actions);return card;
-    }));
-    $('applicant-count').textContent=`${offers.length} Profile verfügbar · als Bediener oder direkt qualifizierte QS einstellbar · individuelle Gehaltsvorstellung`;
+      card.append(head,about,stats,actions);nodes.push(card);
+    }
+
+    nodes.push(sectionHeading('Qualitätssicherung','Eigenständige QS-Fachkräfte. Sie sind keine Dreher oder Fräser und werden direkt für Prüfaufgaben eingestellt.'));
+    for(const candidate of qualityOffers){
+      const card=document.createElement('article');card.className='applicant-card quality-applicant-card';
+      const head=document.createElement('div');head.className='applicant-head';
+      const avatar=document.createElement('img');avatar.className='applicant-avatar';
+      avatar.src=candidate.portrait||recruitmentSystem.portraitFor(candidate.id,candidate.gender);
+      avatar.alt='Porträt von '+candidate.name;avatar.loading='lazy';
+      const identity=document.createElement('div');identity.className='applicant-identity';
+      const name=document.createElement('strong');name.textContent=candidate.name;
+      const specialty=document.createElement('span');specialty.className='applicant-specialty';specialty.textContent='QS-Fachkraft';
+      identity.append(name,specialty);
+      const rating=document.createElement('strong');rating.className='applicant-rating';
+      rating.textContent=candidate.rating+'/10';rating.setAttribute('aria-label','QS-Profilbewertung '+rating.textContent);
+      head.append(avatar,identity,rating);
+      const about=document.createElement('p');about.className='applicant-about';
+      about.textContent=`${candidate.trait} · ${candidate.about}`;
+      const qualityDefs=[['measurement','Messtechnik'],['inspection','Prüfgenauigkeit'],['analysis','Fehleranalyse'],['documentation','Dokumentation']];
+      qualityDefs.source=candidate.qualitySkills;
+      const stats=statBlock(qualityDefs);
+      const actions=document.createElement('div');actions.className='applicant-actions';
+      for(const shift of [1,2]){
+        const button=document.createElement('button');button.type='button';button.className='action quality-choice';
+        const wage=recruitmentSystem.hourlyWage(candidate,shift);
+        const actionLabel=document.createElement('span');actionLabel.textContent=`S${shift} als QS einstellen`;
+        const precision=recruitmentSystem.qualityInspectionPrecision(candidate);
+        const costLabel=document.createElement('small');costLabel.textContent=`${euro(HIRING_FEE)} einmalig · ${wage} €/h · Prüfwert ${precision}/10`;
+        button.append(actionLabel,costLabel);
+        button.title=`${candidate.name} · QS-Fachkraft Schicht ${shift}: ${wage} € pro Stunde`;
+        button.disabled=state.money<HIRING_FEE||(state.qualityStaff?.[`shift${shift}`]||[]).length>=1;
+        button.addEventListener('click',()=>hireQualityCandidate(candidate.id,shift));
+        actions.append(button);
+      }
+      card.append(head,about,stats,actions);nodes.push(card);
+    }
+
+    $('applicant-list').replaceChildren(...nodes);
+    $('applicant-count').textContent=`${operatorOffers.length} Bedienerprofile · ${qualityOffers.length} QS-Profile · getrennte Qualifikationen und Gehaltsvorstellungen`;
   }
   function assignOperatorToMachine(shift,employeeId){
     const machine=selectedMachine(),key='operator'+shift;
@@ -2659,7 +2705,7 @@
     const person=qs||operator;
     return programmingQuality.inspectionDetectionChance({
       hasQualityAssurance:!!qs,
-      precision:Number(person?.skills?.precision)||5,
+      precision:qs?recruitmentSystem.qualityInspectionPrecision(qs):(Number(person?.skills?.precision)||5),
       trained:skillLevel(person),
       policy:policyId||qualityPolicyFor(shift||1).id
     });
@@ -2667,13 +2713,13 @@
 
   function hireQualityCandidate(applicantId,shift){
     if(![1,2].includes(shift)||(state.qualityStaff?.['shift'+shift]||[]).length>=1)return false;
-    const candidate=state.recruitment.applicants.find(person=>person.id===applicantId);
-    if(!candidate||state.money<HIRING_FEE)return false;
-    const employee=recruitmentSystem.createEmployee(candidate,state.staffRoster.nextId);
+    const candidate=(state.recruitment.qualityApplicants||[]).find(person=>person.id===applicantId);
+    if(!candidate||candidate.profileType!=='quality'||state.money<HIRING_FEE)return false;
+    const employee=recruitmentSystem.createQualityEmployee(candidate,state.staffRoster.nextId);
     if(!employee||!book('other',-HIRING_FEE,`QS ${candidate.name} für Schicht ${shift} eingestellt`,{
       employeeId:employee.id,applicantId,employeeName:candidate.name,shift,quality:true,setupFee:true
     }).ok)return false;
-    const hired=recruitmentSystem.takeApplicant(state,applicantId);
+    const hired=recruitmentSystem.takeQualityApplicant(state,applicantId);
     if(!hired)return false;
     state.staffRoster.nextId+=1;
     employee.assignedBay=null;employee.assignedRole=null;
@@ -2746,7 +2792,11 @@
           const policy=qualityPolicyFor(shift);
           const minMinutes=programmingQuality.inspectionMinutes({order:{difficulty:1},policy:policy.id});
           const maxMinutes=programmingQuality.inspectionMinutes({order:{difficulty:5},policy:policy.id});
-          small.textContent=`qualifiziert · Präzision ${employee.skills?.precision||5}/10 · ${policy.label} · ${Math.round(qualityDetectionChance(null,shift,policy.id)*100)} % Entdeckung · ${minMinutes}–${maxMinutes} min/Prüfung · ${qualityHourlyWage(employee,shift)} €/h`;
+          const precision=recruitmentSystem.qualityInspectionPrecision(employee);
+          const qualification=employee.profileType==='quality'&&employee.qualitySkills
+            ?`QS-Fachkraft · Messtechnik ${employee.qualitySkills.measurement}/10 · Prüfung ${employee.qualitySkills.inspection}/10 · Analyse ${employee.qualitySkills.analysis}/10`
+            :`beförderter Bediener · Prüfgenauigkeit ${precision}/10`;
+          small.textContent=`${qualification} · ${policy.label} · ${Math.round(qualityDetectionChance(null,shift,policy.id)*100)} % Entdeckung · ${minMinutes}–${maxMinutes} min/Prüfung · ${qualityHourlyWage(employee,shift)} €/h`;
         }
       }else small.textContent='Nur Bediener-Endkontrolle aktiv';
       info.append(label,small);
@@ -3342,7 +3392,7 @@
     if(![1,2].includes(shift))return;
     const candidate=state.recruitment.applicants.find(person=>person.id===applicantId);
     const shiftKey=`shift${shift}`,limit=expansionSystem.getUnlockedBays(state);
-    if(!candidate||state.money<HIRING_FEE||state.staff[shiftKey]>=limit)return;
+    if(!candidate||candidate.profileType==='quality'||state.money<HIRING_FEE||state.staff[shiftKey]>=limit)return;
     const employee=recruitmentSystem.createEmployee(candidate,state.staffRoster.nextId);
     if(!employee||!book('other',-HIRING_FEE,`Bediener ${candidate.name} für Schicht ${shift} eingestellt`,{
       employeeId:employee.id,applicantId,employeeName:candidate.name,shift,setupFee:true,skills:{...candidate.skills}
@@ -3398,7 +3448,7 @@
     machine.qualityInspectedOrderId=order.id;
     if(qsInspector){
       state.qualityAssurance.inspections+=1;
-      qsInspector.xp=Math.round((qsInspector.xp+10*recruitmentSystem.learningMultiplier(qsInspector))*1000)/1000;
+      qsInspector.xp=Math.round((qsInspector.xp+10*recruitmentSystem.qualityLearningMultiplier(qsInspector))*1000)/1000;
     }
     if(defects>0){
       const detected=Math.random()<detectionChance;
@@ -3438,7 +3488,7 @@
           if(beforeTraining>0&&trainee.qualityTrainingRemainingMinutes<=1e-8){
             trainee.qualityTrainingRemainingMinutes=0;
             trainee.qualityCertified=true;
-            trainee.xp=Math.round((trainee.xp+120*recruitmentSystem.learningMultiplier(trainee))*1000)/1000;
+            trainee.xp=Math.round((trainee.xp+120*recruitmentSystem.qualityLearningMultiplier(trainee))*1000)/1000;
             say(`${trainee.name}: QS-Schulung abgeschlossen · jetzt als QS in Schicht ${shift} einsatzbereit.`);
             save();
           }
@@ -3494,7 +3544,7 @@
           const inspectionStep=Math.min(step,m.qualityInspectionRemainingMinutes);
           m.qualityInspectionRemainingMinutes=Math.max(0,m.qualityInspectionRemainingMinutes-inspectionStep);
           state.qualityAssurance.inspectionMinutes+=inspectionStep;
-          qsInspector.xp=Math.round((qsInspector.xp+inspectionStep*recruitmentSystem.learningMultiplier(qsInspector))*1000)/1000;
+          qsInspector.xp=Math.round((qsInspector.xp+inspectionStep*recruitmentSystem.qualityLearningMultiplier(qsInspector))*1000)/1000;
           if(m.qualityInspectionRemainingMinutes>1e-8)continue;
           m.qualityInspectionRemainingMinutes=0;
           resolveCompletedOrderQuality(m,o,inspectionShift,qsInspector,m.qualityInspectionPolicy);
