@@ -528,7 +528,10 @@
     const personalityModifier=employees.length
       ? employees.reduce((sum,employee)=>sum+recruitmentSystem.qualityRiskModifier(employee),0)/employees.length
       : 0;
-    return Math.max(2,Math.min(28,Math.round(baseRisk+personalityModifier)));
+    const familiarityModifier=employees.length
+      ? employees.reduce((sum,employee)=>sum+recruitmentSystem.familiarityQualityRiskModifier(employee,machine.type),0)/employees.length
+      : 0;
+    return Math.max(2,Math.min(28,Math.round(baseRisk+personalityModifier+familiarityModifier)));
   }
   const selectedMachine=()=>state.machines.find(m=>m.bay===state.selectedBay);
   const machineAt=bay=>state.machines.find(m=>m.bay===bay);
@@ -545,7 +548,8 @@
   const productionFactorForShift=(m,shift)=>{
     const employee=assignedEmployee(m,shift);
     return catalog[m.type].rate*(1+(m.level-1)*.13)*Math.max(.65,m.maintenance/100*.75+.25)*
-      (1+.05*skillLevel(employee))*recruitmentSystem.productionMultiplier(employee,catalog[m.type].kind);
+      (1+.05*skillLevel(employee))*recruitmentSystem.productionMultiplier(employee,catalog[m.type].kind)*
+      recruitmentSystem.familiarityProductionMultiplier(employee,m.type);
   };
   const productionFactor=m=>productionFactorForShift(m,shiftAt(state.gameMinutes)||1);
   const setupMinutesForOrder=order=>{
@@ -1433,9 +1437,11 @@
     if(!task||state.paused||!shift||!machine['operator'+shift]||!assignedEmployee(machine,shift)||
       machine.maintenanceRemainingMinutes>0||machine.maintenance<8||machine.tool<1||
       !breakdownSystem.canContinueProduction(state,machine.bay))return false;
+    const employee=assignedEmployee(machine,shift);
     const power=MACHINE_POWER_COST_PER_HOUR*step/60,dateKey=gameDateKey();
     book('energy',-power,'Stromkosten Qualitätsnacharbeit',{bay:machine.bay,dateKey},`daily:energy:${dateKey}`);
     state.energyPaid+=power;
+    recordEmployeeMachineWork(employee,machine,step,0);
     task.remainingMinutes=Math.max(0,task.remainingMinutes-step);
     if(task.remainingMinutes>1e-8)return true;
     machine.qualityReworkQueue.shift();
@@ -1958,8 +1964,12 @@
       name.className='staff-profile-name';
       name.textContent='S'+shift+' · '+employee.name+' · '+profile+' · '+(employee.assignedBay?'Platz '+employee.assignedBay:'frei');
       const personality=personalitySummary(employee);
-      const familiarTypes=Object.values(employee.machineHistory||{}).filter(item=>item&&item.incidents>0).sort((a,b)=>b.incidents-a.incidents);
-      const machineExperience=familiarTypes.length?` · Maschinenerfahrung: ${familiarTypes.slice(0,2).map(item=>item.machineName).join(', ')}`:'';
+      const familiarTypes=Object.values(employee.machineHistory||{}).filter(item=>item&&(item.workMinutes>0||item.incidents>0))
+        .sort((a,b)=>(b.workMinutes||0)-(a.workMinutes||0)||(b.incidents||0)-(a.incidents||0));
+      const machineExperience=familiarTypes.length?` · Maschinenerfahrung: ${familiarTypes.slice(0,2).map(item=>{
+        const familiarity=recruitmentSystem.familiarityFor(employee,item.machineType);
+        return `${item.machineName} ${familiarity.label} (${Math.floor(familiarity.workMinutes/60)} h · ${familiarity.partsProduced} Teile)`;
+      }).join(', ')}`:'';
       about.className='staff-profile-about';about.textContent=`${personality?personality+' · ':''}${employee.about||'Mitarbeiterprofil'} · ${Math.floor(employee.xp)} min Erfahrung · Können ${level}/3${machineExperience}`;
       const memories=recruitmentSystem.normalizeMemories(employee.memories);
       memoryLine.className='staff-profile-memory';
@@ -1983,8 +1993,12 @@
       const level=skillLevel(employee),cost=TRAINING_BASE_COST*(level+1),about=row.children[1]?.children[1],memoryLine=row.children[1]?.children[2],button=row.children[3];
       if(about){
         const personality=personalitySummary(employee);
-        const familiarTypes=Object.values(employee.machineHistory||{}).filter(item=>item&&item.incidents>0).sort((a,b)=>b.incidents-a.incidents);
-        const machineExperience=familiarTypes.length?` · Maschinenerfahrung: ${familiarTypes.slice(0,2).map(item=>item.machineName).join(', ')}`:'';
+        const familiarTypes=Object.values(employee.machineHistory||{}).filter(item=>item&&(item.workMinutes>0||item.incidents>0))
+          .sort((a,b)=>(b.workMinutes||0)-(a.workMinutes||0)||(b.incidents||0)-(a.incidents||0));
+        const machineExperience=familiarTypes.length?` · Maschinenerfahrung: ${familiarTypes.slice(0,2).map(item=>{
+          const familiarity=recruitmentSystem.familiarityFor(employee,item.machineType);
+          return `${item.machineName} ${familiarity.label} (${Math.floor(familiarity.workMinutes/60)} h · ${familiarity.partsProduced} Teile)`;
+        }).join(', ')}`:'';
         about.textContent=`${personality?personality+' · ':''}${employee.about||'Mitarbeiterprofil'} · ${Math.floor(employee.xp)} min Erfahrung · Können ${level}/3${machineExperience}`;
       }
       if(memoryLine){
@@ -2938,6 +2952,23 @@
     employee.trained=level+1;
     save();renderBusiness();render();say(`${employee.name}: Können ${level}/3 → ${skillLevel(employee)}/3 · +5 % Produktionstempo · ${euro(cost)} bezahlt.`);
   }
+  function recordEmployeeMachineWork(employee,machine,minutes,partsProduced=0){
+    if(!employee||!machine||!(minutes>0))return null;
+    const familiarity=recruitmentSystem.recordMachineWork(employee,{
+      machineType:machine.type,
+      machineName:catalog[machine.type]?.name,
+      minutes,
+      partsProduced,
+      gameMinutes:state.gameMinutes+minutes,
+      bay:machine.bay
+    });
+    if(familiarity?.leveledUp){
+      say(`${employee.name}: ${familiarity.label} an ${catalog[machine.type]?.name||machine.type} · ${Math.floor(familiarity.workMinutes/60)} h Erfahrung.`);
+      save();
+    }
+    return familiarity;
+  }
+
   function tick(dt){
     if(state.paused)return;
     // Slice at minute boundaries so shift changes and month end are charged exactly once.
@@ -2974,6 +3005,8 @@
         if(m.operatorProgramming){
           const task=m.operatorProgramming;
           if(!state.paused&&shift&&m['operator'+shift]&&assignedEmployee(m,shift)&&breakdownSystem.canContinueProduction(state,m.bay)){
+            const programmingEmployee=assignedEmployee(m,shift);
+            recordEmployeeMachineWork(programmingEmployee,m,step,0);
             task.remainingMinutes=Math.max(0,task.remainingMinutes-step);
             if(task.remainingMinutes<=1e-8){
               completeNcProgram(task,'operator');m.operatorProgramming=null;
@@ -2997,6 +3030,7 @@
         book('energy',-power,'Stromkosten laufende Maschinen',{gameDate:dateKey},`daily:energy:${dateKey}`);
         state.energyPaid+=power;
         const employee=assignedEmployee(m,shift);
+        const producedBefore=Math.max(0,Number(m.produced)||0);
         const factor=productionFactor(m);
         let productionStep=step;
         if(m.setupRemainingMinutes>0){
@@ -3022,7 +3056,10 @@
           m.maintenance=Math.max(0,m.maintenance-gain*.12);
           m.tool=Math.max(0,m.tool-gain*.18*recruitmentSystem.toolWearMultiplier(employee));
         }
-        if(employee)employee.xp=Math.round((employee.xp+step*recruitmentSystem.learningMultiplier(employee))*1000)/1000;
+        if(employee){
+          employee.xp=Math.round((employee.xp+step*recruitmentSystem.learningMultiplier(employee))*1000)/1000;
+          recordEmployeeMachineWork(employee,m,step,Math.max(0,m.produced-producedBefore));
+        }
         if(m.progress>=100){
           if(m.qualityInspectedOrderId!==o.id){
             const riskPct=qualityRiskFor(m,o),defects=programmingQuality.defectParts(o,riskPct);
