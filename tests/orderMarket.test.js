@@ -152,6 +152,21 @@ test('customer reputation changes only once and affects future offers, not accep
   assert.ok(boosted.reward>=baseline.reward);
 });
 
+test('withdraws an accepted rush offer once and reverses the promise', () => {
+  const state=newState('rush-withdrawal');
+  const base=orderMarket.getAvailable(state)[0];
+  const rush={...base,id:'RUSH-WITHDRAW',isRushOrder:true,acceptedRushAt:state.gameMinutes};
+  assert.ok(orderMarket.acceptRushOffer(state,rush));
+  orderMarket.recordRushDecision(state,rush,true);
+  assert.equal(orderMarket.getReputation(state)[rush.customer],56);
+  assert.equal(orderMarket.withdrawRushOffer(state,base.id),null);
+  assert.equal(orderMarket.withdrawRushOffer(state,rush.id).id,rush.id);
+  assert.equal(orderMarket.getReputation(state)[rush.customer],40);
+  assert.equal(orderMarket.getAvailable(state).some(order=>order.id===rush.id),false);
+  assert.equal(orderMarket.withdrawRushOffer(state,rush.id),null);
+  assert.equal(orderMarket.getReputation(state)[rush.customer],40);
+});
+
 test('saved market reload preserves offers, counters, and random progression', () => {
   const original = newState('reload-seed');
   const originalIds = orderMarket.getAvailable(original).map(order => order.id);

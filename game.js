@@ -1967,6 +1967,13 @@
         });
         card.append(marketButton);
       }
+      if(o.isRushOrder&&Number.isFinite(o.acceptedRushAt)&&!running){
+        const withdraw=document.createElement('button');
+        withdraw.type='button';withdraw.className='action rush-withdraw-button';
+        withdraw.textContent='Zusage zurückziehen (−16 Kundenzufriedenheit)';
+        withdraw.addEventListener('click',event=>{event.stopPropagation();withdrawRushOrder(o.id);});
+        card.append(withdraw);
+      }
       button.textContent=running?'Bereits eingeplant':!state.machines.length?'Zuerst Maschine kaufen':!compatibleMachines.length?`Benötigt ${o.kind}`:shortage>1e-9?`Fehlen ${Math.ceil(shortage)} kg ${o.material}`:!machineReady?allQueuesFull?'Planung voll (3/3)':'Maschinenservice nötig':'Auftrag annehmen';
       button.disabled=!state.machines.length||!!running||!compatibleMachines.length||shortage>1e-9||!machineReady;
       button.addEventListener('click',event=>{event.stopPropagation();openOrderMachineChooser(o.id);});
@@ -2116,9 +2123,10 @@
     const box=$('warehouse-order-context');
     const snapshot=state.warehouseOrderSnapshot;
     const order=(snapshot&&orderMarketSystem.getAvailable(state).find(item=>item.id===snapshot.id))||snapshot;
-    if(!order){box.hidden=true;box.replaceChildren();return;}
+    if(!order){box.hidden=true;box.replaceChildren();$('drawer').classList.remove('warehouse-focus');return;}
     let title=box.querySelector('.warehouse-order-title'),details=box.querySelector('.warehouse-order-details');
     let back=box.querySelector('.warehouse-order-back'),accept=box.querySelector('.warehouse-order-accept'),stamp=box.querySelector('.expired-stamp');
+    let withdraw=box.querySelector('.warehouse-order-withdraw');
     if(!title){
       title=document.createElement('strong');title.className='warehouse-order-title';
       details=document.createElement('p');details.className='warehouse-order-details';
@@ -2128,9 +2136,12 @@
       back.addEventListener('click',()=>tab('orders'));
       accept=document.createElement('button');accept.type='button';accept.className='action warehouse-order-accept';accept.textContent='Auftrag annehmen';
       accept.addEventListener('click',acceptWarehouseOrder);
+      withdraw=document.createElement('button');withdraw.type='button';withdraw.className='action warehouse-order-withdraw';
+      withdraw.textContent='Zusage zurückziehen (−16 Kundenzufriedenheit)';
+      withdraw.addEventListener('click',()=>withdrawRushOrder(state.warehouseOrderSnapshot?.id));
       stamp=document.createElement('span');stamp.className='expired-stamp';stamp.setAttribute('aria-label','Angebot abgelaufen');
       stamp.innerHTML='<b>×</b><strong>ANGEBOT ABGELAUFEN</strong>';
-      backWrap.append(back,stamp);actions.append(backWrap,accept);box.append(title,details,actions);
+      backWrap.append(back,stamp);actions.append(backWrap,accept,withdraw);box.append(title,details,actions);
     }
     const required=materialSystem.requiredKg(order),available=materialSystem.available(state,order);
     const machine=state.machines.find(m=>m.activeId===order.id||m.orderQueue.some(entry=>entry.order.id===order.id));
@@ -2161,9 +2172,29 @@
       accept.disabled=!machineReady;
       accept.textContent=machineReady?'Auftrag annehmen':'Keine passende Maschine verfügbar';
     }
+    withdraw.hidden=!order.isRushOrder||!Number.isFinite(order.acceptedRushAt)||!offerAvailable||!!machine;
     accept.parentElement.classList.toggle('with-accept',!accept.hidden);
     box.hidden=false;
     $('drawer').classList.toggle('warehouse-focus',currentPanel==='warehouse');
+  }
+  function withdrawRushOrder(id){
+    const order=orderMarketSystem.getAvailable(state).find(item=>item.id===id);
+    if(!order||!order.isRushOrder||!Number.isFinite(order.acceptedRushAt)||
+      state.machines.some(machine=>machine.activeId===id||machine.orderQueue.some(entry=>entry.order.id===id))){
+      say('Dieser Eilauftrag kann nicht mehr zurückgezogen werden.');return false;
+    }
+    const withdrawn=orderMarketSystem.withdrawRushOffer(state,id);
+    if(!withdrawn)return false;
+    if(state.pendingRushAssignment?.orderId===id){
+      state.pendingRushAssignment=null;
+      state.paused=state.eventQueue.length>0;
+    }
+    if(state.warehouseOrderSnapshot?.id===id)state.warehouseOrderSnapshot=null;
+    if(state.selected===id)state.selected=null;
+    if(pendingOrderAssignmentId===id)closeOrderMachineChooser();
+    save();renderOrders();renderBusiness();render();renderMaterialPrice();
+    say(`Zusage für ${withdrawn.part} zurückgezogen. Kundenzufriedenheit bei ${withdrawn.customer} −16.${state.paused?' Das nächste Ereignis wartet.':' Das Spiel läuft weiter.'}`);
+    return true;
   }
   function acceptWarehouseOrder(){
     const id=state.warehouseOrderSnapshot?.id;
