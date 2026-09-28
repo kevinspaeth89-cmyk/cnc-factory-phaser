@@ -474,6 +474,17 @@
     return changeReputation(state, order.customer, accepted ? 6 : -10);
   }
 
+  function withdrawRushOffer(state, orderId) {
+    const market = ensureMarket(state);
+    const index = market.available.findIndex(order => order.id === orderId &&
+      order.isRushOrder && Number.isFinite(order.acceptedRushAt));
+    if (index < 0) return null;
+    const [order] = market.available.splice(index, 1);
+    // The original +6 for accepting is reversed, then the usual -10 for declining applies.
+    changeReputation(state, order.customer, -16);
+    return { ...order };
+  }
+
   function accept(state, orderId) {
     const market = ensureMarket(state);
     const index = market.available.findIndex(order => order.id === orderId && order.expiresAt > market.now);
@@ -539,6 +550,7 @@
     createRushOrder,
     acceptRushOffer,
     recordRushDecision,
+    withdrawRushOffer,
     onCompleted,
     adjustReputation: (state, customer, delta) => changeReputation(state, customer, delta),
     getReputation: state => ({ ...ensureReputation(state) }),
