@@ -77,13 +77,15 @@
     bay,type,purchasePrice:catalog[type].price,level:1,maintenance:90,maintenanceRemainingMinutes:0,tool:82,operator1:false,operator2:false,loadingRobot:false,robotFault:false,robotRepairRemainingMinutes:0,
     activeId:null,activeOrder:null,activeOrderSource:null,progress:0,produced:0,deadlineAt:null,
     setupDurationMinutes:0,setupRemainingMinutes:0,setupDelayMinutes:0,setupPartProduced:false,
-    orderQueue:[],suspendedOrder:null,operatorProgramming:null,qualityReworkQueue:[],qualityInspectedOrderId:null,ncProgramPending:false
+    orderQueue:[],suspendedOrder:null,operatorProgramming:null,qualityReworkQueue:[],qualityInspectedOrderId:null,
+    qualityInspectionOrderId:null,qualityInspectionRemainingMinutes:0,qualityInspectionTotalMinutes:0,qualityInspectionPolicy:null,ncProgramPending:false
   });
   const defaults = () => ({
     money:14000,material:0,capacity:300,staff:{shift1:0,shift2:0},
     machines:[],selectedBay:null,speed:1,paused:false,gameMinutes:0,completed:0,
     eventQueue:[],nextRushOrderAt:null,ncPrograms:{},programmer:{hired:false,active:null,queue:[]},pendingQualityComplaints:[],
-    qualityAssurance:{inspections:0,caughtDefects:0,escapedDefects:0},
+    qualityAssurance:{inspections:0,caughtDefects:0,escapedDefects:0,inspectionMinutes:0},
+    qualityPolicies:{shift1:'standard',shift2:'standard'},
     qualityStaff:{shift1:[],shift2:[]},
     payrollDue:0,wagesPaid:0,storagePaid:0,energyPaid:0,selected:null,selectedMaterialType:'c45',
     credit:{principal:0,originalAmount:0,annualRate:CREDIT_ANNUAL_RATE,paymentsRemaining:0,accruedInterest:0,nextPaymentAt:null,missedPayments:0},
@@ -109,7 +111,13 @@
       state.qualityAssurance={
         inspections:Math.max(0,Math.floor(Number(savedQualityAssurance.inspections)||0)),
         caughtDefects:Math.max(0,Math.floor(Number(savedQualityAssurance.caughtDefects)||0)),
-        escapedDefects:Math.max(0,Math.floor(Number(savedQualityAssurance.escapedDefects)||0))
+        escapedDefects:Math.max(0,Math.floor(Number(savedQualityAssurance.escapedDefects)||0)),
+        inspectionMinutes:Math.max(0,Number(savedQualityAssurance.inspectionMinutes)||0)
+      };
+      const savedQualityPolicies=stored.qualityPolicies&&typeof stored.qualityPolicies==='object'?stored.qualityPolicies:{};
+      state.qualityPolicies={
+        shift1:programmingQuality.inspectionPolicy(savedQualityPolicies.shift1).id,
+        shift2:programmingQuality.inspectionPolicy(savedQualityPolicies.shift2).id
       };
       const pendingRush=stored.pendingRushAssignment;
       state.pendingRushAssignment=pendingRush&&typeof pendingRush.orderId==='string'&&Number.isInteger(pendingRush.bay)&&pendingRush.bay>0
@@ -127,7 +135,11 @@
             setupRemainingMinutes:Math.max(0,Number(suspended.setupRemainingMinutes)||0),
             setupDelayMinutes:Math.max(0,Number(suspended.setupDelayMinutes)||0),
             setupPartProduced:!!suspended.setupPartProduced,ncProgramPending:!!suspended.ncProgramPending,
-            qualityInspectedOrderId:typeof suspended.qualityInspectedOrderId==='string'?suspended.qualityInspectedOrderId:null}:null;
+            qualityInspectedOrderId:typeof suspended.qualityInspectedOrderId==='string'?suspended.qualityInspectedOrderId:null,
+            qualityInspectionOrderId:typeof suspended.qualityInspectionOrderId==='string'?suspended.qualityInspectionOrderId:null,
+            qualityInspectionRemainingMinutes:Math.max(0,Number(suspended.qualityInspectionRemainingMinutes)||0),
+            qualityInspectionTotalMinutes:Math.max(0,Number(suspended.qualityInspectionTotalMinutes)||0),
+            qualityInspectionPolicy:programmingQuality.inspectionPolicy(suspended.qualityInspectionPolicy).id}:null;
         machine.ncProgramPending=hasProgramState?!!m.ncProgramPending:false;
         machine.robotFault=!!machine.loadingRobot&&!!machine.robotFault;
         machine.robotRepairRemainingMinutes=machine.loadingRobot?Math.max(0,Number(machine.robotRepairRemainingMinutes)||0):0;
@@ -135,6 +147,10 @@
         machine.operatorProgramming=m.operatorProgramming&&typeof m.operatorProgramming.key==='string'&&Number.isFinite(m.operatorProgramming.remainingMinutes)?m.operatorProgramming:null;
         machine.qualityReworkQueue=Array.isArray(m.qualityReworkQueue)?m.qualityReworkQueue.filter(task=>task&&typeof task.id==='string'&&Number.isFinite(task.remainingMinutes)):[];
         machine.qualityInspectedOrderId=typeof m.qualityInspectedOrderId==='string'?m.qualityInspectedOrderId:null;
+        machine.qualityInspectionOrderId=typeof m.qualityInspectionOrderId==='string'?m.qualityInspectionOrderId:null;
+        machine.qualityInspectionRemainingMinutes=Math.max(0,Number(m.qualityInspectionRemainingMinutes)||0);
+        machine.qualityInspectionTotalMinutes=Math.max(machine.qualityInspectionRemainingMinutes,Number(m.qualityInspectionTotalMinutes)||0);
+        machine.qualityInspectionPolicy=m.qualityInspectionOrderId?programmingQuality.inspectionPolicy(m.qualityInspectionPolicy).id:null;
         if(!hasProgramState&&machine.activeOrder){
           const key=programmingQuality.programKey(machine.activeOrder);
           if(key&&!state.ncPrograms[key])state.ncPrograms[key]={part:machine.activeOrder.part,kind:machine.activeOrder.kind,completedAt:state.gameMinutes,legacy:true};
@@ -556,7 +572,8 @@
     button.hidden=true;button.disabled=true;
   }
 
-  function qualityRiskFor(machine,order){
+  const qualityPolicyFor=shift=>programmingQuality.inspectionPolicy(state.qualityPolicies?.['shift'+(Number(shift)===2?2:1)]||'standard');
+  function qualityRiskFor(machine,order,policyId=null,inspectionShift=null){
     const shifts=[1,2].filter(shift=>machine['operator'+shift]);
     const employees=shifts.map(shift=>assignedEmployee(machine,shift)).filter(Boolean);
     const precision=employees.length?employees.reduce((sum,employee)=>sum+(Number(employee.skills?.precision)||5),0)/employees.length:5;
@@ -571,10 +588,12 @@
     const familiarityModifier=employees.length
       ? employees.reduce((sum,employee)=>sum+recruitmentSystem.familiarityQualityRiskModifier(employee,machine.type),0)/employees.length
       : 0;
-    const qs=qualityEmployee(shiftAt(state.gameMinutes));
+    const qsShift=inspectionShift||shiftAt(state.gameMinutes);
+    const qs=qualityEmployee(qsShift);
     const qsProcessModifier=programmingQuality.qualityProcessRiskModifier({
       hasQualityAssurance:!!qs,
-      precision:Number(qs?.skills?.precision)||5
+      precision:Number(qs?.skills?.precision)||5,
+      policy:policyId||qualityPolicyFor(qsShift||1).id
     });
     return Math.max(2,Math.min(28,Math.round(baseRisk+personalityModifier+familiarityModifier+qsProcessModifier)));
   }
@@ -630,6 +649,10 @@
     machine.setupPartProduced=false;
     machine.progress=0;
     machine.produced=0;
+    machine.qualityInspectionOrderId=null;
+    machine.qualityInspectionRemainingMinutes=0;
+    machine.qualityInspectionTotalMinutes=0;
+    machine.qualityInspectionPolicy=null;
     return {baseMinutes,delayMinutes,totalMinutes};
   }
   const orderProgressPercent=(machine,order)=>{
@@ -643,17 +666,23 @@
   };
   const remainingMinutes=(machine,order,factor=productionFactor(machine))=>{
     if(!machine||!order)return 0;
+    const activeInspection=Math.max(0,Number(machine.qualityInspectionRemainingMinutes)||0);
+    if(activeInspection>0)return activeInspection;
     const quantity=Math.max(1,Number(order.qty)||1);
     const productionProgress=machine.setupPartProduced
       ?machine.progress
       :Math.max(machine.progress,100/quantity);
     const setupRemaining=Math.max(0,Number(machine.setupRemainingMinutes)||0);
-    return programmingETA(order,machine)+setupRemaining+Math.max(0,(100-productionProgress)*order.duration*6/(100*factor));
+    const qsShift=[shiftAt(state.gameMinutes),1,2].find(candidate=>candidate&&qualityEmployee(candidate));
+    const inspection=qsShift?programmingQuality.inspectionMinutes({order,policy:qualityPolicyFor(qsShift).id}):0;
+    return programmingETA(order,machine)+setupRemaining+Math.max(0,(100-productionProgress)*order.duration*6/(100*factor))+inspection;
   };
   const plannedOrderMinutes=(machine,order,factor)=>{
     if(!order||!Number.isFinite(order.duration))return 0;
     const quantity=Math.max(1,Number(order.qty)||1);
-    return programmingETA(order,machine)+expectedSetupMinutes(machine,order)+Math.max(0,(quantity-1)/quantity)*order.duration*6/factor;
+    const qsShift=[1,2].find(candidate=>qualityEmployee(candidate));
+    const inspection=qsShift?programmingQuality.inspectionMinutes({order,policy:qualityPolicyFor(qsShift).id}):0;
+    return programmingETA(order,machine)+expectedSetupMinutes(machine,order)+Math.max(0,(quantity-1)/quantity)*order.duration*6/factor+inspection;
   };
   function scheduledWorkCompletionAt(machine,startAt,workMinutes,operatorOnly=false){
     if(!Number.isFinite(startAt)||!Number.isFinite(workMinutes))return Infinity;
@@ -786,7 +815,7 @@
     return `${day} ${date} · ${time}`;
   };
   const robotAvailable=m=>!!m?.loadingRobot&&!m.robotFault&&!(m.robotRepairRemainingMinutes>0);
-  const readyToRun=m=>!!job(m)&&programReady(job(m))&&!m.operatorProgramming&&!state.paused&&!(m.maintenanceRemainingMinutes>0)&&!!shiftAt(state.gameMinutes)&&
+  const readyToRun=m=>!!job(m)&&programReady(job(m))&&!m.operatorProgramming&&!state.paused&&!(m.maintenanceRemainingMinutes>0)&&!(m.qualityInspectionRemainingMinutes>0)&&!!shiftAt(state.gameMinutes)&&
     !!(m['operator'+shiftAt(state.gameMinutes)]||(shiftAt(state.gameMinutes)===2&&robotAvailable(m)))&&m.tool>=1&&m.maintenance>=8;
   const operating=m=>readyToRun(m)&&breakdownSystem.canContinueProduction(state,m.bay);
   const spareToolCount=m=>m?Math.max(0,Number(state.inventory?.tools?.[m.type])||0):0;
@@ -1385,7 +1414,8 @@
       machine.progress=remaining/quantity*100;
       machine.produced=remaining;
       machine.setupPartProduced=true;machine.setupRemainingMinutes=0;machine.setupDurationMinutes=0;machine.setupDelayMinutes=0;
-      machine.qualityInspectedOrderId=order.id;
+      machine.qualityInspectedOrderId=order.id;machine.qualityInspectionOrderId=null;machine.qualityInspectionRemainingMinutes=0;
+      machine.qualityInspectionTotalMinutes=0;machine.qualityInspectionPolicy=null;
       removeEvent(event);save();renderOrders();renderBusiness();render();
       say(`Qualitätsprüfung: ${event.defectParts} fehlerhafte Teile werden auf Platz ${machine.bay} für ${euro(cost)} nachgefertigt.`);
       return true;
@@ -1450,7 +1480,8 @@
     const interrupted=machine.suspendedOrder&&order?.isRushOrder?machine.suspendedOrder:null;
     machine.activeId=null;machine.activeOrder=null;machine.activeOrderSource=null;machine.progress=0;machine.produced=0;machine.deadlineAt=null;
     machine.setupDurationMinutes=0;machine.setupRemainingMinutes=0;machine.setupDelayMinutes=0;machine.setupPartProduced=false;
-    machine.ncProgramPending=false;machine.qualityInspectedOrderId=null;
+    machine.ncProgramPending=false;machine.qualityInspectedOrderId=null;machine.qualityInspectionOrderId=null;
+    machine.qualityInspectionRemainingMinutes=0;machine.qualityInspectionTotalMinutes=0;machine.qualityInspectionPolicy=null;
     let resumedSetup=null,resumed=false;
     if(interrupted){
       const saved=interrupted,restoredOrder=saved.order,alreadyProduced=!!saved.setupPartProduced||Number(saved.produced)>0;
@@ -1459,6 +1490,10 @@
       machine.progress=alreadyProduced?Math.max(0,Number(saved.progress)||0):0;
       machine.produced=Math.max(0,Number(saved.produced)||0);machine.setupPartProduced=alreadyProduced;
       machine.qualityInspectedOrderId=saved.qualityInspectedOrderId||null;
+      machine.qualityInspectionOrderId=saved.qualityInspectionOrderId||null;
+      machine.qualityInspectionRemainingMinutes=Math.max(0,Number(saved.qualityInspectionRemainingMinutes)||0);
+      machine.qualityInspectionTotalMinutes=Math.max(machine.qualityInspectionRemainingMinutes,Number(saved.qualityInspectionTotalMinutes)||0);
+      machine.qualityInspectionPolicy=machine.qualityInspectionOrderId?programmingQuality.inspectionPolicy(saved.qualityInspectionPolicy).id:null;
       machine.ncProgramPending=!programReady(restoredOrder)||!!saved.ncProgramPending;
       if(!machine.ncProgramPending){
         resumedSetup=beginMachineSetup(machine,restoredOrder);
@@ -1483,7 +1518,9 @@
     if(job(machine)||machine.qualityReworkQueue.length||!machine.orderQueue.length)return false;
     const next=machine.orderQueue.shift();
     machine.activeId=next.order.id;machine.activeOrder=next.order;machine.activeOrderSource='market';machine.deadlineAt=next.deadlineAt;
-    machine.progress=0;machine.produced=0;machine.qualityInspectedOrderId=null;machine.ncProgramPending=!programReady(next.order);
+    machine.progress=0;machine.produced=0;machine.qualityInspectedOrderId=null;machine.qualityInspectionOrderId=null;
+    machine.qualityInspectionRemainingMinutes=0;machine.qualityInspectionTotalMinutes=0;machine.qualityInspectionPolicy=null;
+    machine.ncProgramPending=!programReady(next.order);
     if(programReady(next.order))beginMachineSetup(machine,next.order);else scheduleActiveOrderProgramming(machine,next.order);
     reassessActiveProgrammingRoutes();
     save();renderOrders();return true;
@@ -1517,6 +1554,10 @@
     if(fault?.status==='warning')return fault.scheduledRepair?'Reparatur vorgemerkt':'Riskanter Betrieb';
     if(m.maintenance<8)return 'Wartung fällig';
     if(m.tool<1)return 'Werkzeug verschlissen';
+    if(job(m)&&m.qualityInspectionRemainingMinutes>0){
+      const inspectionShift=shiftAt(state.gameMinutes),qs=inspectionShift?qualityEmployee(inspectionShift):null;
+      return qs?`QS-Prüfung · ${formatMinutes(m.qualityInspectionRemainingMinutes)}`:`Wartet auf QS · ${formatMinutes(m.qualityInspectionRemainingMinutes)}`;
+    }
     if(!job(m)&&m.qualityReworkQueue.length)return `Ersatzcharge · ${formatMinutes(m.qualityReworkQueue[0].remainingMinutes)}`;
     if(!job(m))return 'Bereit';
     if(m.operatorProgramming)return `Bediener programmiert · ${formatMinutes(m.operatorProgramming.remainingMinutes)}`;
@@ -2613,13 +2654,14 @@
     panel.replaceChildren(title,list);panel.hidden=false;
   }
 
-  function qualityDetectionChance(machine,shift){
+  function qualityDetectionChance(machine,shift,policyId=null){
     const qs=qualityEmployee(shift),operator=machine?assignedEmployee(machine,shift):null;
     const person=qs||operator;
     return programmingQuality.inspectionDetectionChance({
       hasQualityAssurance:!!qs,
       precision:Number(person?.skills?.precision)||5,
-      trained:skillLevel(person)
+      trained:skillLevel(person),
+      policy:policyId||qualityPolicyFor(shift||1).id
     });
   }
 
@@ -2687,7 +2729,7 @@
     const intro=document.createElement('p');intro.className='hint';
     intro.textContent=`QS ist eine eigene Personalgruppe. Externe QS-Kräfte sind sofort qualifiziert. Ein Maschinenbediener kann befördert werden, benötigt dafür aber ${formatMinutes(QS_PROMOTION_TRAINING_MINUTES)} QS-Schulung für ${euro(QS_PROMOTION_TRAINING_COST)} und steht danach nicht mehr als Bediener zur Verfügung.`;
     const stats=document.createElement('p');stats.className='hint';
-    stats.textContent=`QS-Prüfungen ${state.qualityAssurance.inspections} · Fehlerteile abgefangen ${state.qualityAssurance.caughtDefects} · durch QS gerutscht ${state.qualityAssurance.escapedDefects}`;
+    stats.textContent=`QS-Prüfungen ${state.qualityAssurance.inspections} · Prüfzeit ${formatMinutes(state.qualityAssurance.inspectionMinutes)} · Fehlerteile abgefangen ${state.qualityAssurance.caughtDefects} · durch QS gerutscht ${state.qualityAssurance.escapedDefects}`;
     const rows=document.createElement('div');
 
     for(const shift of [1,2]){
@@ -2701,14 +2743,25 @@
         if(employee.qualityTrainingRemainingMinutes>0){
           small.textContent=`QS-Schulung läuft · noch ${formatMinutes(employee.qualityTrainingRemainingMinutes)} · danach ${qualityHourlyWage(employee,shift)} €/h`;
         }else{
-          small.textContent=`qualifiziert · Präzision ${employee.skills?.precision||5}/10 · ${Math.round(qualityDetectionChance(null,shift)*100)} % Entdeckung · ${qualityHourlyWage(employee,shift)} €/h`;
+          const policy=qualityPolicyFor(shift);
+          const minMinutes=programmingQuality.inspectionMinutes({order:{difficulty:1},policy:policy.id});
+          const maxMinutes=programmingQuality.inspectionMinutes({order:{difficulty:5},policy:policy.id});
+          small.textContent=`qualifiziert · Präzision ${employee.skills?.precision||5}/10 · ${policy.label} · ${Math.round(qualityDetectionChance(null,shift,policy.id)*100)} % Entdeckung · ${minMinutes}–${maxMinutes} min/Prüfung · ${qualityHourlyWage(employee,shift)} €/h`;
         }
       }else small.textContent='Nur Bediener-Endkontrolle aktiv';
       info.append(label,small);
       const actions=document.createElement('div');actions.className='actions';
       if(employee){
+        const policySelect=document.createElement('select');
+        policySelect.setAttribute('aria-label',`Prüfplan QS Schicht ${shift}`);
+        for(const policy of Object.values(programmingQuality.INSPECTION_POLICIES)){
+          const option=document.createElement('option');option.value=policy.id;option.textContent=policy.label;
+          option.selected=qualityPolicyFor(shift).id===policy.id;policySelect.append(option);
+        }
+        policySelect.disabled=employee.qualityTrainingRemainingMinutes>0;
+        policySelect.addEventListener('change',()=>{state.qualityPolicies['shift'+shift]=programmingQuality.inspectionPolicy(policySelect.value).id;save();renderQualityAssurance();});
         const dismiss=document.createElement('button');dismiss.type='button';dismiss.className='action danger';dismiss.textContent='QS entlassen';
-        dismiss.addEventListener('click',()=>dismissQualityEmployee(shift));actions.append(dismiss);
+        dismiss.addEventListener('click',()=>dismissQualityEmployee(shift));actions.append(policySelect,dismiss);
       }else{
         const promote=document.createElement('button');promote.type='button';promote.className='action';promote.textContent='Bediener befördern';
         promote.addEventListener('click',()=>{
@@ -3060,7 +3113,9 @@
     const interrupted=options.interrupt?{
       order:m.activeOrder,source:m.activeOrderSource,progress:m.progress,produced:m.produced,deadlineAt:m.deadlineAt,
       setupDurationMinutes:m.setupDurationMinutes,setupRemainingMinutes:m.setupRemainingMinutes,setupDelayMinutes:m.setupDelayMinutes,
-      setupPartProduced:m.setupPartProduced,ncProgramPending:m.ncProgramPending,qualityInspectedOrderId:m.qualityInspectedOrderId
+      setupPartProduced:m.setupPartProduced,ncProgramPending:m.ncProgramPending,qualityInspectedOrderId:m.qualityInspectedOrderId,
+      qualityInspectionOrderId:m.qualityInspectionOrderId,qualityInspectionRemainingMinutes:m.qualityInspectionRemainingMinutes,
+      qualityInspectionTotalMinutes:m.qualityInspectionTotalMinutes,qualityInspectionPolicy:m.qualityInspectionPolicy
     }:null;
     if(!options.automatic){closeOrderMachineChooser();state.selectedBay=m.bay;}
     if((job(m)&&!options.interrupt)||(!options.interrupt&&m.qualityReworkQueue.length)){
@@ -3077,7 +3132,8 @@
     }
     if(interrupted)m.suspendedOrder=interrupted;
     m.activeId=accepted.id;m.activeOrder=accepted;m.activeOrderSource='market';m.progress=0;m.produced=0;
-    m.ncProgramPending=!programReady(accepted);
+    m.qualityInspectedOrderId=null;m.qualityInspectionOrderId=null;m.qualityInspectionRemainingMinutes=0;
+    m.qualityInspectionTotalMinutes=0;m.qualityInspectionPolicy=null;m.ncProgramPending=!programReady(accepted);
     const setupPlan=programReady(accepted)?beginMachineSetup(m,accepted):null;
     if(m.ncProgramPending){scheduleActiveOrderProgramming(m,accepted);reassessActiveProgrammingRoutes();}
     m.deadlineAt=Number.isFinite(accepted.deadlineAt)?accepted.deadlineAt:state.gameMinutes+accepted.deadlineHours*60;
@@ -3334,6 +3390,34 @@
     return familiarity;
   }
 
+  function resolveCompletedOrderQuality(machine,order,inspectionShift,qsInspector=null,policyId=null){
+    const selectedPolicy=policyId||qualityPolicyFor(inspectionShift||1).id;
+    const riskPct=qualityRiskFor(machine,order,selectedPolicy,inspectionShift);
+    const defects=programmingQuality.defectParts(order,riskPct);
+    const detectionChance=qualityDetectionChance(machine,inspectionShift,selectedPolicy);
+    machine.qualityInspectedOrderId=order.id;
+    if(qsInspector){
+      state.qualityAssurance.inspections+=1;
+      qsInspector.xp=Math.round((qsInspector.xp+10*recruitmentSystem.learningMultiplier(qsInspector))*1000)/1000;
+    }
+    if(defects>0){
+      const detected=Math.random()<detectionChance;
+      if(detected){
+        if(qsInspector)state.qualityAssurance.caughtDefects+=defects;
+        const event={event:'quality_issue',id:`quality_issue:${order.id}`,bay:machine.bay,order:{...order},riskPct,defectParts:defects,
+          detectionChance,inspectedById:qsInspector?.id??null,inspectedByName:qsInspector?.name||null,
+          reworkCost:Math.max(250,Math.round(order.reward*defects/Math.max(1,order.qty)*.55)),createdAt:state.gameMinutes};
+        if(!state.eventQueue.some(item=>item.id===event.id))state.eventQueue.push(event);
+        state.paused=true;renderEventWindow();save();return 'paused';
+      }
+      if(qsInspector)state.qualityAssurance.escapedDefects+=defects;
+      finishOrder(machine,order,{defectParts:defects,riskPct,undetected:true},state.gameMinutes);
+      return 'finished';
+    }
+    finishOrder(machine,order,null,state.gameMinutes);
+    return 'finished';
+  }
+
   function tick(dt){
     if(state.paused)return;
     // Slice at minute boundaries so shift changes and month end are charged exactly once.
@@ -3381,6 +3465,7 @@
         }
       }
       if(!state.paused)tickProgrammer(step,shift);
+      const qualityInspectionWorked=new Set();
       for(const m of state.machines){
         if(m.operatorProgramming){
           const task=m.operatorProgramming;
@@ -3399,6 +3484,23 @@
         if(!job(m)&&m.orderQueue.length)startNextQueuedOrder(m);
         const o=job(m);
         if(!o)continue;
+        if(m.progress>=100&&m.qualityInspectionOrderId===o.id&&m.qualityInspectionRemainingMinutes>0){
+          const inspectionShift=shiftAt(state.gameMinutes);
+          const qsInspector=inspectionShift?qualityEmployee(inspectionShift):null;
+          if(!qsInspector)continue;
+          const capacityKey='shift'+inspectionShift;
+          if(qualityInspectionWorked.has(capacityKey))continue;
+          qualityInspectionWorked.add(capacityKey);
+          const inspectionStep=Math.min(step,m.qualityInspectionRemainingMinutes);
+          m.qualityInspectionRemainingMinutes=Math.max(0,m.qualityInspectionRemainingMinutes-inspectionStep);
+          state.qualityAssurance.inspectionMinutes+=inspectionStep;
+          qsInspector.xp=Math.round((qsInspector.xp+inspectionStep*recruitmentSystem.learningMultiplier(qsInspector))*1000)/1000;
+          if(m.qualityInspectionRemainingMinutes>1e-8)continue;
+          m.qualityInspectionRemainingMinutes=0;
+          resolveCompletedOrderQuality(m,o,inspectionShift,qsInspector,m.qualityInspectionPolicy);
+          if(state.paused)break;
+          continue;
+        }
         if(!programReady(o)){
           if(!m.operatorProgramming&&!programTaskFor(programKey(o)))scheduleActiveOrderProgramming(m,o);
           continue;
@@ -3441,32 +3543,26 @@
           recordEmployeeMachineWork(employee,m,step,Math.max(0,m.produced-producedBefore));
         }
         if(m.progress>=100){
-          if(m.qualityInspectedOrderId!==o.id){
-            const riskPct=qualityRiskFor(m,o),defects=programmingQuality.defectParts(o,riskPct);
-            const inspectionShift=shiftAt(state.gameMinutes)||shift;
-            const qsInspector=qualityEmployee(inspectionShift);
-            const detectionChance=qualityDetectionChance(m,inspectionShift);
-            if(qsInspector){
-              state.qualityAssurance.inspections+=1;
-              qsInspector.xp=Math.round((qsInspector.xp+10*recruitmentSystem.learningMultiplier(qsInspector))*1000)/1000;
-            }
-            if(defects>0){
-              m.qualityInspectedOrderId=o.id;
-              const detected=Math.random()<detectionChance;
-              if(detected){
-                if(qsInspector)state.qualityAssurance.caughtDefects+=defects;
-                const event={event:'quality_issue',id:`quality_issue:${o.id}`,bay:m.bay,order:{...o},riskPct,defectParts:defects,
-                  detectionChance,inspectedById:qsInspector?.id??null,inspectedByName:qsInspector?.name||null,
-                  reworkCost:Math.max(250,Math.round(o.reward*defects/Math.max(1,o.qty)*.55)),createdAt:state.gameMinutes+step};
-                if(!state.eventQueue.some(item=>item.id===event.id))state.eventQueue.push(event);
-                state.paused=true;renderEventWindow();save();break;
-              }
-              if(qsInspector)state.qualityAssurance.escapedDefects+=defects;
-              finishOrder(m,o,{defectParts:defects,riskPct,undetected:true},state.gameMinutes+step);
-              continue;
-            }
+          if(m.qualityInspectedOrderId===o.id){
+            finishOrder(m,o,null,state.gameMinutes+step);
+            continue;
           }
-          finishOrder(m,o,null,state.gameMinutes+step);
+          const inspectionShift=shiftAt(state.gameMinutes)||shift;
+          const qsInspector=qualityEmployee(inspectionShift);
+          if(qsInspector){
+            if(m.qualityInspectionOrderId!==o.id){
+              const policy=qualityPolicyFor(inspectionShift);
+              m.qualityInspectionOrderId=o.id;
+              m.qualityInspectionPolicy=policy.id;
+              m.qualityInspectionTotalMinutes=programmingQuality.inspectionMinutes({order:o,policy:policy.id});
+              m.qualityInspectionRemainingMinutes=m.qualityInspectionTotalMinutes;
+              say(`Platz ${m.bay}: Fertigung abgeschlossen · ${qsInspector.name} startet ${policy.label} (${formatMinutes(m.qualityInspectionTotalMinutes)}).`);
+            }
+            continue;
+          }
+          resolveCompletedOrderQuality(m,o,inspectionShift,null,null);
+          if(state.paused)break;
+          continue;
         }
       }
       state.gameMinutes+=step;left-=step;
