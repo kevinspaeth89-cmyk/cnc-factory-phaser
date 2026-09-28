@@ -143,6 +143,30 @@
     };
   }
 
+  function wageExpectation(skills, id = 1) {
+    const normalized = {
+      turning: clampSkill(skills?.turning),
+      milling: clampSkill(skills?.milling),
+      precision: clampSkill(skills?.precision),
+      learning: clampSkill(skills?.learning)
+    };
+    const values = Object.values(normalized);
+    const average = values.reduce((sum, value) => sum + value, 0) / values.length;
+    const strongestTechnical = Math.max(normalized.turning, normalized.milling);
+    // Kleine deterministische individuelle Streuung von -1 bis +1 €/h.
+    const personalVariance = ((Math.max(1, Number(id) || 1) * 7) % 3) - 1;
+    return clamp(Math.round(18 + average * 0.75 + strongestTechnical * 0.25 + normalized.precision * 0.15 + personalVariance), 20, 31);
+  }
+
+  function hourlyWage(person, shift = 1) {
+    const base = Number.isFinite(person?.baseHourlyWage)
+      ? clamp(Math.round(person.baseHourlyWage), 20, 31)
+      : person?.profileVersion === 0
+        ? 24
+        : wageExpectation(person?.skills, person?.id);
+    return base + (shift === 2 ? 2 : 0);
+  }
+
   function personalityIds(employee) {
     if (!employee || typeof employee !== 'object') return [];
     const traits = Array.isArray(employee.personality) && employee.personality.length
@@ -529,7 +553,7 @@
       precision: 1 + Math.floor(random() * 10),
       learning: 1 + Math.floor(random() * 10)
     };
-    return { id, name, gender, ...deriveProfile(skills), portrait: portraitFor(id, gender), skills };
+    return { id, name, gender, ...deriveProfile(skills), baseHourlyWage: wageExpectation(skills, id), portrait: portraitFor(id, gender), skills };
   }
 
   function validApplicant(value) {
@@ -563,6 +587,9 @@
         name,
         gender,
         ...deriveProfile(skills),
+        baseHourlyWage: Number.isFinite(candidate.baseHourlyWage)
+          ? clamp(Math.round(candidate.baseHourlyWage), 20, 31)
+          : wageExpectation(skills, candidate.id),
         portrait: portraitFor(candidate.id, gender),
         skills
       });
@@ -604,6 +631,9 @@
       assignedBay: null,
       machineHistory: {},
       memories: [],
+      baseHourlyWage: Number.isFinite(candidate.baseHourlyWage)
+        ? clamp(Math.round(candidate.baseHourlyWage), 20, 31)
+        : wageExpectation(candidate.skills, candidate.id),
       profileVersion: 2,
       name: candidate.name,
       gender,
@@ -619,6 +649,7 @@
     const gender = genderForName(name);
     return {
       profileVersion: 0,
+      baseHourlyWage: 24,
       name,
       gender,
       specialty: 'Altes Profil',
@@ -656,6 +687,11 @@
       assignedBay: Number.isInteger(entry?.assignedBay) ? entry.assignedBay : null,
       machineHistory: normalizeMachineHistory(entry?.machineHistory),
       memories: normalizeMemories(entry?.memories),
+      baseHourlyWage: Number.isFinite(entry?.baseHourlyWage)
+        ? clamp(Math.round(entry.baseHourlyWage), 20, 31)
+        : profile.profileVersion === 0
+          ? 24
+          : wageExpectation(skills, id),
       ...profile
     };
   }
@@ -683,6 +719,8 @@
     genderForName,
     portraitFor,
     ratingFromSkills,
+    wageExpectation,
+    hourlyWage,
     derivePersonality,
     personalityIds,
     qualityRiskModifier,
