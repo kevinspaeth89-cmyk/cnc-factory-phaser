@@ -11,6 +11,7 @@
   'use strict';
 
   const APPLICANT_COUNT = 3;
+  const QUALITY_APPLICANT_COUNT = 2;
   const FIRST_NAMES = Object.freeze({
     female: ['Mira', 'Elira', 'Vaska', 'Neris', 'Zora', 'Fenja', 'Sera', 'Liora', 'Yuna', 'Tyra'],
     male: ['Tarek', 'Joren', 'Kael', 'Orin', 'Tavik', 'Kiro', 'Bran', 'Darek', 'Aven', 'Eron']
@@ -72,6 +73,7 @@
     })
   });
   const LEGACY_NAMES = ['Mira Altspan', 'Tarek Stahlwind', 'Elira Kupferhand', 'Joren Maßstern', 'Vaska Spindelruh', 'Neris Werkfink', 'Kael Eisenherz', 'Zora Fräsborn'];
+  const QUALITY_PROFILE_VERSION = 1;
   const SKILL_SCALE = 2;
   const clampSkill = value => Number.isInteger(value) ? Math.min(10, Math.max(1, value)) : 1;
   const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
@@ -143,6 +145,63 @@
     };
   }
 
+  function deriveQualityProfile(qualitySkills) {
+    const normalized = {
+      measurement: clampSkill(qualitySkills?.measurement),
+      inspection: clampSkill(qualitySkills?.inspection),
+      analysis: clampSkill(qualitySkills?.analysis),
+      documentation: clampSkill(qualitySkills?.documentation)
+    };
+    const labels = {
+      measurement: ['Messtechnik', 'Messprofi', 'beherrscht Messmittel sicher und wählt passende Prüfmethoden'],
+      inspection: ['Prüfgenauigkeit', 'Maßwächter', 'arbeitet bei Prüfungen sehr genau und erkennt kleine Abweichungen'],
+      analysis: ['Fehleranalyse', 'Ursachenfinder', 'ordnet Abweichungen schnell ein und erkennt wiederkehrende Fehlerbilder'],
+      documentation: ['Dokumentation', 'Prüfplaner', 'dokumentiert Ergebnisse sauber und hält Prüfabläufe nachvollziehbar']
+    };
+    const order = ['measurement', 'inspection', 'analysis', 'documentation'];
+    const strongest = order.reduce((best, key) => normalized[key] > normalized[best] ? key : best, order[0]);
+    const average = order.reduce((sum, key) => sum + normalized[key], 0) / order.length;
+    const [label, trait, about] = labels[strongest];
+    return {
+      profileType: 'quality',
+      specialty: 'Qualitätssicherung',
+      trait,
+      about: 'Stärkster QS-Wert: ' + label + ' (' + normalized[strongest] + '/10) – ' + about + '.',
+      rating: clamp(Math.round(average), 1, 10),
+      qualityProfileVersion: QUALITY_PROFILE_VERSION,
+      qualitySkills: normalized,
+      skillScale: SKILL_SCALE
+    };
+  }
+
+  function qualityWageExpectation(qualitySkills, id = 1) {
+    const normalized = {
+      measurement: clampSkill(qualitySkills?.measurement),
+      inspection: clampSkill(qualitySkills?.inspection),
+      analysis: clampSkill(qualitySkills?.analysis),
+      documentation: clampSkill(qualitySkills?.documentation)
+    };
+    const average = Object.values(normalized).reduce((sum, value) => sum + value, 0) / 4;
+    const personalVariance = ((Math.max(1, Number(id) || 1) * 11) % 3) - 1;
+    return clamp(Math.round(20 + average * 0.85 + normalized.inspection * 0.2 + normalized.measurement * 0.15 + personalVariance), 23, 34);
+  }
+
+  function qualityInspectionPrecision(person) {
+    if (person?.profileType === 'quality' && person.qualitySkills) {
+      const measurement = clampSkill(person.qualitySkills.measurement);
+      const inspection = clampSkill(person.qualitySkills.inspection);
+      return clamp(Math.round(inspection * .65 + measurement * .35), 1, 10);
+    }
+    return clampSkill(person?.skills?.precision);
+  }
+
+  function qualityLearningMultiplier(person) {
+    if (person?.profileType === 'quality' && person.qualitySkills) {
+      return 0.8 + (clampSkill(person.qualitySkills.analysis) - 1) * (0.4 / 9);
+    }
+    return learningMultiplier(person);
+  }
+
   function wageExpectation(skills, id = 1) {
     const normalized = {
       turning: clampSkill(skills?.turning),
@@ -160,7 +219,7 @@
 
   function hourlyWage(person, shift = 1) {
     const base = Number.isFinite(person?.baseHourlyWage)
-      ? clamp(Math.round(person.baseHourlyWage), 20, 31)
+      ? clamp(Math.round(person.baseHourlyWage), person?.profileType === 'quality' ? 23 : 20, person?.profileType === 'quality' ? 34 : 31)
       : person?.profileVersion === 0
         ? 24
         : wageExpectation(person?.skills, person?.id);
@@ -538,6 +597,29 @@
     };
   }
 
+  function generateQualityApplicant(id) {
+    if (!Number.isInteger(id) || id < 1) return null;
+    const random = randomFor(id * 17 + 7001);
+    const gender = random() < 0.5 ? 'female' : 'male';
+    const firstNames = FIRST_NAMES[gender];
+    const name = firstNames[Math.floor(random() * firstNames.length)] + ' ' + FAMILY_NAMES[Math.floor(random() * FAMILY_NAMES.length)];
+    const qualitySkills = {
+      measurement: 3 + Math.floor(random() * 8),
+      inspection: 3 + Math.floor(random() * 8),
+      analysis: 2 + Math.floor(random() * 9),
+      documentation: 2 + Math.floor(random() * 9)
+    };
+    const profile = deriveQualityProfile(qualitySkills);
+    return {
+      id,
+      name,
+      gender,
+      ...profile,
+      baseHourlyWage: qualityWageExpectation(qualitySkills, id),
+      portrait: portraitFor(id, gender)
+    };
+  }
+
   function generateApplicant(id) {
     if (!Number.isInteger(id) || id < 1) return null;
     const random = randomFor(id);
@@ -556,6 +638,13 @@
     return { id, name, gender, ...deriveProfile(skills), baseHourlyWage: wageExpectation(skills, id), portrait: portraitFor(id, gender), skills };
   }
 
+  function validQualityApplicant(value) {
+    return value && Number.isInteger(value.id) && value.id > 0 &&
+      typeof value.name === 'string' && value.name.trim().length > 0 &&
+      value.qualitySkills && ['measurement', 'inspection', 'analysis', 'documentation'].every(key =>
+        Number.isInteger(value.qualitySkills[key]) && value.qualitySkills[key] >= 1 && value.qualitySkills[key] <= 10);
+  }
+
   function validApplicant(value) {
     return value && Number.isInteger(value.id) && value.id > 0 &&
       typeof value.name === 'string' && value.name.trim().length > 0 &&
@@ -569,6 +658,7 @@
       ? state.recruitment
       : {};
     const applicants = [];
+    const qualityApplicants = [];
     const seen = new Set();
     for (const candidate of Array.isArray(old.applicants) ? old.applicants : []) {
       if (!validApplicant(candidate) || seen.has(candidate.id) || applicants.length >= APPLICANT_COUNT) continue;
@@ -595,7 +685,30 @@
       });
       seen.add(candidate.id);
     }
-    const largestId = applicants.reduce((max, candidate) => Math.max(max, candidate.id), 0);
+    for (const candidate of Array.isArray(old.qualityApplicants) ? old.qualityApplicants : []) {
+      if (!validQualityApplicant(candidate) || seen.has(candidate.id) || qualityApplicants.length >= QUALITY_APPLICANT_COUNT) continue;
+      const generated = generateQualityApplicant(candidate.id);
+      const qualitySkills = {
+        measurement: clampSkill(candidate.qualitySkills.measurement),
+        inspection: clampSkill(candidate.qualitySkills.inspection),
+        analysis: clampSkill(candidate.qualitySkills.analysis),
+        documentation: clampSkill(candidate.qualitySkills.documentation)
+      };
+      const name = candidate.name.trim().slice(0, 80);
+      const gender = genderForName(name) || (candidate.gender === 'female' || candidate.gender === 'male' ? candidate.gender : generated.gender);
+      qualityApplicants.push({
+        ...generated,
+        name,
+        gender,
+        ...deriveQualityProfile(qualitySkills),
+        baseHourlyWage: Number.isFinite(candidate.baseHourlyWage)
+          ? clamp(Math.round(candidate.baseHourlyWage), 23, 34)
+          : qualityWageExpectation(qualitySkills, candidate.id),
+        portrait: portraitFor(candidate.id, gender)
+      });
+      seen.add(candidate.id);
+    }
+    const largestId = [...applicants, ...qualityApplicants].reduce((max, candidate) => Math.max(max, candidate.id), 0);
     let nextId = Number.isInteger(old.nextId) && old.nextId > largestId ? old.nextId : largestId + 1;
     while (applicants.length < APPLICANT_COUNT) {
       if (!seen.has(nextId)) {
@@ -604,7 +717,14 @@
       }
       nextId += 1;
     }
-    state.recruitment = { applicants, nextId };
+    while (qualityApplicants.length < QUALITY_APPLICANT_COUNT) {
+      if (!seen.has(nextId)) {
+        qualityApplicants.push(generateQualityApplicant(nextId));
+        seen.add(nextId);
+      }
+      nextId += 1;
+    }
+    state.recruitment = { applicants, qualityApplicants, nextId };
     return { ok: true, value: state.recruitment };
   }
 
@@ -619,6 +739,57 @@
       state.recruitment.nextId += 1;
     }
     return { ...candidate, skills: { ...candidate.skills } };
+  }
+
+  function takeQualityApplicant(state, id) {
+    const ensured = ensureState(state);
+    if (!ensured.ok || !Number.isInteger(id)) return null;
+    const index = state.recruitment.qualityApplicants.findIndex(candidate => candidate.id === id);
+    if (index < 0) return null;
+    const [candidate] = state.recruitment.qualityApplicants.splice(index, 1);
+    const used = new Set([
+      ...state.recruitment.applicants.map(person => person.id),
+      ...state.recruitment.qualityApplicants.map(person => person.id)
+    ]);
+    while (state.recruitment.qualityApplicants.length < QUALITY_APPLICANT_COUNT) {
+      while (used.has(state.recruitment.nextId)) state.recruitment.nextId += 1;
+      state.recruitment.qualityApplicants.push(generateQualityApplicant(state.recruitment.nextId));
+      used.add(state.recruitment.nextId);
+      state.recruitment.nextId += 1;
+    }
+    return { ...candidate, qualitySkills: { ...candidate.qualitySkills } };
+  }
+
+  function createQualityEmployee(candidate, id) {
+    if (!validQualityApplicant(candidate) || !Number.isInteger(id) || id < 1) return null;
+    const gender = genderForName(candidate.name) || (candidate.gender === 'female' || candidate.gender === 'male' ? candidate.gender : null);
+    const profile = deriveQualityProfile(candidate.qualitySkills);
+    return {
+      id,
+      xp: 0,
+      trained: 0,
+      assignedBay: null,
+      assignedRole: null,
+      machineHistory: {},
+      memories: [],
+      baseHourlyWage: Number.isFinite(candidate.baseHourlyWage)
+        ? clamp(Math.round(candidate.baseHourlyWage), 23, 34)
+        : qualityWageExpectation(candidate.qualitySkills, candidate.id),
+      profileVersion: 2,
+      profileType: 'quality',
+      name: candidate.name,
+      gender,
+      ...profile,
+      portrait: portraitFor(id, gender),
+      // Compatibility values for existing persistence/XP helpers. QS UI and
+      // gameplay use qualitySkills, never turning/milling.
+      skills: {
+        turning: 1,
+        milling: 1,
+        precision: qualityInspectionPrecision(profile),
+        learning: clampSkill(candidate.qualitySkills.analysis)
+      }
+    };
   }
 
   function createEmployee(candidate, id) {
@@ -681,6 +852,9 @@
       portrait: portraitFor(id, genderForName(entry.name) || (entry.gender === 'female' || entry.gender === 'male' ? entry.gender : null)),
       skills
     } : legacy;
+    const qualityProfile = entry?.profileType === 'quality' && entry?.qualitySkills
+      ? deriveQualityProfile(entry.qualitySkills)
+      : null;
     return {
       id,
       xp: Number.isFinite(entry?.xp) ? Math.max(0, entry.xp) : 0,
@@ -690,11 +864,14 @@
       machineHistory: normalizeMachineHistory(entry?.machineHistory),
       memories: normalizeMemories(entry?.memories),
       baseHourlyWage: Number.isFinite(entry?.baseHourlyWage)
-        ? clamp(Math.round(entry.baseHourlyWage), 20, 31)
-        : profile.profileVersion === 0
-          ? 24
-          : wageExpectation(skills, id),
-      ...profile
+        ? clamp(Math.round(entry.baseHourlyWage), qualityProfile ? 23 : 20, qualityProfile ? 34 : 31)
+        : qualityProfile
+          ? qualityWageExpectation(qualityProfile.qualitySkills, id)
+          : profile.profileVersion === 0
+            ? 24
+            : wageExpectation(skills, id),
+      ...profile,
+      ...(qualityProfile || {})
     };
   }
 
@@ -716,11 +893,16 @@
 
   return {
     APPLICANT_COUNT,
+    QUALITY_APPLICANT_COUNT,
     PORTRAIT_COUNT,
     MAX_MEMORIES,
     genderForName,
     portraitFor,
     ratingFromSkills,
+    deriveQualityProfile,
+    qualityWageExpectation,
+    qualityInspectionPrecision,
+    qualityLearningMultiplier,
     wageExpectation,
     hourlyWage,
     derivePersonality,
@@ -744,8 +926,11 @@
     deriveProfile,
     ensureState,
     generateApplicant,
+    generateQualityApplicant,
     takeApplicant,
+    takeQualityApplicant,
     createEmployee,
+    createQualityEmployee,
     legacyProfile,
     normalizeEmployee,
     productionMultiplier,
