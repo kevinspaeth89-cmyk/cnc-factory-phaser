@@ -1078,7 +1078,7 @@
     return changed;
   }
   const conditionLabel=value=>value>0&&value<1?'<1 %':Math.round(value)+' %';
-  let visual=null, currentPanel=null, businessSection='factory', messageTimer, zoomTimer, phaserGame=null, hallPreviewBay=null, employeeCardContext=null, employeeRemarkState=new Map(), employeeRemarkHistory=[], shiftLeaderPanelShift=1, shiftLeaderAdviceKey='', operatorPickerShift=null, dismissalPickerShift=null, qualityPickerShift=null, rushWorkMode='regular', rushWorkModeEventId=null;
+  let visual=null, currentPanel=null, businessSection='factory', messageTimer, zoomTimer, phaserGame=null, hallPreviewBay=null, employeeCardContext=null, employeeRemarkState=new Map(), employeeRemarkHistory=[], employeeShiftRemarkKeys=new Set(), shiftLeaderPanelShift=1, shiftLeaderAdviceKey='', operatorPickerShift=null, dismissalPickerShift=null, qualityPickerShift=null, rushWorkMode='regular', rushWorkModeEventId=null;
   function say(message){
     $('message').textContent=message;
     clearTimeout(messageTimer);
@@ -2409,13 +2409,102 @@
     employeeRemarkHistory=employeeRemarkHistory.slice(0,EMPLOYEE_REMARK_HISTORY_LIMIT);
     renderEmployeeRemarkHistory();
   }
+  function queueEmployeeRemark(employee,machine,text){
+    if(!employee||!text)return false;
+    pushEmployeeRemarkHistory(employee,text);
+    if(!machine)return true;
+    const key=machine.bay+':'+employee.id;
+    const entry=employeeRemarkState.get(key)||{text:'',expiresAt:0,nextAllowedAt:0,lastTriggerKey:'',pendingText:''};
+    if(entry.text===text&&entry.expiresAt>Date.now())return true;
+    entry.pendingText=text;
+    employeeRemarkState.set(key,entry);
+    return true;
+  }
+  function reactionTarget(subjectMachine=null,preferredEmployee=null){
+    if(preferredEmployee){
+      const assigned=Number.isInteger(preferredEmployee.assignedBay)?machineAt(preferredEmployee.assignedBay):null;
+      return {employee:preferredEmployee,machine:assigned||subjectMachine};
+    }
+    const currentShift=shiftAt(state.gameMinutes);
+    if(subjectMachine&&currentShift){
+      const direct=assignedEmployee(subjectMachine,currentShift);
+      if(direct)return {employee:direct,machine:subjectMachine};
+    }
+    if(currentShift){
+      for(const machine of state.machines){
+        const employee=assignedEmployee(machine,currentShift);
+        if(employee&&job(machine))return {employee,machine};
+      }
+    }
+    for(const shift of [1,2]){
+      for(const employee of state.staffRoster['shift'+shift]||[]){
+        if(!Number.isInteger(employee.assignedBay))continue;
+        const machine=machineAt(employee.assignedBay);
+        if(machine)return {employee,machine};
+      }
+    }
+    return null;
+  }
+  function queueDecisionReaction(eventType,{subjectMachine=null,employee=null,part='',shift=null}={}){
+    if(typeof recruitmentSystem.eventRemark!=='function')return false;
+    const target=reactionTarget(subjectMachine,employee);
+    if(!target?.employee)return false;
+    const remark=recruitmentSystem.eventRemark(target.employee,eventType,{
+      timeBucket:Math.floor(state.gameMinutes/20),
+      machineType:subjectMachine?.type||target.machine?.type||eventType,
+      machineName:subjectMachine?catalog[subjectMachine.type]?.name:target.machine?catalog[target.machine.type]?.name:'',
+      part,
+      shift:shift||shiftAt(state.gameMinutes)||1
+    });
+    return queueEmployeeRemark(target.employee,target.machine,remark);
+  }
+  function maybeQueueShiftMomentRemark(){
+    if(typeof recruitmentSystem.eventRemark!=='function')return;
+    const d=dateAt(state.gameMinutes),weekday=d.getUTCDay();
+    if(weekday===0||weekday===6)return;
+    const minuteOfDay=d.getUTCHours()*60+d.getUTCMinutes();
+    const moments=[
+      {shift:1,phase:'shift_start',from:360,to:365},
+      {shift:1,phase:'shift_end',from:830,to:835},
+      {shift:2,phase:'shift_start',from:840,to:845},
+      {shift:2,phase:'shift_end',from:1310,to:1315}
+    ];
+    const dateKey=gameDateKey();
+    for(const moment of moments){
+      if(minuteOfDay<moment.from||minuteOfDay>=moment.to)continue;
+      const key=dateKey+':'+moment.shift+':'+moment.phase;
+      if(employeeShiftRemarkKeys.has(key))continue;
+      employeeShiftRemarkKeys.add(key);
+      const candidates=(state.staffRoster['shift'+moment.shift]||[]).map(employee=>({employee,machine:Number.isInteger(employee.assignedBay)?machineAt(employee.assignedBay):null}))
+        .filter(item=>item.machine&&item.machine['operator'+moment.shift]&&job(item.machine));
+      if(!candidates.length)continue;
+      const daySeed=Math.floor(state.gameMinutes/1440)+moment.shift*17+(moment.phase==='shift_end'?11:3);
+      if(Math.abs(daySeed)%3===0)continue;
+      const target=candidates[Math.abs(daySeed)%candidates.length];
+      const remark=recruitmentSystem.eventRemark(target.employee,moment.phase,{
+        shift:moment.shift,
+        timeBucket:Math.floor(state.gameMinutes/20),
+        machineType:target.machine.type,
+        machineName:catalog[target.machine.type]?.name||''
+      });
+      queueEmployeeRemark(target.employee,target.machine,remark);
+    }
+  }
   function hallEmployeeRemark(machine,employee){
     if(!machine||!employee||typeof recruitmentSystem.workRemark!=='function')return '';
     const key=machine.bay+':'+employee.id;
     const now=Date.now();
-    const entry=employeeRemarkState.get(key)||{text:'',expiresAt:0,nextAllowedAt:0,lastTriggerKey:''};
+    const entry=employeeRemarkState.get(key)||{text:'',expiresAt:0,nextAllowedAt:0,lastTriggerKey:'',pendingText:''};
     if(entry.text&&entry.expiresAt>now)return entry.text;
     if(entry.text&&entry.expiresAt<=now)entry.text='';
+    if(entry.pendingText&&!$('hall-view').hidden){
+      entry.text=entry.pendingText;
+      entry.pendingText='';
+      entry.expiresAt=now+EMPLOYEE_REMARK_VISIBLE_MS;
+      entry.nextAllowedAt=now+EMPLOYEE_REMARK_COOLDOWN_MS;
+      employeeRemarkState.set(key,entry);
+      return entry.text;
+    }
 
     const importance=employeeRemarkImportance(machine);
     if(state.speed>=5&&importance==='casual'){
