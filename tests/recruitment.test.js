@@ -258,3 +258,129 @@ test('employee normalization preserves machine-type experience in saved games', 
   assert.equal(normalized.machineHistory.standard.machineType, 'standard');
   assert.equal(normalized.machineHistory.standard.lastBay, 8);
 });
+
+test('employee memories keep only five important entries and merge repeats', () => {
+  const employee = {
+    profileVersion: 2,
+    name: 'Mira Test',
+    skills: { turning: 8, milling: 4, precision: 9, learning: 9 },
+    memories: []
+  };
+
+  recruitment.recordMemory(employee, {
+    id: 'machine_incident:standard:sensor_error:repairSelf',
+    type: 'machine_incident',
+    machineType: 'standard',
+    machineName: 'Nexora NX-350',
+    fault: 'sensor_error',
+    faultLabel: 'Sensorfehler',
+    action: 'repairSelf',
+    importance: 6,
+    gameMinutes: 100,
+    bay: 2
+  });
+  recruitment.recordMemory(employee, {
+    id: 'machine_incident:standard:sensor_error:repairSelf',
+    type: 'machine_incident',
+    machineType: 'standard',
+    machineName: 'Nexora NX-350',
+    fault: 'sensor_error',
+    faultLabel: 'Sensorfehler',
+    action: 'repairSelf',
+    importance: 7,
+    gameMinutes: 200,
+    bay: 7
+  });
+
+  assert.equal(employee.memories.length, 1);
+  assert.equal(employee.memories[0].count, 2);
+  assert.equal(employee.memories[0].lastBay, 7);
+  assert.equal(employee.memories[0].importance, 7);
+
+  for (let i = 0; i < 7; i += 1) {
+    recruitment.recordMemory(employee, {
+      id: 'event:' + i,
+      type: 'event',
+      machineType: i % 2 ? 'rapid' : 'standard',
+      machineName: i % 2 ? 'Nexora NX-420' : 'Nexora NX-350',
+      importance: i + 1,
+      gameMinutes: 300 + i
+    });
+  }
+
+  assert.equal(employee.memories.length, recruitment.MAX_MEMORIES);
+  assert.equal(Math.min(...employee.memories.map(memory => memory.importance)), 4);
+});
+
+test('breakdown advice recalls a concrete prior event on the same machine type', () => {
+  const employee = {
+    profileVersion: 2,
+    name: 'Mira Test',
+    skills: { turning: 8, milling: 4, precision: 9, learning: 9 },
+    personality: recruitment.derivePersonality({ turning: 8, milling: 4, precision: 9, learning: 9 }),
+    machineHistory: {},
+    memories: []
+  };
+
+  recruitment.recordMemory(employee, {
+    id: 'machine_incident:standard:sensor_error:repairSelf',
+    type: 'machine_incident',
+    machineType: 'standard',
+    machineName: 'Nexora NX-350',
+    fault: 'sensor_error',
+    faultLabel: 'Sensorfehler',
+    action: 'repairSelf',
+    importance: 6,
+    gameMinutes: 100,
+    bay: 2
+  });
+
+  const sameType = recruitment.breakdownAdvice(employee, 'warning', {
+    machineType: 'standard',
+    machineName: 'Nexora NX-350',
+    fault: 'sensor_error'
+  });
+  assert.match(sameType.text, /letzten Sensorfehler/);
+  assert.match(sameType.text, /selbst nachgesehen/);
+
+  const otherType = recruitment.breakdownAdvice(employee, 'warning', {
+    machineType: 'rapid',
+    machineName: 'Nexora NX-420',
+    fault: 'sensor_error'
+  });
+  assert.doesNotMatch(otherType.text, /letzten Sensorfehler/);
+});
+
+test('risky escalation becomes a high-priority memory with a clear later warning', () => {
+  const employee = {
+    profileVersion: 2,
+    name: 'Tarek Test',
+    skills: { turning: 7, milling: 3, precision: 2, learning: 2 },
+    personality: recruitment.derivePersonality({ turning: 7, milling: 3, precision: 2, learning: 2 }),
+    memories: []
+  };
+
+  recruitment.recordMemory(employee, {
+    id: 'major_failure:standard:tool_break:after_risky',
+    type: 'major_failure',
+    machineType: 'standard',
+    machineName: 'Nexora NX-350',
+    fault: 'tool_break',
+    faultLabel: 'Werkzeugbruch erkannt',
+    outcome: 'after_risky',
+    importance: 10,
+    gameMinutes: 700,
+    bay: 5
+  });
+
+  const memory = recruitment.latestMachineMemory(employee, 'standard', 'tool_break');
+  assert.equal(memory.importance, 10);
+  assert.match(recruitment.memoryTitle(memory), /eskaliert/);
+
+  const advice = recruitment.breakdownAdvice(employee, 'warning', {
+    machineType: 'standard',
+    machineName: 'Nexora NX-350',
+    fault: 'tool_break'
+  });
+  assert.match(advice.text, /weitergefahren und sie ist eskaliert/);
+});
