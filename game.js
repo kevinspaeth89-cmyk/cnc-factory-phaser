@@ -1360,7 +1360,7 @@
     const qualityShift=shiftAt(state.gameMinutes);
     const qualityOperator=qualityShift?assignedEmployee(machine,qualityShift):null;
     const qualityInspector=event.inspectedById
-      ?(state.staffRoster['shift'+qualityShift]||[]).find(person=>person.id===event.inspectedById)||null
+      ?(state.qualityStaff?.['shift'+qualityShift]||[]).find(person=>person.id===event.inspectedById)||null
       :null;
     const qualityWitness=qualityInspector||qualityOperator;
     if(qualityWitness){
@@ -2762,7 +2762,7 @@
   function renderBusiness(){
     const m=selectedMachine();
     const limit=expansionSystem.getUnlockedBays(state),nextCost=expansionSystem.getExpansionCost(state);
-    $('staff-summary').textContent=`S1: ${state.staff.shift1} · S2: ${state.staff.shift2} · ${state.machines.length}/${limit} Maschinen`;
+    $('staff-summary').textContent=`S1 Bediener: ${state.staff.shift1} · QS: ${state.qualityStaff.shift1.length} · S2 Bediener: ${state.staff.shift2} · QS: ${state.qualityStaff.shift2.length} · ${state.machines.length}/${limit} Maschinen`;
     $('business-storage-summary').textContent=`${Math.floor(state.material)} / ${state.capacity} kg belegt`;
     $('expansion-info').textContent=nextCost===null?'8 / 8 Plätze · Maximale Hallengröße erreicht':`Level ${state.factoryExpansion.level} · ${limit} Plätze → ${limit+2} Plätze · ${euro(nextCost)}`;
     $('expand-factory').hidden=nextCost===null;
@@ -2775,7 +2775,8 @@
       $('fire-'+shift).disabled=state.staff['shift'+shift]<=0;
       $('free-'+shift).textContent=`${(state.staffRoster['shift'+shift]||[]).filter(employee=>employeeIsFree(employee)).length} frei`;
       const wageLabel=$('shift-wage-'+shift);
-      if(wageLabel)wageLabel.textContent=state.staff['shift'+shift]?`${shiftHourlyPayroll(shift)} €/h gesamt`:'noch niemand eingestellt';
+      const headcount=state.staff['shift'+shift]+(state.qualityStaff?.['shift'+shift]?.length||0);
+      if(wageLabel)wageLabel.textContent=headcount?`${shiftHourlyPayroll(shift)} €/h gesamt`:'noch niemand eingestellt';
     }
     renderStaffDevelopment();
     renderQualityAssurance();
@@ -3345,7 +3346,22 @@
       if(state.programmer.hired&&shift===1)state.payrollDue+=PROGRAMMER_HOURLY_WAGE*step/60;
       const leader=shiftLeaderFor(shift);
       if(shift&&leader?.hired)state.payrollDue+=SHIFT_LEADER_HOURLY_WAGE*step/60;
-      if(shift){for(const machine of state.machines)autoReplaceWornTool(machine,shift);runShiftLeaderAutomation(shift);}
+      if(shift){
+        for(const trainee of state.qualityStaff?.['shift'+shift]||[]){
+          if(!(trainee.qualityTrainingRemainingMinutes>0))continue;
+          const beforeTraining=trainee.qualityTrainingRemainingMinutes;
+          trainee.qualityTrainingRemainingMinutes=Math.max(0,beforeTraining-step);
+          if(beforeTraining>0&&trainee.qualityTrainingRemainingMinutes<=1e-8){
+            trainee.qualityTrainingRemainingMinutes=0;
+            trainee.qualityCertified=true;
+            trainee.xp=Math.round((trainee.xp+120*recruitmentSystem.learningMultiplier(trainee))*1000)/1000;
+            say(`${trainee.name}: QS-Schulung abgeschlossen · jetzt als QS in Schicht ${shift} einsatzbereit.`);
+            save();
+          }
+        }
+        for(const machine of state.machines)autoReplaceWornTool(machine,shift);
+        runShiftLeaderAutomation(shift);
+      }
       const storageCharge=state.material*STORAGE_RATE*step/1440;
       if(storageCharge>0){
         const dateKey=gameDateKey();
