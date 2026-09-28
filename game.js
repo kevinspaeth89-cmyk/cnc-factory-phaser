@@ -80,6 +80,7 @@
     money:14000,material:0,capacity:300,staff:{shift1:0,shift2:0},
     machines:[],selectedBay:null,speed:1,paused:false,gameMinutes:0,completed:0,
     eventQueue:[],nextRushOrderAt:null,ncPrograms:{},programmer:{hired:false,active:null,queue:[]},pendingQualityComplaints:[],
+    qualityAssurance:{inspections:0,caughtDefects:0,escapedDefects:0},
     payrollDue:0,wagesPaid:0,storagePaid:0,energyPaid:0,selected:null,selectedMaterialType:'c45',
     credit:{principal:0,originalAmount:0,annualRate:CREDIT_ANNUAL_RATE,paymentsRemaining:0,accruedInterest:0,nextPaymentAt:null,missedPayments:0},
     recruitment:{applicants:[],nextId:1},
@@ -100,6 +101,12 @@
       state.programmer={hired:!!savedProgrammer.hired,active:savedProgrammer.active&&typeof savedProgrammer.active.key==='string'?savedProgrammer.active:null,
         queue:Array.isArray(savedProgrammer.queue)?savedProgrammer.queue.filter(task=>task&&typeof task.key==='string'&&Number.isFinite(task.remainingMinutes)&&Number.isFinite(task.totalMinutes)):[]};
       state.pendingQualityComplaints=Array.isArray(stored.pendingQualityComplaints)?stored.pendingQualityComplaints.filter(item=>item&&typeof item.id==='string'&&Number.isFinite(item.dueAt)&&item.order&&typeof item.order.id==='string'):[];
+      const savedQualityAssurance=stored.qualityAssurance&&typeof stored.qualityAssurance==='object'?stored.qualityAssurance:{};
+      state.qualityAssurance={
+        inspections:Math.max(0,Math.floor(Number(savedQualityAssurance.inspections)||0)),
+        caughtDefects:Math.max(0,Math.floor(Number(savedQualityAssurance.caughtDefects)||0)),
+        escapedDefects:Math.max(0,Math.floor(Number(savedQualityAssurance.escapedDefects)||0))
+      };
       const pendingRush=stored.pendingRushAssignment;
       state.pendingRushAssignment=pendingRush&&typeof pendingRush.orderId==='string'&&Number.isInteger(pendingRush.bay)&&pendingRush.bay>0
         ?{orderId:pendingRush.orderId,bay:pendingRush.bay,interrupt:!!pendingRush.interrupt}:null;
@@ -238,12 +245,18 @@
         used.add(roster.nextId);
         roster[key].push(recruitmentSystem.normalizeEmployee(null,roster.nextId++));
       }
+      let qualityRoleTaken=false;
       for(const employee of roster[key]){
+        if(employee.assignedRole==='quality'){
+          if(qualityRoleTaken)employee.assignedRole=null;
+          else qualityRoleTaken=true;
+        }
         if(!state.machines.some(m=>m.bay===employee.assignedBay&&m['operator'+shift]))employee.assignedBay=null;
+        if(employee.assignedBay!==null)employee.assignedRole=null;
       }
       for(const m of state.machines.filter(m=>m['operator'+shift])){
         if(roster[key].some(employee=>employee.assignedBay===m.bay))continue;
-        const free=roster[key].find(employee=>employee.assignedBay===null);
+        const free=roster[key].find(employee=>employee.assignedBay===null&&!employee.assignedRole);
         if(free)free.assignedBay=m.bay;else m['operator'+shift]=false;
       }
     }
@@ -545,6 +558,8 @@
   const resaleValue=m=>m?Math.round((Number.isFinite(m.purchasePrice)?m.purchasePrice:LEGACY_MACHINE_PRICES[m.type]||catalog[m.type].price)*SELL_BASE_RATE+upgradeInvestment(m)*SELL_UPGRADE_RATE+(m.loadingRobot?LOADING_ROBOT_COST*.4:0)):0;
   const skillLevel=employee=>employee?Math.min(3,Math.max(employee.trained,employee.xp>=1500?3:employee.xp>=600?2:employee.xp>=180?1:0)):0;
   const assignedEmployee=(m,shift)=>state.staffRoster['shift'+shift].find(employee=>employee.assignedBay===m.bay);
+  const qualityEmployee=shift=>(state.staffRoster['shift'+shift]||[]).find(employee=>employee.assignedRole==='quality')||null;
+  const employeeIsFree=employee=>!!employee&&employee.assignedBay===null&&!employee.assignedRole;
   const employeeHourlyWage=(employee,shift)=>recruitmentSystem.hourlyWage(employee,shift);
   const shiftHourlyPayroll=shift=>(state.staffRoster['shift'+shift]||[]).reduce((sum,employee)=>sum+employeeHourlyWage(employee,shift),0);
   const productionFactorForShift=(m,shift)=>{
@@ -838,7 +853,7 @@
     return changed;
   }
   const conditionLabel=value=>value>0&&value<1?'<1 %':Math.round(value)+' %';
-  let visual=null, currentPanel=null, businessSection='factory', messageTimer, zoomTimer, phaserGame=null, hallPreviewBay=null, shiftLeaderPanelShift=1, shiftLeaderAdviceKey='', operatorPickerShift=null, dismissalPickerShift=null;
+  let visual=null, currentPanel=null, businessSection='factory', messageTimer, zoomTimer, phaserGame=null, hallPreviewBay=null, shiftLeaderPanelShift=1, shiftLeaderAdviceKey='', operatorPickerShift=null, dismissalPickerShift=null, qualityPickerShift=null;
   function say(message){
     $('message').textContent=message;
     clearTimeout(messageTimer);
@@ -2090,7 +2105,7 @@
   function shiftLeaderRecommendations(shift){
     const recommendations=[];
     const roster=state.staffRoster['shift'+shift]||[];
-    const freeEmployee=roster.find(employee=>employee.assignedBay===null);
+    const freeEmployee=roster.find(employee=>employeeIsFree(employee));
     const unstaffed=state.machines.filter(machine=>
       !(shift===2&&machine.loadingRobot)&&!machine['operator'+shift]&&
       (!!job(machine)||machine.orderQueue.length>0||machine.qualityReworkQueue.length>0)
@@ -2178,7 +2193,7 @@
   }
   function assignShiftLeaderOperator(machine,shift,employeeId){
     const key='operator'+shift,employee=(state.staffRoster['shift'+shift]||[]).find(person=>person.id===employeeId);
-    if(!machine||!employee||employee.assignedBay!==null||machine[key]||(shift===2&&machine.loadingRobot))return;
+    if(!machine||!employee||!employeeIsFree(employee)||machine[key]||(shift===2&&machine.loadingRobot))return;
     if(state.machines.filter(item=>item[key]).length>=state.staff['shift'+shift])return;
     employee.assignedBay=machine.bay;machine[key]=true;
     save();renderBusiness();render();
@@ -2422,7 +2437,7 @@
     const machine=selectedMachine(),key='operator'+shift;
     const roster=state.staffRoster['shift'+shift]||[];
     const employee=roster.find(person=>person.id===employeeId);
-    if(!machine||!employee||employee.assignedBay!==null||machine[key]||(shift===2&&machine.loadingRobot))return false;
+    if(!machine||!employee||!employeeIsFree(employee)||machine[key]||(shift===2&&machine.loadingRobot))return false;
     employee.assignedBay=machine.bay;
     machine[key]=true;
     operatorPickerShift=null;
@@ -2444,7 +2459,7 @@
     }
     const kind=catalog[machine.type].kind,skillKey=kind==='Fräsen'?'milling':'turning';
     const free=(state.staffRoster['shift'+shift]||[])
-      .filter(employee=>employee.assignedBay===null)
+      .filter(employee=>employeeIsFree(employee))
       .map(employee=>({employee,familiarity:recruitmentSystem.familiarityFor(employee,machine.type)}))
       .sort((a,b)=>b.familiarity.level-a.familiarity.level||
         (Number(b.employee.skills?.[skillKey])||0)-(Number(a.employee.skills?.[skillKey])||0)||
@@ -3064,7 +3079,7 @@
       say(employee?`${employee.name} ist nicht mehr an ${catalog[m.type].name} eingeteilt.`:`Schicht ${shift}: Bediener abgezogen.`);
       return;
     }
-    if(!roster.some(employee=>employee.assignedBay===null))return;
+    if(!roster.some(employee=>employeeIsFree(employee)))return;
     operatorPickerShift=operatorPickerShift===shift?null:shift;
     renderOperatorPicker();
   }
