@@ -1071,6 +1071,7 @@
     latestMachineMemory,
     memoryReference,
     breakdownAdvice,
+    workRemark,
     deriveProfile,
     ensureState,
     generateApplicant,
