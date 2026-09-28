@@ -524,7 +524,11 @@
     const planned=plannedOrderMinutes(machine,order,productionFactor(machine));
     const slack=machine.activeId===order.id&&Number.isFinite(machine.deadlineAt)?machine.deadlineAt-state.gameMinutes:order.deadlineHours*60-planned;
     const timePressure=slack<0?4:slack<120?3:slack<360?2:slack<720?1:0;
-    return programmingQuality.riskPercent({order,machine,precision,trained,timePressure});
+    const baseRisk=programmingQuality.riskPercent({order,machine,precision,trained,timePressure});
+    const personalityModifier=employees.length
+      ? employees.reduce((sum,employee)=>sum+recruitmentSystem.qualityRiskModifier(employee),0)/employees.length
+      : 0;
+    return Math.max(2,Math.min(28,Math.round(baseRisk+personalityModifier)));
   }
   const selectedMachine=()=>state.machines.find(m=>m.bay===state.selectedBay);
   const machineAt=bay=>state.machines.find(m=>m.bay===bay);
@@ -1076,6 +1080,14 @@
     addChoice('Servicetechniker rufen',euro(ROBOT_TECHNICIAN_COST)+' · '+formatMinutes(ROBOT_TECHNICIAN_MINUTES[0])+'–'+formatMinutes(ROBOT_TECHNICIAN_MINUTES[1])+' · zuverlässig','technician',ROBOT_TECHNICIAN_COST);
     $('event-count').textContent='Das Spiel ist pausiert, bis du den Roboter wieder einsatzbereit machst.';
   }
+  function breakdownOperatorAdvice(machine,event){
+    if(!machine||!event)return null;
+    const shift=shiftAt(state.gameMinutes);
+    const employee=shift?assignedEmployee(machine,shift):null;
+    const advice=employee?recruitmentSystem.breakdownAdvice(employee,event.event):null;
+    return advice?{employee,...advice}:null;
+  }
+
   function renderEventWindow(){
     const overlay=$('event-window');
     if(!overlay)return;
@@ -1110,11 +1122,15 @@
     const fault=breakdownSystem.getFaultInfo(event.fault),options=breakdownSystem.getRepairOptions(state,event.bay);
     $('event-eyebrow').textContent=selfRepairFailed?'SELBSTREPARATUR GESCHEITERT':event.sudden?'PLÖTZLICHER MASCHINENCRASH':warning?'MASCHINENWARNUNG':'SCHWERER MASCHINENSCHADEN';
     $('event-title').textContent=`${fault?.label||'Maschinenstörung'} · Platz ${event.bay}`;
-    $('event-detail').textContent=selfRepairFailed
+    const operatorAdvice=breakdownOperatorAdvice(machine,event);
+    const baseDetail=selfRepairFailed
       ?'Der Selbstversuch ist fehlgeschlagen. Ein weiterer Selbstversuch ist für diese Störung gesperrt; beauftrage einen Monteur oder entscheide später.'
       :event.sudden
       ?'Die Maschine ist ohne vorherige Warnung ausgefallen. Die Produktion auf diesem Platz steht.'
       :warning?'Die Maschine meldet eine Störung. Entscheide jetzt, wie der Betrieb weitergeht.':'Ein schwerer Maschinenschaden hat die Produktion gestoppt.';
+    $('event-detail').textContent=operatorAdvice
+      ?`${baseDetail} ${operatorAdvice.employeeName}: „${operatorAdvice.text}“`
+      :baseDetail;
     const effects=[];
     const activeOrder=machine&&job(machine);
     if(activeOrder)effects.push(`Laufender Auftrag: ${activeOrder.part} · ${machine.produced}/${activeOrder.qty} Teile`);
@@ -1133,7 +1149,11 @@
     const addChoice=(label,detailText,action,cost=0,risky=false)=>{
       const button=document.createElement('button'),small=document.createElement('small');
       button.type='button';button.className='action event-choice'+(risky?' event-risk':'');
-      button.append(document.createTextNode(label));small.textContent=detailText;button.append(small);
+      button.append(document.createTextNode(label));
+      const recommended=operatorAdvice&&operatorAdvice.action===action;
+      small.textContent=detailText+(recommended?` · Empfehlung von ${operatorAdvice.employeeName}`:'');
+      button.append(small);
+      if(recommended)button.dataset.operatorRecommended='true';
       button.disabled=cost>state.money;button.addEventListener('click',()=>chooseBreakdown(action,event.bay,event.id));actions.append(button);
     };
     if(options){
@@ -3117,10 +3137,17 @@
       say(`Für diese Reparatur fehlen ${euro(event.cost-state.money)}.`);
       return false;
     }
+    const decisionShift=shiftAt(state.gameMinutes);
+    const decisionEmployee=decisionShift?assignedEmployee(m,decisionShift):null;
+    const incidentXp=decisionEmployee?recruitmentSystem.incidentExperience(decisionEmployee,action):0;
+    if(decisionEmployee&&incidentXp>0){
+      decisionEmployee.xp=Math.round((decisionEmployee.xp+incidentXp)*1000)/1000;
+    }
     handleBreakdownEvent(event);
-    if(event.event==='repair')say(`Platz ${m.bay}: ${event.method==='technician'?'Monteur beauftragt':'Selbstreparatur gestartet'} · ${euro(event.cost)} · ${formatMinutes(event.downtime)}.`);
-    if(event.event==='repair_scheduled')say(`Platz ${m.bay}: Reparatur eingeplant · ${euro(event.cost)}.`);
-    if(event.event==='continue_risky')say(`Platz ${m.bay}: Produktion läuft mit erhöhtem Risiko weiter.`);
+    const experienceText=decisionEmployee&&incidentXp>0?` · ${decisionEmployee.name} +${incidentXp} min Erfahrung`:'';
+    if(event.event==='repair')say(`Platz ${m.bay}: ${event.method==='technician'?'Monteur beauftragt':'Selbstreparatur gestartet'} · ${euro(event.cost)} · ${formatMinutes(event.downtime)}.${experienceText}`);
+    if(event.event==='repair_scheduled')say(`Platz ${m.bay}: Reparatur eingeplant · ${euro(event.cost)}.${experienceText}`);
+    if(event.event==='continue_risky')say(`Platz ${m.bay}: Produktion läuft mit erhöhtem Risiko weiter.${experienceText}`);
     if(eventId){
       const index=state.eventQueue.findIndex(item=>item.id===eventId);
       if(index>=0)state.eventQueue.splice(index,1);
