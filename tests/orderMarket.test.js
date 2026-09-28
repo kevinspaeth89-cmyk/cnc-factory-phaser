@@ -58,7 +58,7 @@ test('migrates offers from older saves to the slower, lower reward balance', () 
 
   orderMarket.init(state);
 
-  assert.equal(state.orderMarket.version, 3);
+  assert.equal(state.orderMarket.version, 4);
   assert.deepEqual(orderMarket.getAvailable(state).map(order => order.id), before.map(order => order.id));
   for (const order of orderMarket.getAvailable(state)) {
     assert.ok(order.duration >= 44);
