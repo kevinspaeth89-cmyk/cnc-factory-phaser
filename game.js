@@ -610,6 +610,16 @@
   const resaleValue=m=>m?Math.round((Number.isFinite(m.purchasePrice)?m.purchasePrice:LEGACY_MACHINE_PRICES[m.type]||catalog[m.type].price)*SELL_BASE_RATE+upgradeInvestment(m)*SELL_UPGRADE_RATE+(m.loadingRobot?LOADING_ROBOT_COST*.4:0)):0;
   const skillLevel=employee=>employee?Math.min(3,Math.max(employee.trained,employee.xp>=1500?3:employee.xp>=600?2:employee.xp>=180?1:0)):0;
   const assignedEmployee=(m,shift)=>state.staffRoster['shift'+shift].find(employee=>employee.assignedBay===m.bay);
+  function hallWorkingOperator(machine){
+    const shift=shiftAt(state.gameMinutes);
+    if(!machine||!shift||!machine['operator'+shift]||!job(machine))return null;
+    const employee=assignedEmployee(machine,shift);
+    if(!employee)return null;
+    if(machine.qualityInspectionRemainingMinutes>0)return null;
+    const fault=breakdownSystem.getRecord(state,machine.bay);
+    if(fault?.status==='repairing'&&fault.repairMethod==='technician')return null;
+    return {employee,shift};
+  }
   const qualityEmployee=shift=>(state.qualityStaff?.['shift'+shift]||[]).find(employee=>employee.qualityCertified&&!(employee.qualityTrainingRemainingMinutes>0))||null;
   const employeeIsFree=employee=>!!employee&&employee.assignedBay===null;
   const employeeHourlyWage=(employee,shift)=>recruitmentSystem.hourlyWage(employee,shift);
@@ -3175,6 +3185,30 @@
         }
         robotArt.hidden=false;
       }else if(robotArt)robotArt.hidden=true;
+
+      const workingOperator=machine?hallWorkingOperator(machine):null;
+      let operatorBadge=b.querySelector('.bay-operator');
+      if(workingOperator){
+        if(!operatorBadge){
+          operatorBadge=document.createElement('div');operatorBadge.className='bay-operator';
+          const portrait=document.createElement('img'),name=document.createElement('small');
+          portrait.loading='lazy';operatorBadge.append(portrait,name);b.append(operatorBadge);
+        }
+        const employee=workingOperator.employee,portrait=operatorBadge.children[0],name=operatorBadge.children[1];
+        const portraitSrc=employee.portrait||recruitmentSystem.portraitFor(employee.id,employee.gender);
+        if(portrait.getAttribute('src')!==portraitSrc)portrait.src=portraitSrc;
+        portrait.alt='';
+        name.textContent=employee.name;
+        operatorBadge.dataset.employeeId=String(employee.id);
+        operatorBadge.dataset.shift=String(workingOperator.shift);
+        operatorBadge.setAttribute('aria-label',`${employee.name} arbeitet in Schicht ${workingOperator.shift} an Platz ${machine.bay}`);
+        operatorBadge.title=`${employee.name} · Schicht ${workingOperator.shift} · arbeitet an ${catalog[machine.type].name}`;
+        operatorBadge.hidden=false;
+      }else if(operatorBadge){
+        operatorBadge.hidden=true;
+        delete operatorBadge.dataset.employeeId;
+        delete operatorBadge.dataset.shift;
+      }
       b.querySelector('span').textContent=machine?catalog[machine.type].name:`+ Platz ${bay}`;
       b.setAttribute('aria-label',machine?`${catalog[machine.type].name}, Platz ${bay} ansehen`:`Freier Stellplatz ${bay}, Maschinen kaufen`);
       b.title=machine?statusFor(machine):'Maschine kaufen';
