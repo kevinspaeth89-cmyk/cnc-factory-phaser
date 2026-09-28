@@ -545,9 +545,10 @@
       ? employees.reduce((sum,employee)=>sum+recruitmentSystem.familiarityQualityRiskModifier(employee,machine.type),0)/employees.length
       : 0;
     const qs=qualityEmployee(shiftAt(state.gameMinutes));
-    const qsProcessModifier=qs
-      ?-Math.min(1,.35+Math.max(0,(Number(qs.skills?.precision)||5)-5)*.08)
-      :0;
+    const qsProcessModifier=programmingQuality.qualityProcessRiskModifier({
+      hasQualityAssurance:!!qs,
+      precision:Number(qs?.skills?.precision)||5
+    });
     return Math.max(2,Math.min(28,Math.round(baseRisk+personalityModifier+familiarityModifier+qsProcessModifier)));
   }
   const selectedMachine=()=>state.machines.find(m=>m.bay===state.selectedBay);
@@ -1328,9 +1329,13 @@
     const machine=machineAt(event.bay),order=machine&&job(machine);
     if(!machine||!order||order.id!==event.order.id)return false;
     const qualityShift=shiftAt(state.gameMinutes);
-    const qualityEmployee=qualityShift?assignedEmployee(machine,qualityShift):null;
-    if(qualityEmployee){
-      recruitmentSystem.recordMemory(qualityEmployee,{
+    const qualityOperator=qualityShift?assignedEmployee(machine,qualityShift):null;
+    const qualityInspector=event.inspectedById
+      ?(state.staffRoster['shift'+qualityShift]||[]).find(person=>person.id===event.inspectedById)||null
+      :null;
+    const qualityWitness=qualityInspector||qualityOperator;
+    if(qualityWitness){
+      recruitmentSystem.recordMemory(qualityWitness,{
         id:`quality_issue:${machine.type}:${order.id}:${decision}`,
         type:'quality_issue',
         machineType:machine.type,
@@ -2573,12 +2578,12 @@
 
   function qualityDetectionChance(machine,shift){
     const qs=qualityEmployee(shift),operator=machine?assignedEmployee(machine,shift):null;
-    if(qs){
-      const precision=Math.max(1,Math.min(10,Number(qs.skills?.precision)||5));
-      return Math.min(.99,.78+precision*.018+skillLevel(qs)*.015);
-    }
-    const precision=Math.max(1,Math.min(10,Number(operator?.skills?.precision)||5));
-    return Math.min(.78,.32+precision*.04+skillLevel(operator)*.025);
+    const person=qs||operator;
+    return programmingQuality.inspectionDetectionChance({
+      hasQualityAssurance:!!qs,
+      precision:Number(person?.skills?.precision)||5,
+      trained:skillLevel(person)
+    });
   }
 
   function assignQualityEmployee(shift,employeeId){
@@ -2662,7 +2667,11 @@
           const name=document.createElement('strong');name.textContent=employee.name;
           const detail=document.createElement('small');
           const precision=Number(employee.skills?.precision)||5;
-          const estimated=Math.min(.99,.78+precision*.018+skillLevel(employee)*.015);
+          const estimated=programmingQuality.inspectionDetectionChance({
+            hasQualityAssurance:true,
+            precision,
+            trained:skillLevel(employee)
+          });
           detail.textContent=`${personalitySummary(employee)} · Präzision ${precision}/10 · ca. ${Math.round(estimated*100)} % Entdeckung · ${employeeHourlyWage(employee,shift)} €/h`;
           main.append(name,detail);
           const choose=document.createElement('button');choose.type='button';choose.className='action';choose.textContent='In QS';
@@ -3346,7 +3355,10 @@
             const inspectionShift=shiftAt(state.gameMinutes)||shift;
             const qsInspector=qualityEmployee(inspectionShift);
             const detectionChance=qualityDetectionChance(m,inspectionShift);
-            if(qsInspector)state.qualityAssurance.inspections+=1;
+            if(qsInspector){
+              state.qualityAssurance.inspections+=1;
+              qsInspector.xp=Math.round((qsInspector.xp+10*recruitmentSystem.learningMultiplier(qsInspector))*1000)/1000;
+            }
             if(defects>0){
               m.qualityInspectedOrderId=o.id;
               const detected=Math.random()<detectionChance;
