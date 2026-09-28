@@ -642,3 +642,63 @@ test('failed self repair changes employee recommendation to technician', () => {
   assert.match(after.text, /Monteur/);
   assert.doesNotMatch(after.text, /selbst nachsehen|selbst prüfen/);
 });
+
+
+test('contextual work remarks are stable and react to low tool life', () => {
+  const employee = {
+    id: 17,
+    profileVersion: 2,
+    name: 'Mira Test',
+    skills: { turning: 8, milling: 4, precision: 9, learning: 8 },
+    personality: recruitment.derivePersonality({ turning: 8, milling: 4, precision: 9, learning: 8 }),
+    machineHistory: {}
+  };
+  const context = {
+    timeBucket: 42,
+    machineType: 'standard',
+    machineName: 'Nexora NX-350',
+    tool: 8,
+    maintenance: 80,
+    produced: 40,
+    quantity: 100
+  };
+  const first = recruitment.workRemark(employee, context);
+  const second = recruitment.workRemark(employee, context);
+  assert.equal(first, second);
+  assert.match(first, /Werkzeug|Schneide/);
+});
+
+test('experienced operators can refer naturally to a familiar machine', () => {
+  const employee = {
+    id: 23,
+    profileVersion: 2,
+    name: 'Tarek Test',
+    skills: { turning: 7, milling: 5, precision: 6, learning: 5 },
+    personality: recruitment.derivePersonality({ turning: 7, milling: 5, precision: 6, learning: 5 }),
+    machineHistory: {
+      rapid: {
+        machineType: 'rapid',
+        machineName: 'Nexora NX-420',
+        workMinutes: 8000,
+        partsProduced: 900,
+        incidents: 2
+      }
+    }
+  };
+  const remark = recruitment.workRemark(employee, {
+    timeBucket: 77,
+    machineType: 'rapid',
+    machineName: 'Nexora NX-420',
+    tool: 80,
+    maintenance: 80,
+    produced: 20,
+    quantity: 100
+  });
+  assert.ok(remark.length > 0);
+  assert.match(remark, /Nexora NX-420|Die hier/);
+});
+
+test('legacy and quality profiles do not receive machine-floor remarks', () => {
+  assert.equal(recruitment.workRemark({ id: 1, profileVersion: 0 }, {}), '');
+  assert.equal(recruitment.workRemark({ id: 2, profileVersion: 2, profileType: 'quality' }, {}), '');
+});
