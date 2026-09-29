@@ -47,7 +47,7 @@
     return multiplier === null ? null : Math.round(catalog[type].pricePer100Kg * multiplier) / 100;
   }
   function quote(type, quantityKg, gameMinutes = 0) {
-    if (!Object.hasOwn(catalog, type) || ![25, 100].includes(quantityKg)) return null;
+    if (!Object.hasOwn(catalog, type) || !Number.isInteger(quantityKg) || quantityKg < 1 || quantityKg > 10000) return null;
     return Math.round(pricePerKg(type, gameMinutes) * quantityKg * 100) / 100;
   }
   function reserve(state, inventory, order) {

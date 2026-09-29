@@ -1081,7 +1081,7 @@
     const usage=inventorySystem.getUsage(state);
     return !!usage.ok&&usage.remaining.tools>=1;
   };
-  const canMaintain=m=>!!m&&state.money>=PREVENTIVE_MAINTENANCE_COST&&m.maintenance<99&&
+  const canMaintain=m=>!!m&&!!shiftAt(state.gameMinutes)&&state.money>=PREVENTIVE_MAINTENANCE_COST&&m.maintenance<99&&
     !(m.maintenanceRemainingMinutes>0)&&breakdownSystem.getStatus(state,m.bay)==='ok';
   function changeMachineTool(m){
     if(!canChangeTool(m))return false;
@@ -1316,6 +1316,7 @@
         :'Material: vollständig vorhanden.';
 
       const normalButton=document.createElement('button'),normalTag=document.createElement('span'),normalDetail=document.createElement('small');
+      const normalExtra=document.createElement('details'),normalExtraTitle=document.createElement('summary'),normalExtraText=document.createElement('small');
       normalButton.type='button';normalButton.className='action rush-machine-choice';
       normalTag.textContent=activeOrder
         ?(machine.orderQueue.length?'OPTION 1 · ANNEHMEN – ANS ENDE DER WARTESCHLANGE':'OPTION 1 · ANNEHMEN – NACH AKTUELLEM AUFTRAG')
@@ -1329,23 +1330,27 @@
         const existingLine=activeOrder
           ?'Laufender Auftrag: bleibt in seiner Reihenfolge und wird nicht unterbrochen.'
           :'Laufender Auftrag: keiner – der Eilauftrag kann direkt starten.';
-        normalDetail.textContent='Eilauftrag: fertig in '+formatEstimateMinutes(rushCheck.leadMinutes)+' → '+rushImpact+'\n'+existingLine+modeGainText(regularRushCheck?.finishAt,rushCheck.finishAt)+'\n'+materialLine;
+        normalDetail.textContent=rushImpact+' · fertig '+formatDeliveryAt(rushCheck.finishAt)+
+          (activeOrder?'\nLaufender Auftrag bleibt unverändert.':'');
+        normalExtraText.textContent=existingLine+modeGainText(regularRushCheck?.finishAt,rushCheck.finishAt)+'\n'+materialLine;
       }else{
-        normalDetail.textContent=(reason||(!projected.shifts.length?'Keine besetzte Schicht':'Fertigstellung nicht berechenbar.'))+'\n'+materialLine;
+        normalDetail.textContent=reason||(!projected.shifts.length?'Keine besetzte Schicht':'Fertigstellung nicht berechenbar.');
+        normalExtraText.textContent=materialLine;
       }
       normalButton.append(normalDetail);normalButton.disabled=blocked;
       normalButton.addEventListener('click',()=>resolveRushOrderEvent(event,true,machine.bay,false,rushWorkMode));
-      choices.append(normalButton);
+      normalExtra.className='rush-choice-details';normalExtraTitle.textContent='Auswirkung & Material anzeigen';
+      normalExtra.append(normalExtraTitle,normalExtraText);choices.append(normalButton,normalExtra);
 
       if(activeOrder){
         const interruptButton=document.createElement('button'),interruptTag=document.createElement('span'),interruptDetail=document.createElement('small');
+        const interruptExtra=document.createElement('details'),interruptExtraTitle=document.createElement('summary'),interruptExtraText=document.createElement('small');
         const interruptReason=modeReason||rushAssignmentBlockReason(machine,order,true,true);
         interruptButton.type='button';interruptButton.className='action rush-machine-choice rush-interrupt-choice';
         interruptTag.textContent='OPTION 2 · ANNEHMEN – EILAUFTRAG SOFORT EINSCHIEBEN';
         interruptButton.append(interruptTag);
         if(interruption){
           const rushDeadlineAt=Number.isFinite(order.deadlineAt)?order.deadlineAt:state.gameMinutes+Math.max(0,Number(order.deadlineHours)||0)*60;
-          const rushLead=interruption.rushFinishAt-state.gameMinutes;
           const rushBuffer=rushDeadlineAt-interruption.rushFinishAt;
           const rushImpact=rushBuffer>=0
             ?'PÜNKTLICH · '+formatEstimateMinutes(rushBuffer)+' Puffer'
@@ -1355,16 +1360,19 @@
             ?'pünktlich · '+formatEstimateMinutes(interruption.bufferMinutes)+' Puffer'
             :'ZU SPÄT · '+formatEstimateMinutes(-interruption.bufferMinutes);
           interruptButton.classList.add(rushBuffer>=0?'rush-option-safe':'rush-option-late');
-          interruptDetail.textContent='Eilauftrag: fertig in '+formatEstimateMinutes(rushLead)+' → '+rushImpact+'\n'+
-            'Laufender Auftrag '+interruption.interrupted.part+': wird unterbrochen · danach fertig in '+formatEstimateMinutes(afterFinish)+' → '+currentImpact+'\n'+
+          interruptDetail.textContent='Eilauftrag '+rushImpact+' · fertig '+formatDeliveryAt(interruption.rushFinishAt)+'\n'+
+            'Laufender Auftrag danach: '+currentImpact;
+          interruptExtraText.textContent='Laufender Auftrag '+interruption.interrupted.part+': danach fertig in '+formatEstimateMinutes(afterFinish)+'\n'+
             'Neues Rüsten beim Fortsetzen: '+formatMinutes(interruption.resumedSetup)+modeGainText(regularInterruption?.rushFinishAt,interruption.rushFinishAt)+'\n'+materialLine;
         }else{
-          interruptDetail.textContent=(interruptReason||'Unterbrechungsfolge nicht berechenbar.')+'\n'+materialLine;
+          interruptDetail.textContent=interruptReason||'Unterbrechungsfolge nicht berechenbar.';
+          interruptExtraText.textContent=materialLine;
         }
         interruptButton.append(interruptDetail);
         interruptButton.disabled=!!interruptReason||!interruption||!projected.shifts.length;
         interruptButton.addEventListener('click',()=>resolveRushOrderEvent(event,true,machine.bay,true,rushWorkMode));
-        choices.append(interruptButton);
+        interruptExtra.className='rush-choice-details';interruptExtraTitle.textContent='Rüstzeit & Material anzeigen';
+        interruptExtra.append(interruptExtraTitle,interruptExtraText);choices.append(interruptButton,interruptExtra);
       }
       row.append(top,window,choices);rows.append(row);
     });
@@ -2321,6 +2329,7 @@
         marketButton.type='button';marketButton.className='action order-market-button';marketButton.textContent='Material & Markt ansehen';
         marketButton.addEventListener('click',event=>{
           event.stopPropagation();state.selected=o.id;state.warehouseOrderSnapshot={...o};state.selectedMaterialType=materialSystem.typeForOrder(o)||state.selectedMaterialType;
+          $('material-quantity').value='exact';
           save();renderOrders();renderMaterialPrice();tab('warehouse');
         });
         card.append(marketButton);
@@ -2378,6 +2387,11 @@
     const current=plannedMachineLoad(machine),projected=plannedMachineLoad(machine,order);
     const activeValue=line.querySelector('[data-load-current]'),queueValue=line.querySelector('[data-load-queue]'),projectedValue=line.querySelector('[data-load-projected]');
     const candidate=projected.candidateCheck;
+    const summary=line.closest('.assignment-card').querySelector('[data-load-summary]');
+    summary.textContent=candidate
+      ?`${candidate.bufferMinutes<0?'Zu spät · '+formatEstimateMinutes(-candidate.bufferMinutes):'Pünktlich · '+formatEstimateMinutes(candidate.bufferMinutes)+' Puffer'} · fertig ${formatDeliveryAt(candidate.finishAt)}`
+      :'Keine Fertigstellung berechenbar';
+    summary.classList.toggle('assignment-overloaded',!candidate||candidate.bufferMinutes<0);
     activeValue.textContent='Laufend: '+activePlanText(current);
     queueValue.textContent='Warteschlange: '+queuedPlanText(current);
     projectedValue.textContent='Neuer Auftrag: '+candidateLoadSummary(candidate);
@@ -2402,21 +2416,26 @@
     const order=orderMarketSystem.getAvailable(state).find(item=>item.id===pendingOrderAssignmentId);
     if(!order){pendingOrderAssignmentId=null;panel.hidden=true;return;}
     $('assignment-title').textContent='Welche Maschine soll den Auftrag übernehmen?';
-    $('assignment-detail').textContent=order.part+' · '+order.kind+' · '+order.material+' · Laufender Auftrag, Warteschlange und neuer Auftrag werden getrennt bewertet. Die Prognose für den neuen Auftrag berücksichtigt die Arbeit davor.';
+    $('assignment-detail').textContent=order.part+' · '+order.kind+' · '+order.material+' · Wähle eine Maschine anhand von Fertigstellung und Fristpuffer. Weitere Planungswerte kannst du bei jedem Platz aufklappen.';
     $('assignment-options').replaceChildren(...state.machines.map(machine=>{
-      const button=document.createElement('button'),reason=machineOrderBlockReason(machine,order);
-      const name=document.createElement('span'),loadLine=document.createElement('span'),currentLoad=document.createElement('span'),queueLoad=document.createElement('span'),projectedLoad=document.createElement('strong');
+      const card=document.createElement('div'),button=document.createElement('button'),reason=machineOrderBlockReason(machine,order);
+      const name=document.createElement('span'),summary=document.createElement('strong'),details=document.createElement('details'),detailsTitle=document.createElement('summary');
+      const loadLine=document.createElement('span'),currentLoad=document.createElement('span'),queueLoad=document.createElement('span'),projectedLoad=document.createElement('strong');
+      card.className='assignment-card';
       button.type='button';button.className='action assignment-option';
       name.className='assignment-option-name';
       name.textContent=`Platz ${machine.bay} · ${catalog[machine.type].name} · ${catalog[machine.type].kind}${reason?` · ${reason}`:job(machine)||machine.qualityReworkQueue.length?` · Vormerken ${machine.orderQueue.length+1}/${MAX_QUEUED_ORDERS}`:' · Direkt starten'}`;
+      summary.className='assignment-outcome';summary.dataset.loadSummary='';
       loadLine.className='assignment-option-load';loadLine.dataset.assignmentLoad='';loadLine.dataset.bay=String(machine.bay);
       currentLoad.dataset.loadCurrent='';queueLoad.dataset.loadQueue='';projectedLoad.dataset.loadProjected='';
       loadLine.append(currentLoad,queueLoad,projectedLoad);
-      button.append(name,loadLine);
+      button.append(name,summary);
+      details.className='assignment-details';detailsTitle.textContent='Laufender Auftrag, Warteschlange & Auslastung';
+      details.append(detailsTitle,loadLine);card.append(button,details);
       updateAssignmentLoadLine(loadLine,machine,order);
       button.disabled=!!reason;
       button.addEventListener('click',()=>startOrder(order.id,machine.bay));
-      return button;
+      return card;
     }));
     panel.hidden=false;
   }
@@ -2432,8 +2451,18 @@
     });
   }
   let lastMarketBoardKey='';
+  function selectedMaterialQuantity(){
+    const picker=$('material-quantity'),snapshot=state.warehouseOrderSnapshot;
+    const exact=snapshot&&materialSystem.typeForOrder(snapshot)===state.selectedMaterialType
+      ?Math.max(0,Math.ceil(materialSystem.requiredKg(snapshot)-materialSystem.available(state,snapshot))):0;
+    const option=picker.querySelector('option[value="exact"]');
+    option.disabled=exact<1;
+    option.textContent=exact>0?`Genau fehlende ${exact} kg`:'Genau fehlende Menge';
+    if(picker.value==='exact'&&exact<1)picker.value='25';
+    return picker.value==='exact'?exact:Number(picker.value);
+  }
   function renderMaterialPrice(){
-    const type=state.selectedMaterialType,quantity=Number($('material-quantity').value);
+    const type=state.selectedMaterialType,quantity=selectedMaterialQuantity();
     const price=materialSystem.quote(type,quantity,state.gameMinutes);
     const unitPrice=materialSystem.pricePerKg(type,state.gameMinutes);
     const day=Math.max(0,Math.floor(state.gameMinutes/1440));
@@ -3756,6 +3785,7 @@
     renderDismissalPicker();
   }
   function renderCosts(){
+    renderBillingForecast();
     $('payroll-due').textContent=euro(state.payrollDue);
     $('wages-paid').textContent=euro(state.wagesPaid);
     $('energy-paid').textContent=euro(state.energyPaid);
@@ -3790,6 +3820,34 @@
     stockBox.replaceChildren(...stockRows);
     renderMaterialPrice();
     if(currentPanel==='business')renderFinance();
+  }
+  let billingForecastKey='',billingFutureWages=0;
+  function renderBillingForecast(){
+    const dueAt=nextMonthMinute(state.gameMinutes);
+    const first=shiftHourlyPayroll(1),second=shiftHourlyPayroll(2);
+    const key=[Math.floor(state.gameMinutes),first,second,!!state.orderOffice.hired,!!state.programmer.hired,
+      !!shiftLeaderFor(1)?.hired,!!shiftLeaderFor(2)?.hired].join(':');
+    if(key!==billingForecastKey){
+      billingForecastKey=key;billingFutureWages=0;
+      for(let minute=Math.floor(state.gameMinutes/60)*60;minute<dueAt;minute+=60){
+        const hours=(Math.min(minute+60,dueAt)-Math.max(minute,state.gameMinutes))/60;
+        if(hours<=0)continue;
+        const shift=shiftAt(minute+30);
+        if(shift)billingFutureWages+=(shift===1?first:second)*hours;
+        if(state.orderOffice.hired&&officeOpenAt(minute+30))billingFutureWages+=ORDER_OFFICE_HOURLY_WAGE*hours;
+        if(state.programmer.hired&&shift===1)billingFutureWages+=PROGRAMMER_HOURLY_WAGE*hours;
+        if(shift&&shiftLeaderFor(shift)?.hired)billingFutureWages+=SHIFT_LEADER_HOURLY_WAGE*hours;
+      }
+    }
+    const wages=state.payrollDue+billingFutureWages;
+    const credit=state.credit.principal>0?creditPaymentQuote().total:0;
+    const total=wages+credit,short=$('billing-short'),detail=$('finance-next-billing');
+    short.textContent=`${formatDeliveryAt(dueAt).split(' · ')[0]} · ca. ${euro(total)}`;
+    short.title=`Nächste Abrechnung: Löhne ca. ${euro(wages)}, Kreditrate ${euro(credit)}. Weitere Betriebskosten laufen täglich.`;
+    short.classList.toggle('billing-risk',total>state.money);
+    const markup=`<strong>Nächste Monatsabrechnung: ${formatDeliveryAt(dueAt)}</strong><span>Löhne bisher ${euro(state.payrollDue)} · bis dahin voraussichtlich ${euro(wages)}</span><span>Kreditrate ${euro(credit)} · zusammen ca. ${euro(total)}</span><span>Kontostand danach ohne weitere Einnahmen und Ausgaben: ${euro(state.money-total)}</span><small>Schätzung mit der jetzigen Belegschaft; Überstunden, Strom und Lagerkosten können sie ändern.</small>`;
+    if(detail.dataset.markup!==markup){detail.innerHTML=markup;detail.dataset.markup=markup;}
+    detail.classList.toggle('billing-risk',total>state.money);
   }
   function renderFinance(){
     const period=$('finance-period').value,now=dateAt(state.gameMinutes);
@@ -3835,6 +3893,7 @@
     if(hallImage.getAttribute('src')!==artwork)hallImage.src=artwork;
     hallImage.alt=`Leere Produktionshalle mit ${layout.unlockedBays} Maschinenplätzen`;
     $('money').textContent=Math.abs(state.money-Math.round(state.money))<1e-9?euro(state.money):euroExact(state.money);
+    renderBillingForecast();
     $('material').textContent=Math.floor(state.material)+' kg';
     $('parts').textContent=`${state.machines.length} / ${layout.unlockedBays}`;
     $('part-name').textContent=o?o.part:m?'Auftrag auswählen':'Erste Maschine kaufen';
@@ -3869,8 +3928,8 @@
     const maintenanceRemaining=Math.max(0,Number(m?.maintenanceRemainingMinutes)||0);
     $('maintenance-title').textContent=maintenanceRemaining>0?'Wartung läuft':'Vorbeugende Wartung starten';
     $('maintenance-detail').textContent=maintenanceRemaining>0
-      ?`${formatMinutes(maintenanceRemaining)} verbleibend · Produktion pausiert`
-      :`${euro(PREVENTIVE_MAINTENANCE_COST)} · ${formatMinutes(PREVENTIVE_MAINTENANCE_MINUTES)} Stillstand`;
+      ?`${formatMinutes(maintenanceRemaining)} Schichtzeit verbleibend · Produktion pausiert`
+      :`${euro(PREVENTIVE_MAINTENANCE_COST)} · ${formatMinutes(PREVENTIVE_MAINTENANCE_MINUTES)} Produktionszeit${shiftAt(state.gameMinutes)?'':' · nur während der Schicht startbar'}`;
 
     const hudOrder=o?(o.part+' · #'+o.id):'Kein Auftrag';
     const deadlineLeft=o&&m&&m.deadlineAt!==null?m.deadlineAt-state.gameMinutes:null;
@@ -4591,7 +4650,7 @@
             say('Platz '+m.bay+': Laderoboter wieder einsatzbereit.');
           }
         }
-        if(!(m.maintenanceRemainingMinutes>0))continue;
+        if(!(m.maintenanceRemainingMinutes>0)||!shift)continue;
         m.maintenanceRemainingMinutes=Math.max(0,m.maintenanceRemainingMinutes-step);
         if(m.maintenanceRemainingMinutes===0){
           m.maintenance=100;
@@ -4891,7 +4950,7 @@
   });
   document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeEmployeeCard();closeDrawer();$('speed-menu').hidden=true;}});
   $('buy-material').addEventListener('click',()=>{
-    const type=state.selectedMaterialType,quantity=Number($('material-quantity').value);
+    const type=state.selectedMaterialType,quantity=selectedMaterialQuantity();
     const price=materialSystem.quote(type,quantity,state.gameMinutes);
     if(price===null||state.money<price||state.material+quantity>state.capacity)return;
     const added=inventorySystem.addMaterial(state,type,quantity);
