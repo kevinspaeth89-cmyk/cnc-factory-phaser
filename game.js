@@ -89,14 +89,14 @@
     money:14000,material:0,capacity:300,staff:{shift1:0,shift2:0},
     machines:[],selectedBay:null,speed:1,paused:false,gameMinutes:0,completed:0,
     eventQueue:[],nextRushOrderAt:null,ncPrograms:{},programmer:{hired:false,active:null,queue:[]},pendingQualityComplaints:[],
-    qualityAssurance:{inspections:0,caughtDefects:0,escapedDefects:0,inspectionMinutes:0,recentChecks:[]},
+    qualityAssurance:{inspections:0,caughtDefects:0,escapedDefects:0,inspectionMinutes:0,routineReworks:0,recentChecks:[]},
     qualityPolicies:{shift1:'standard',shift2:'standard'},
     qualityStaff:{shift1:[],shift2:[]},
     payrollDue:0,wagesPaid:0,storagePaid:0,energyPaid:0,selected:null,selectedMaterialType:'c45',
     credit:{principal:0,originalAmount:0,annualRate:CREDIT_ANNUAL_RATE,paymentsRemaining:0,accruedInterest:0,nextPaymentAt:null,missedPayments:0},
     recruitment:{applicants:[],nextId:1},
     orderOffice:{hired:false,autoPurchase:true,autoAccept:true,cashReserve:5000,maxMarketMarkupPct:0,minMaterialSurplus:1000,materialReserveKg:25,queueLimit:1,nextReviewAt:0},
-    shiftLeader:{shift1:{hired:false,autoMaintenance:true,autoTools:true,autoBreakdowns:true,spendingLimit:2500,nextDecisionAt:0},shift2:{hired:false,autoMaintenance:true,autoTools:true,autoBreakdowns:true,spendingLimit:2500,nextDecisionAt:0}},pendingRushAssignment:null
+    shiftLeader:{shift1:{hired:false,autoMaintenance:true,autoTools:true,autoBreakdowns:true,autoQuality:true,spendingLimit:2500,nextDecisionAt:0},shift2:{hired:false,autoMaintenance:true,autoTools:true,autoBreakdowns:true,autoQuality:true,spendingLimit:2500,nextDecisionAt:0}},pendingRushAssignment:null
   });
   let state=defaults();
   function validMachine(m) {
@@ -118,6 +118,7 @@
         caughtDefects:Math.max(0,Math.floor(Number(savedQualityAssurance.caughtDefects)||0)),
         escapedDefects:Math.max(0,Math.floor(Number(savedQualityAssurance.escapedDefects)||0)),
         inspectionMinutes:Math.max(0,Number(savedQualityAssurance.inspectionMinutes)||0),
+        routineReworks:Math.max(0,Math.floor(Number(savedQualityAssurance.routineReworks)||0)),
         recentChecks:(Array.isArray(savedQualityAssurance.recentChecks)?savedQualityAssurance.recentChecks:[])
           .filter(item=>item&&typeof item.part==='string'&&typeof item.inspector==='string')
           .slice(0,6)
@@ -326,6 +327,7 @@
         autoMaintenance:old.autoMaintenance!==false,
         autoTools:old.autoTools!==false,
         autoBreakdowns:old.autoBreakdowns!==false,
+        autoQuality:old.autoQuality!==false,
         spendingLimit:SHIFT_LEADER_SPENDING_LIMITS.includes(Number(old.spendingLimit))?Number(old.spendingLimit):2500,
         nextDecisionAt:Number.isFinite(old.nextDecisionAt)?Math.max(state.gameMinutes,old.nextDecisionAt):state.gameMinutes
       };
@@ -1477,10 +1479,10 @@
       const cost=Number.isFinite(event.reworkCost)?event.reworkCost:Math.max(250,Math.round(order.reward*(event.defectParts||1)/Math.max(1,order.qty)*.55));
       const extra=replacementWorkMinutes(order,event.defectParts||1,machine);
       if(state.money<cost)return 'Schichtleiter: Nacharbeit schützt vor fehlerhafter Auslieferung, ist mit '+euro(cost)+' aktuell aber nicht finanzierbar.';
-      const deadlineLeft=Number.isFinite(machine.deadlineAt)?machine.deadlineAt-state.gameMinutes:null;
-      const buffer=deadlineLeft===null?null:deadlineLeft-extra;
-      const timing=buffer===null?'Frist nicht berechenbar.':buffer>=0?'Danach bleiben voraussichtlich '+formatEstimateMinutes(buffer)+' Fristpuffer.':'Nacharbeit würde den Auftrag voraussichtlich um '+formatEstimateMinutes(-buffer)+' weiter verspäten.';
-      return 'Schichtleiter empfiehlt Nacharbeit: '+euro(cost)+' und '+formatMinutes(extra)+' Zusatzzeit; '+timing;
+      const finishAt=scheduledWorkCompletionAt(machine,state.gameMinutes,extra,false,order.workMode||'regular');
+      const buffer=Number.isFinite(machine.deadlineAt)&&Number.isFinite(finishAt)?machine.deadlineAt-finishAt:null;
+      const timing=buffer===null?'Frist nicht berechenbar.':buffer>=0?'Danach bleiben voraussichtlich '+formatEstimateMinutes(buffer)+' Fristpuffer.':'Nacharbeit würde den Auftrag voraussichtlich um '+formatEstimateMinutes(-buffer)+' verspäten.';
+      return 'Schichtleitung: Nacharbeit kostet '+euro(cost)+' und '+formatMinutes(extra)+' Maschinenzeit; '+timing+' Bei solchen Ausnahmefällen entscheidest du selbst.';
     }
     if(event.event==='quality_complaint'){
       const order=event.order,machine=findQualityReworkMachine(order);
@@ -1770,12 +1772,22 @@
     const output=Math.max(30,Number(order?.duration)||30)*6*count/qty/Math.max(.5,rate);
     return Math.min(360,Math.max(60,Math.ceil((45+output)/15)*15));
   }
+  function routineQualityReworkAllowed(event,machine,inspectionShift){
+    const leader=shiftLeaderFor(inspectionShift),order=event.order;
+    if(!leader?.hired||leader.autoQuality===false||!event.inspectedById||!machine||!order||state.eventQueue.length)return false;
+    const cost=Number(event.reworkCost),deadline=machine.deadlineAt;
+    if(!Number.isFinite(cost)||cost>leader.spendingLimit||cost>state.money||cost>order.reward*.15||!Number.isFinite(deadline))return false;
+    if(event.defectParts>Math.max(2,Math.ceil(order.qty*.1)))return false;
+    const finishAt=scheduledWorkCompletionAt(machine,state.gameMinutes,
+      replacementWorkMinutes(order,event.defectParts,machine),false,order.workMode||'regular');
+    return Number.isFinite(finishAt)&&deadline-finishAt>=120;
+  }
   function removeEvent(event){
     const index=state.eventQueue.findIndex(item=>item.id===event.id);
     if(index>=0)state.eventQueue.splice(index,1);
     state.paused=state.eventQueue.length>0;
   }
-  function resolveQualityIssue(event,decision){
+  function resolveQualityIssue(event,decision,automatic=false){
     if(!state.eventQueue.some(item=>item.id===event.id))return false;
     const machine=machineAt(event.bay),order=machine&&job(machine);
     if(!machine||!order||order.id!==event.order.id)return false;
@@ -1821,8 +1833,13 @@
       machine.setupPartProduced=true;machine.setupRemainingMinutes=0;machine.setupDurationMinutes=0;machine.setupDelayMinutes=0;
       machine.qualityInspectedOrderId=order.id;machine.qualityInspectionOrderId=null;machine.qualityInspectionRemainingMinutes=0;
       machine.qualityInspectionTotalMinutes=0;machine.qualityInspectionPolicy=null;
+      if(automatic){
+        state.qualityAssurance.routineReworks++;
+        const recent=state.qualityAssurance.recentChecks.find(check=>check.orderId===order.id);
+        if(recent)recent.result=`${event.defectParts} Fehlerteil${event.defectParts===1?'':'e'} entdeckt · Nacharbeit automatisch gestartet`;
+      }
       removeEvent(event);save();renderOrders();renderBusiness();render();
-      say(`Qualitätsprüfung: ${event.defectParts} fehlerhafte Teile werden auf Platz ${machine.bay} für ${euro(cost)} nachgefertigt.`);
+      say(`${automatic?'Schichtleitung: ':''}Qualitätsprüfung: ${event.defectParts} fehlerhafte Teile werden auf Platz ${machine.bay} für ${euro(cost)} nachgefertigt.`);
       return true;
     }
     if(decision!=='ship')return false;
@@ -3071,7 +3088,7 @@
       machine.tool<=40,spareToolCount(machine)>0,machine.maintenance<=65,machine.maintenanceRemainingMinutes>0,
       breakdownSystem.getStatus(state,machine.bay)
     ].join(':')).join('|');
-    return [shift,leader.hired,leader.autoMaintenance,leader.autoTools,leader.autoBreakdowns,leader.spendingLimit,leader.nextDecisionAt,
+    return [shift,leader.hired,leader.autoMaintenance,leader.autoTools,leader.autoBreakdowns,leader.autoQuality,leader.spendingLimit,leader.nextDecisionAt,
       workers,machines,state.shiftLeader.shift1.hired,state.shiftLeader.shift2.hired,
       state.money>=SHIFT_LEADER_SETUP_COST,state.money>=PREVENTIVE_MAINTENANCE_COST,state.money>=ROBOT_TECHNICIAN_COST].join('::');
   }
@@ -3182,7 +3199,7 @@
       style.textContent='.shift-leader-policy-grid{display:grid;gap:5px;margin:8px 0}.shift-leader-policy{display:flex;align-items:flex-start;gap:8px;padding:7px 9px;border-radius:7px;background:#102832;color:#d6e6e9;font-size:11px;line-height:1.35}.shift-leader-policy input{margin:1px 0 0;accent-color:#78d7a5}.shift-leader-limit{margin-top:7px}';
       document.head.append(style);
       const title=document.createElement('h3');title.textContent='Schichtleitung';
-      const intro=document.createElement('p');intro.className='hint';intro.textContent='Bis zu ein Schichtleiter je Schicht. Sie kümmern sich automatisch um Wartung, Werkzeuge und Störungen innerhalb deines Ausgabenlimits.';
+      const intro=document.createElement('p');intro.className='hint';intro.textContent='Ein Schichtleiter je Schicht. Sie kümmern sich innerhalb deines Ausgabenlimits um Wartung, Werkzeuge, Störungen und eindeutige QS-Nacharbeiten. Bei knappen Terminen und teuren Fehlern entscheidest du selbst.';
       const status=document.createElement('p');status.id='shift-leader-status';status.className='hint';
       const shiftLabel=document.createElement('label');shiftLabel.className='office-setting';
       const shiftText=document.createElement('span');shiftText.textContent='Schicht auswählen';
@@ -3202,7 +3219,8 @@
       const policyOptions=[
         ['autoMaintenance','Vorbeugende Wartung im Leerlauf selbst einplanen'],
         ['autoTools','Ersatzwerkzeuge bereitstellen und verschlissene Werkzeuge wechseln'],
-        ['autoBreakdowns','Maschinen- und Roboterausfälle selbst behandeln']
+        ['autoBreakdowns','Maschinen- und Roboterausfälle selbst behandeln'],
+        ['autoQuality','Eindeutige QS-Nacharbeiten selbst freigeben']
       ];
       for(const [key,labelText] of policyOptions){
         const label=document.createElement('label');label.className='shift-leader-policy';
@@ -3253,7 +3271,7 @@
       const note=document.createElement('p');note.className='hint';note.textContent='Stelle bis zu zwei Personen ein – jeweils eine für Früh- und Spätschicht.';
       list.append(note);return;
     }
-    for(const key of ['autoMaintenance','autoTools','autoBreakdowns'])$('shift-leader-'+key).checked=leader[key]!==false;
+    for(const key of ['autoMaintenance','autoTools','autoBreakdowns','autoQuality'])$('shift-leader-'+key).checked=leader[key]!==false;
     $('shift-leader-limit').value=String(leader.spendingLimit);
     const suggestions=shiftLeaderRecommendations(shift);
     if(!suggestions.length){
@@ -3665,10 +3683,10 @@
     const intro=document.createElement('p');intro.className='hint';
     intro.textContent=`QS ist eine eigene Personalgruppe. Externe QS-Kräfte sind sofort qualifiziert. Ein Maschinenbediener kann befördert werden, benötigt dafür aber ${formatMinutes(QS_PROMOTION_TRAINING_MINUTES)} QS-Schulung für ${euro(QS_PROMOTION_TRAINING_COST)} und steht danach nicht mehr als Bediener zur Verfügung.`;
     const stats=document.createElement('p');stats.className='hint';
-    stats.textContent=`QS-Prüfungen ${state.qualityAssurance.inspections} · Prüfzeit ${formatMinutes(state.qualityAssurance.inspectionMinutes)} · Fehlerteile abgefangen ${state.qualityAssurance.caughtDefects} · durch QS gerutscht ${state.qualityAssurance.escapedDefects}`;
+    stats.textContent=`QS-Prüfungen ${state.qualityAssurance.inspections} · Prüfzeit ${formatMinutes(state.qualityAssurance.inspectionMinutes)} · Fehlerteile abgefangen ${state.qualityAssurance.caughtDefects} · Routine-Nacharbeiten automatisch ${state.qualityAssurance.routineReworks} · durch QS gerutscht ${state.qualityAssurance.escapedDefects}`;
     const impact=document.createElement('div');impact.className='qs-impact';
     impact.textContent=state.qualityAssurance.caughtDefects
-      ?`${state.qualityAssurance.caughtDefects} fehlerhafte Teile hat die QS vor der Auslieferung entdeckt. Du konntest über Nacharbeit oder Auslieferung entscheiden.`
+      ?`${state.qualityAssurance.caughtDefects} fehlerhafte Teile hat die QS vor der Auslieferung entdeckt. Routinefälle kann die Schichtleitung direkt zur Nacharbeit freigeben.`
       :'Die QS prüft fertige Aufträge vor der Auslieferung. Entdeckte Fehler lösen eine Entscheidung zur Nacharbeit aus.';
     const rows=document.createElement('div');
 
@@ -4525,7 +4543,9 @@
         const event={event:'quality_issue',id:`quality_issue:${order.id}`,bay:machine.bay,order:{...order},riskPct,defectParts:defects,
           detectionChance,inspectedById:qsInspector?.id??null,inspectedByName:qsInspector?.name||null,
           reworkCost:Math.max(250,Math.round(order.reward*defects/Math.max(1,order.qty)*.55)),createdAt:state.gameMinutes};
+        const automatic=routineQualityReworkAllowed(event,machine,inspectionShift);
         if(!state.eventQueue.some(item=>item.id===event.id))state.eventQueue.push(event);
+        if(automatic&&resolveQualityIssue(event,'rework',true))return 'reworking';
         state.paused=true;renderEventWindow();save();return 'paused';
       }
       if(qsInspector)state.qualityAssurance.escapedDefects+=defects;
