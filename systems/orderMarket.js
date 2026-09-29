@@ -27,29 +27,37 @@
       key: 'standard', customer: 'Veltraxis Mobility', label: 'Standardkunde', weight: 42,
       sector: 'Automobil & E-Mobility', district: 'Mobilitätspark', brandClass: 'veltraxis', logoMark: 'V',
       slogan: 'Motion, machined.', specialties: ['Wellenflansche','Distanzringe','Antriebsteile'],
-      qty: [25, 55], rewardPerPart: [135, 185], duration: [100, 164], deadline: [28, 48],
-      difficulty: [1, 3], lifetime: [2880, 4320], followUpChance: 0.18
+      playStyle: 'Größere Serien · planbare Abrufe', preferredParts: ['turn-flange','turn-spacer','turn-sleeve','mill-plate'], partBias: 3,
+      rushAffinity: 0.8,
+      qty: [40, 78], rewardPerPart: [128, 176], duration: [112, 178], deadline: [30, 52],
+      difficulty: [1, 3], lifetime: [2880, 4320], followUpChance: 0.22
     },
     {
       key: 'premium', customer: 'Orionis Fluidics', label: 'Premiumkunde', weight: 22,
       sector: 'Lebensmittel-, Pharma- & Fluidtechnik', district: 'Clean Process Campus', brandClass: 'orionis', logoMark: 'O',
       slogan: 'Clean flow. Precise parts.', specialties: ['Ventilbuchsen','Pumpengehäuse','Edelstahlteile'],
-      qty: [20, 45], rewardPerPart: [185, 255], duration: [124, 200], deadline: [40, 68],
-      difficulty: [3, 5], lifetime: [2520, 4320], followUpChance: 0.30
+      playStyle: 'Saubere Prozesse · qualitätssensibel', preferredParts: ['turn-valve','turn-flange','mill-pump'], partBias: 4,
+      rushAffinity: 0.7,
+      qty: [20, 44], rewardPerPart: [190, 265], duration: [128, 204], deadline: [40, 68],
+      difficulty: [3, 5], lifetime: [2520, 4320], followUpChance: 0.32
     },
     {
       key: 'series', customer: 'Kaeldor Components', label: 'Serienkunde', weight: 21,
       sector: 'Luftfahrt & Präzisionskomponenten', district: 'Aero Industrial Park', brandClass: 'kaeldor', logoMark: 'K',
       slogan: 'Built light. Built exact.', specialties: ['Spannprismen','Leichtbauteile','Serienkomponenten'],
-      qty: [60, 100], rewardPerPart: [85, 125], duration: [124, 210], deadline: [60, 96],
-      difficulty: [2, 4], lifetime: [3600, 5760], followUpChance: 0.34
+      playStyle: 'Hohe Präzision · anspruchsvolle Teile', preferredParts: ['mill-prism','mill-plate','turn-sleeve'], partBias: 3,
+      rushAffinity: 0.55,
+      qty: [28, 58], rewardPerPart: [175, 245], duration: [142, 220], deadline: [54, 88],
+      difficulty: [4, 5], lifetime: [3360, 5280], followUpChance: 0.30
     },
     {
       key: 'express', customer: 'Asteron Robotics', label: 'Expresskunde', weight: 15,
       sector: 'Robotik & Automation', district: 'Technologiepark', brandClass: 'asteron', logoMark: 'A',
       slogan: 'Precision in motion.', specialties: ['Sensorhalter','Robotikbauteile','Eilserien'],
-      qty: [15, 32], rewardPerPart: [220, 300], duration: [88, 140], deadline: [20, 34],
-      difficulty: [2, 4], lifetime: [1680, 2880], followUpChance: 0.16
+      playStyle: 'Kleine Lose · kurze Termine · Eilaufträge', preferredParts: ['mill-bracket','turn-spacer','turn-flange'], partBias: 4,
+      rushAffinity: 2.2,
+      qty: [12, 30], rewardPerPart: [225, 310], duration: [82, 136], deadline: [18, 32],
+      difficulty: [2, 4], lifetime: [1560, 2640], followUpChance: 0.18
     }
   ];
   const parts = [
@@ -370,7 +378,7 @@
     return weighted[weighted.length - 1].profile;
   }
 
-  function choosePart(market, kind, requestedPartKey) {
+  function choosePart(market, kind, requestedPartKey, profile = null) {
     if (requestedPartKey) {
       const requested = parts.find(part => part.key === requestedPartKey && part.kind === kind);
       if (requested) return requested;
@@ -378,7 +386,24 @@
     const used = new Set(market.available.filter(order => order.kind === kind).map(order => order.partKey));
     let candidates = parts.filter(part => part.kind === kind && !used.has(part.key));
     if (!candidates.length) candidates = parts.filter(part => part.kind === kind);
-    return candidates[integer(market, 0, candidates.length - 1)];
+
+    const preferred = new Set(Array.isArray(profile?.preferredParts) ? profile.preferredParts : []);
+    const preferredCandidates = candidates.filter(part => preferred.has(part.key));
+    if (preferredCandidates.length && random(market) < 0.72) {
+      return preferredCandidates[integer(market, 0, preferredCandidates.length - 1)];
+    }
+
+    const weighted = candidates.map(part => ({
+      part,
+      weight: preferred.has(part.key) ? Math.max(1, finite(profile?.partBias, 2)) : 1
+    }));
+    const total = weighted.reduce((sum,item)=>sum+item.weight,0);
+    let draw=random(market)*total;
+    for(const item of weighted){
+      draw-=item.weight;
+      if(draw<0)return item.part;
+    }
+    return weighted[weighted.length-1].part;
   }
 
   function addGeneratedOffer(state, createdAt, overrides) {
@@ -388,7 +413,7 @@
 
     const kind = isValidKind(opts.kind) ? opts.kind : chooseKind(market);
     const profile = profiles.find(item => item.key === opts.profileKey) || chooseProfile(market);
-    const part = choosePart(market, kind, opts.partKey);
+    const part = choosePart(market, kind, opts.partKey, profile);
     const number = market.nextOrderNumber;
     market.nextOrderNumber += 1;
     const id = `OM-${String(number).padStart(4, '0')}`;
@@ -414,6 +439,7 @@
       customerProfile: profile.key,
       customerSector: profile.sector,
       customerBrandClass: profile.brandClass,
+      customerPlayStyle: profile.playStyle,
       part: partName,
       partKey: part.key,
       kind,
@@ -535,7 +561,7 @@
     const weighted = eligible.map(profile => {
       const completed = finite(market.completedCustomers[profile.customer], 0);
       const reputation = ensureReputation(state)[profile.customer];
-      return { profile, weight: Math.max(1, completed) * (0.5 + reputation / 100) };
+      return { profile, weight: Math.max(1, completed) * (0.5 + reputation / 100) * Math.max(0.25, finite(profile.rushAffinity, 1)) };
     });
     const totalWeight = weighted.reduce((sum, item) => sum + item.weight, 0);
     let draw = random(market) * totalWeight;
@@ -687,6 +713,7 @@
       brandClass: 'generic',
       logoMark: '?',
       slogan: 'Industrial partner',
+      playStyle: 'Allgemeine Industrie',
       specialties: []
     };
     return {
@@ -696,6 +723,7 @@
       brandClass: profile.brandClass,
       logoMark: profile.logoMark,
       slogan: profile.slogan,
+      playStyle: profile.playStyle,
       specialties: [...profile.specialties]
     };
   }

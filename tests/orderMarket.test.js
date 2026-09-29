@@ -285,3 +285,63 @@ test('customer history snapshots include brand identity', () => {
   assert.equal(history.identity.customer, customer);
   assert.equal(history.identity.sector, orderMarket.getCustomerIdentity(customer).sector);
 });
+
+
+test('sector profiles create visibly different order shapes', () => {
+  const state = newState('sector-shapes');
+  const offers = Object.fromEntries(orderMarket.getAvailable(state).map(order => [order.customer, order]));
+
+  assert.ok(offers['Veltraxis Mobility'].qty >= 40);
+  assert.ok(offers['Asteron Robotics'].qty <= 30);
+  assert.ok(offers['Kaeldor Components'].difficulty >= 4);
+  assert.match(offers['Orionis Fluidics'].customerPlayStyle, /qualitätssensibel/i);
+  assert.match(offers['Veltraxis Mobility'].customerPlayStyle, /Größere Serien/);
+  assert.match(offers['Asteron Robotics'].customerPlayStyle, /Eilaufträge/);
+});
+
+test('customer part preferences bias repeat generation without making it exclusive', () => {
+  const preferred = {
+    'Veltraxis Mobility': new Set(['turn-flange','turn-spacer','turn-sleeve','mill-plate']),
+    'Orionis Fluidics': new Set(['turn-valve','turn-flange','mill-pump']),
+    'Kaeldor Components': new Set(['mill-prism','mill-plate','turn-sleeve']),
+    'Asteron Robotics': new Set(['mill-bracket','turn-spacer','turn-flange'])
+  };
+  const hits = Object.fromEntries(Object.keys(preferred).map(customer=>[customer,0]));
+  const totals = Object.fromEntries(Object.keys(preferred).map(customer=>[customer,0]));
+
+  for (let seed = 1; seed <= 120; seed += 1) {
+    const state = newState('sector-parts-' + seed);
+    for (const order of orderMarket.getAvailable(state)) {
+      totals[order.customer] += 1;
+      if (preferred[order.customer].has(order.partKey)) hits[order.customer] += 1;
+    }
+  }
+
+  for (const customer of Object.keys(preferred)) {
+    assert.ok(hits[customer] / totals[customer] > 0.45, customer + ' should prefer sector-fitting parts');
+  }
+});
+
+test('robotics customer is more likely to generate rush work than low-rush sectors', () => {
+  const state = newState('sector-rush-affinity');
+  for (const customer of Object.keys(orderMarket.getReputation(state))) {
+    state.orderMarket.completedCustomers[customer] = 5;
+    state.customerReputation[customer] = 50;
+  }
+
+  const counts = {
+    'Veltraxis Mobility': 0,
+    'Orionis Fluidics': 0,
+    'Kaeldor Components': 0,
+    'Asteron Robotics': 0
+  };
+  for (let index = 0; index < 500; index += 1) {
+    const rush = orderMarket.createRushOrder(state, ['Drehen','Fräsen']);
+    assert.ok(rush);
+    counts[rush.customer] += 1;
+  }
+
+  assert.ok(counts['Asteron Robotics'] > counts['Veltraxis Mobility']);
+  assert.ok(counts['Asteron Robotics'] > counts['Orionis Fluidics']);
+  assert.ok(counts['Asteron Robotics'] > counts['Kaeldor Components']);
+});

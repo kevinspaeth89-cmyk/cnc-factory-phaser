@@ -2055,7 +2055,7 @@
   function customerBrandIdentity(customer){
     return typeof orderMarketSystem.getCustomerIdentity==='function'
       ?orderMarketSystem.getCustomerIdentity(customer)
-      :{customer,sector:'Industrie',district:'Gewerbegebiet',brandClass:'generic',logoMark:'?',slogan:'Industrial partner',specialties:[]};
+      :{customer,sector:'Industrie',district:'Gewerbegebiet',brandClass:'generic',logoMark:'?',slogan:'Industrial partner',playStyle:'Allgemeine Industrie',specialties:[]};
   }
   function createCustomerLogo(customer,compact=false){
     const brand=customerBrandIdentity(customer);
@@ -2087,7 +2087,7 @@
       row.className='reputation-row reputation-'+brand.brandClass;
       identity.className='reputation-identity';
       brandMeta.className='reputation-brand-meta';
-      brandMeta.textContent=brand.sector+' · '+brand.district+' · „'+brand.slogan+'“';
+      brandMeta.textContent=brand.sector+' · '+brand.district+' · '+brand.playStyle+' · „'+brand.slogan+'“';
       detail.textContent=history?.completed
         ?`${history.relationship} · ${history.completed} Auftrag${history.completed===1?'':'e'} · ${euro(history.revenue)} Umsatz · ${history.punctualityPct===null?'Pünktlichkeit noch offen':history.punctualityPct+' % pünktlich'} · ${history.topPart?'häufig '+history.topPart:'noch kein typisches Teil'}`
         :'Noch keine gemeinsame Auftragshistorie · Typisch: '+brand.specialties.join(', ');
@@ -2147,7 +2147,7 @@
       card.dataset.customerBrand=orderBrand.brandClass;
       const sectorLine=document.createElement('p');
       sectorLine.className='customer-sector-line';
-      sectorLine.textContent=orderBrand.sector+' · '+orderBrand.district+' · Typisch: '+orderBrand.specialties.join(', ');
+      sectorLine.textContent=orderBrand.sector+' · '+orderBrand.playStyle+' · Typisch: '+orderBrand.specialties.join(', ');
       card.querySelector('h3').before(sectorLine);
       const customerHistory=customerHistories[o.customer];
       if(customerHistory?.completed){
