@@ -475,7 +475,7 @@
             record.since = now;
             events.push({
               event: record.status === 'major_failure' ? 'major_failure' : 'warning',
-              selfRepairFailed: true, bay, fault, severity: record.severity, since: now,
+              selfRepairFailed: true, repairEmployeeId, bay, fault, severity: record.severity, since: now,
               blocksProduction: true
             });
           } else {
