@@ -190,9 +190,8 @@
       machine.jobActive === true || machine.hasActiveJob === true;
   }
 
-  function technicianTravelRange(record) {
-    const major = record.severity >= 2 || record.status === 'major_failure';
-    return major ? { min: 90, max: 180 } : { min: 45, max: 120 };
+  function technicianTravelRange() {
+    return { min: 45, max: 120 };
   }
 
   function repairNumbers(record, method) {
