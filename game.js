@@ -1977,8 +1977,11 @@
   }
   function tab(name){
     closeEmployeeCard();
+    hallPreviewBay=null;
+    renderHallPreview();
     if(name!=='orders'&&pendingOrderAssignmentId)closeOrderMachineChooser();
     currentPanel=name;
+    renderEmployeeRemarkHistory();
     $('drawer-body').scrollTop=0;
     $('drawer').classList.toggle('warehouse-focus',name==='warehouse'&&!!state.warehouseOrderSnapshot);
     $('drawer').hidden=false;
@@ -2003,6 +2006,7 @@
     currentPanel=null;
     $('drawer').hidden=true;
     $('scrim').hidden=true;
+    renderEmployeeRemarkHistory();
     $('warehouse-door').setAttribute('aria-expanded','false');
     for(const panel of ['orders','machine','business']){
       $(panel+'-tab').classList.remove('active');
@@ -2703,7 +2707,7 @@
   function renderEmployeeRemarkHistory(){
     const panel=$('employee-remark-history'),lines=$('employee-remark-history-lines');
     if(!panel||!lines)return;
-    panel.hidden=!employeeRemarkHistory.length;
+    panel.hidden=!!currentPanel||!employeeRemarkHistory.length;
     lines.replaceChildren(...employeeRemarkHistory.map(item=>{
       const line=document.createElement('div');
       const name=document.createElement('strong'),text=document.createElement('span');
