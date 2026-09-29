@@ -104,46 +104,60 @@ footer{display:flex;align-items:center;gap:7px;padding:6px 9px max(6px,env(safe-
 @media(max-width:600px) and (orientation:portrait){
   .bay-worker-remark{
     top:auto;
-    bottom:82%;
-    left:50%;
-    max-width:90%;
+    bottom:80%;
+    max-width:104%;
     padding:3px 5px;
     font-size:8px;
     line-height:1.2;
     white-space:normal;
   }
+  .bay-1 .bay-worker-remark,
+  .bay-3 .bay-worker-remark{
+    left:72%;
+  }
+  .bay-2 .bay-worker-remark,
+  .bay-4 .bay-worker-remark{
+    left:28%;
+  }
   .bay-worker-remark::after{
-    left:68%;
     bottom:-4px;
     width:7px;
     height:7px;
   }
+  .bay-1 .bay-worker-remark::after,
+  .bay-3 .bay-worker-remark::after{
+    left:46%;
+  }
+  .bay-2 .bay-worker-remark::after,
+  .bay-4 .bay-worker-remark::after{
+    left:54%;
+  }
   .hall-map.six-bay .bay-worker-remark,
   .hall-map.eight-bay .bay-worker-remark{
     top:auto;
-    bottom:82%;
+    bottom:80%;
   }
   .employee-remark-history{
-    top:6px;
-    bottom:auto;
+    top:auto;
+    bottom:7px;
     left:6px;
-    width:min(320px,calc(100% - 12px));
-    max-height:58px;
-    padding:5px 7px;
+    width:calc(100% - 12px);
+    max-height:52px;
+    padding:4px 7px;
     overflow:hidden;
     border-radius:8px;
-    background:#071923ed;
+    background:#071923e8;
   }
   .employee-remark-history>strong{
-    margin-bottom:2px;
-    font-size:8px;
+    margin-bottom:1px;
+    font-size:7px;
   }
   .employee-remark-history-lines{
-    gap:1px;
+    gap:0;
   }
   .employee-remark-history-lines div{
-    font-size:8px;
-    line-height:1.2;
+    font-size:7px;
+    line-height:1.18;
   }
   .employee-remark-history-lines div:nth-child(n+3){
     display:none;
