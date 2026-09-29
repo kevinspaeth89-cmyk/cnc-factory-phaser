@@ -301,7 +301,7 @@ test('sector profiles create visibly different order shapes', () => {
 
 test('customer part preferences bias repeat generation without making it exclusive', () => {
   const preferred = {
-    'Veltraxis Mobility': new Set(['turn-flange','turn-spacer','turn-sleeve']),
+    'Veltraxis Mobility': new Set(['turn-flange','turn-spacer','turn-sleeve','mill-plate']),
     'Orionis Fluidics': new Set(['turn-valve','turn-flange','mill-pump']),
     'Kaeldor Components': new Set(['mill-prism','mill-plate','turn-sleeve']),
     'Asteron Robotics': new Set(['mill-bracket','turn-spacer','turn-flange'])
