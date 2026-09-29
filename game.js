@@ -4021,10 +4021,11 @@
       if(layout.level===3){
         b.style.setProperty('--eight-art-width',(19/slot.width*100)+'%');
         b.style.setProperty('--eight-art-height',(19/slot.height*100)+'%');
+        b.style.setProperty('--eight-art-bottom',(1/slot.height*100)+'%');
         b.style.setProperty('--eight-robot-width',(11/slot.width*100)+'%');
         b.style.setProperty('--eight-robot-height',(15/slot.height*100)+'%');
       }else{
-        for(const variable of ['--eight-art-width','--eight-art-height','--eight-robot-width','--eight-robot-height'])b.style.removeProperty(variable);
+        for(const variable of ['--eight-art-width','--eight-art-height','--eight-art-bottom','--eight-robot-width','--eight-robot-height'])b.style.removeProperty(variable);
       }
       b.classList.toggle('installed',!!machine);
       b.classList.toggle('selected-bay',!!m&&bay===m.bay);
