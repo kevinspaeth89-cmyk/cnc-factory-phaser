@@ -2763,6 +2763,32 @@
       if(!keep.has(wrap.dataset.shift))wrap.remove();
     });
   }
+  function employeeShiftBriefing(machine){
+    const active=job(machine),queue=machine.orderQueue||[];
+    const spare=spareToolCount(machine),fault=breakdownSystem.getStatus(state,machine.bay);
+    const plan=plannedMachineLoad(machine);
+    const activeCheck=plan.activeCheck;
+    const timing=!activeCheck?'':activeCheck.bufferMinutes<0
+      ?`Nach der aktuellen Planung etwa ${formatEstimateMinutes(-activeCheck.bufferMinutes)} zu spät.`
+      :`Voraussichtlich ${formatEstimateMinutes(activeCheck.bufferMinutes)} Fristpuffer.`;
+    const report=active
+      ?`„${active.part}: ${machine.produced}/${active.qty} Teile. Noch etwa ${formatEstimateMinutes(remainingMinutes(machine,active))} Arbeit. ${timing} Werkzeug ${Math.round(machine.tool)} %, Wartung ${Math.round(machine.maintenance)} %. ${queue.length} Auftrag${queue.length===1?'':'e'} danach.“`
+      :`„An Platz ${machine.bay} läuft gerade kein Auftrag. ${queue.length?`${queue.length} Auftrag${queue.length===1?' wartet':'e warten'} in der Warteschlange.`:'Die Maschine ist frei.'} Werkzeug ${Math.round(machine.tool)} %, Wartung ${Math.round(machine.maintenance)} %.“`;
+    let advice;
+    if(fault!=='ok')advice='„Die Maschine ist gestört. Kläre zuerst die Reparatur im Maschinenmenü; die übrige Planung baut auf einem laufenden Platz auf.“';
+    else if(machine.operatorProgramming)advice=`„Ich programmiere ${active?.part||'das nächste Teil'} noch ${formatEstimateMinutes(machine.operatorProgramming.remainingMinutes)}. Bis dahin steht die Maschine. Prüfe den Fristpuffer, bevor du weitere Aufträge auf diesen Platz legst.“`;
+    else if(machine.tool<=25)advice=spare>0
+      ?`„Das Werkzeug steht bei ${Math.round(machine.tool)} %. ${spare} Reserve${spare===1?' liegt':'n liegen'} bereit. Plane den Wechsel jetzt im Maschinenmenü ein.“`
+      :`„Das Werkzeug steht bei ${Math.round(machine.tool)} % und es liegt keine Reserve bereit. Kauf ein Ersatzwerkzeug, bevor die Fertigung stoppt.“`;
+    else if(machine.maintenance<=35)advice=`„Der Maschinenzustand liegt bei ${Math.round(machine.maintenance)} %. ${activeCheck?.bufferMinutes<120?'Der laufende Auftrag hat wenig Puffer; prüfe zuerst seine Frist.':'Plane eine vorbeugende Wartung ein, solange noch Zeitpuffer da ist.'}“`;
+    else if(machine.setupRemainingMinutes>0)advice=`„Wir rüsten noch ${formatEstimateMinutes(machine.setupRemainingMinutes)}. Währenddessen entsteht höchstens das erste Teil. Zieh den nächsten Auftrag erst vor, wenn sich die zusätzliche Rüstzeit lohnt.“`;
+    else if(activeCheck?.bufferMinutes<0)advice=`„${active.part} wird voraussichtlich ${formatEstimateMinutes(-activeCheck.bufferMinutes)} zu spät. Plane hier keinen weiteren Auftrag davor; prüfe Überstunden oder eine freie passende Maschine.“`;
+    else if(activeCheck?.bufferMinutes<120)advice=`„${active.part} hat nur ${formatEstimateMinutes(activeCheck.bufferMinutes)} Puffer. Halte Werkzeug und Wartung im Blick und schiebe hier keinen Eilauftrag dazwischen.“`;
+    else if(plan.queuedChecks.some(check=>check.bufferMinutes<0))advice=`„Der laufende Auftrag passt, aber ${plan.queuedChecks.filter(check=>check.bufferMinutes<0).length} Folgeauftrag${plan.queuedChecks.filter(check=>check.bufferMinutes<0).length===1?' wird':'e werden'} voraussichtlich spät. Sieh dir die Warteschlange an oder verteile Aufträge auf andere Maschinen.“`;
+    else if(active)advice=`„${active.part} liegt im Plan. ${queue.length?'Die Warteschlange ist derzeit fristgerecht; ein zusätzlicher Auftrag braucht eine neue Prüfung.':'Nach diesem Auftrag ist der Platz frei. Du kannst einen passenden Folgeauftrag vorbereiten.'}“`;
+    else advice='„Der Platz ist frei. Ein passender Auftrag kann direkt eingeplant werden; Werkzeug und Wartung sind derzeit ausreichend.“';
+    return {report,advice};
+  }
   function openEmployeeCard(employee,machine,shift){
     const card=$('employee-card');
     if(!card||!employee||!machine)return;
@@ -2808,37 +2834,16 @@
     conversation.replaceChildren();
     const conversationTitle=document.createElement('strong');conversationTitle.textContent='Mitarbeitergespräch';
     const conversationText=document.createElement('p');
-    const gift=recruitmentSystem.workplaceGiftFor?.(employee);
-    const fulfilled=!!gift&&employee.personalGiftId===gift.id;
-    conversationText.textContent=fulfilled
-      ?`„Danke für ${gift.label}. Der Platz fühlt sich jetzt wirklich nach meinem an.“`
-      :gift?`„${gift.label} wäre schön an meinem Platz – ${gift.about}.“`:'„Schön, dass du nachfragst.“';
+    conversationText.textContent=employeeShiftBriefing(machine).report;
     const conversationActions=document.createElement('div');conversationActions.className='employee-conversation-actions';
     const ask=document.createElement('button');ask.type='button';ask.className='action';ask.textContent='Wie läuft die Schicht?';
     ask.addEventListener('click',()=>{
-      const current=job(machine),machineName=catalog[machine.type].name;
-      const remembered=recruitmentSystem.memoryReference(employee,{machineType:machine.type,machineName});
-      conversationText.textContent=machine.tool<=25
-        ?`„Die Schneide sieht fertig aus. Leg mir bitte ein Ersatzwerkzeug bereit, bevor die Oberfläche leidet.“`
-        :machine.maintenance<=35
-          ?`„${machineName} klingt heute anders. Nach der Serie würde ich die Maschine prüfen lassen.“`
-          :current?`„${remembered}${current.part} läuft gerade ruhig. Ich behalte Maß und Oberfläche im Blick.“`
-          :`„${remembered}Im Moment ist es hier ruhig. Ich bin bereit für den nächsten Auftrag.“`;
+      conversationText.textContent=employeeShiftBriefing(machine).report;
     });
     conversationActions.append(ask);
-    if(gift&&!fulfilled){
-      const give=document.createElement('button');give.type='button';give.className='action';
-      give.textContent=`Wunsch erfüllen · ${euro(180)}`;give.disabled=state.money<180;
-      give.addEventListener('click',()=>{
-        if(employee.personalGiftId||state.money<180||!book('other',-180,`Persönlicher Arbeitsplatz für ${employee.name}`,{employeeId:employee.id,item:gift.id}).ok)return;
-        employee.personalGiftId=gift.id;
-        recruitmentSystem.recordMemory(employee,{id:`personal_gift:${gift.id}`,type:'personal_gift',personalItem:gift.label,
-          importance:8,gameMinutes:state.gameMinutes,bay:machine.bay});
-        save();render();openEmployeeCard(employee,machine,shift);
-        queueEmployeeRemark(employee,machine,`Danke für ${gift.label} – jetzt hat mein Platz etwas Eigenes.`);
-      });
-      conversationActions.append(give);
-    }
+    const advice=document.createElement('button');advice.type='button';advice.className='action';advice.textContent='Was empfiehlst du?';
+    advice.addEventListener('click',()=>{conversationText.textContent=employeeShiftBriefing(machine).advice;});
+    conversationActions.append(advice);
     conversation.append(conversationTitle,conversationText,conversationActions);
 
     const quote=(machine.tool<=12||machine.maintenance<=12)&&typeof recruitmentSystem.workRemark==='function'
