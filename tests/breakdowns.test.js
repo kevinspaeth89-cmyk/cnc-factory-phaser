@@ -182,3 +182,19 @@ test('employee repair expertise can materially improve self-repair odds', () => 
   assert.ok(1 - experienced.self.failureChance > 1 - base.self.failureChance);
   assert.ok(experienced.self.failureRange.min < base.self.failureRange.min);
 });
+
+
+test('technician travel time is independent of fault severity while repair time is not', () => {
+  const normal = makeState({ random: () => 0 });
+  breakdowns.tick(normal, 1, running);
+  const normalOptions = breakdowns.getRepairOptions(normal, 1);
+
+  const major = makeState({ random: () => 0 });
+  breakdowns.tick(major, 1, running);
+  major.breakdowns.machines['1'].status = 'major_failure';
+  major.breakdowns.machines['1'].severity = 2;
+  const majorOptions = breakdowns.getRepairOptions(major, 1);
+
+  assert.deepEqual(majorOptions.technician.arrivalRange, normalOptions.technician.arrivalRange);
+  assert.ok(majorOptions.technician.repairMinutes > normalOptions.technician.repairMinutes);
+});
