@@ -2061,7 +2061,7 @@
       identity.className='reputation-identity';
       name.textContent=customer;
       detail.textContent=history?.completed
-        ?`${history.relationship} · ${history.completed} Auftrag${history.completed===1?'':'e'} · ${history.punctualityPct===null?'Pünktlichkeit noch offen':history.punctualityPct+' % pünktlich'} · ${history.topPart?'häufig '+history.topPart:'noch kein typisches Teil'}`
+        ?`${history.relationship} · ${history.completed} Auftrag${history.completed===1?'':'e'} · ${euro(history.revenue)} Umsatz · ${history.punctualityPct===null?'Pünktlichkeit noch offen':history.punctualityPct+' % pünktlich'} · ${history.topPart?'häufig '+history.topPart:'noch kein typisches Teil'}`
         :'Noch keine gemeinsame Auftragshistorie';
       identity.append(name,detail);
       const bonus=Math.round((score-50)*.3);
