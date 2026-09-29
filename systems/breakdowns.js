@@ -39,6 +39,9 @@
     operatingHours: 0,
     warningAgeMinutes: 0,
     repairRemainingMinutes: 0,
+    technicianArrivalRemainingMinutes: 0,
+    technicianRepairMinutes: 0,
+    repairEmployeeId: null,
     plannedRepair: false,
     repairMethod: null,
     repairWillFail: false,
@@ -76,6 +79,11 @@
       operatingHours: Math.max(0, Number(source.operatingHours) || 0),
       warningAgeMinutes: Math.max(0, Number(source.warningAgeMinutes) || 0),
       repairRemainingMinutes: status === 'repairing' ? Math.max(0, Number(source.repairRemainingMinutes) || 0) : 0,
+      technicianArrivalRemainingMinutes: status === 'repairing' && source.repairMethod === 'technician'
+        ? Math.max(0, Number(source.technicianArrivalRemainingMinutes) || 0) : 0,
+      technicianRepairMinutes: status === 'repairing' && source.repairMethod === 'technician'
+        ? Math.max(0, Number(source.technicianRepairMinutes) || 0) : 0,
+      repairEmployeeId: status === 'repairing' && Number.isInteger(source.repairEmployeeId) ? source.repairEmployeeId : null,
       plannedRepair: status === 'repairing' && source.plannedRepair === true,
       repairMethod: status === 'repairing' && ['self', 'technician', 'planned'].includes(source.repairMethod) ? source.repairMethod : null,
       repairWillFail: status === 'repairing' && source.repairMethod === 'self' && source.repairWillFail === true,
@@ -182,6 +190,11 @@
       machine.jobActive === true || machine.hasActiveJob === true;
   }
 
+  function technicianTravelRange(record) {
+    const major = record.severity >= 2 || record.status === 'major_failure';
+    return major ? { min: 90, max: 180 } : { min: 45, max: 120 };
+  }
+
   function repairNumbers(record, method) {
     const info = faults[record.fault];
     const major = record.severity >= 2 || record.status === 'major_failure';
@@ -191,9 +204,13 @@
       return { cost: Math.round(info.cost * factor), downtime: Math.max(1, Math.round(info.downtime * timeFactor)) };
     }
     if (method === 'technician') {
+      const repairMinutes = Math.max(1, Math.round(info.downtime * (major ? 2.15 : 1.15) + (major ? 35 : 12)));
+      const arrivalRange = technicianTravelRange(record);
       return {
         cost: Math.round(info.cost * (major ? 3.1 : 1.65) + (major ? 900 : 250)),
-        downtime: Math.max(1, Math.round(info.downtime * (major ? 4.2 : 1.75) + (major ? 60 : 18)))
+        repairMinutes,
+        arrivalRange,
+        downtime: repairMinutes + Math.round((arrivalRange.min + arrivalRange.max) / 2)
       };
     }
     if (method === 'self') {
@@ -211,7 +228,7 @@
     };
   }
 
-  function selfRepairFailureChance(state, bay, record) {
+  function selfRepairFailureChance(state, bay, record, context = {}) {
     const machine = machineAt(state, bay);
     if (!machine || !record) return 0;
     const factors = conditionFactors(state, machine, record);
@@ -226,18 +243,20 @@
     else if (factors.runtimeFactor >= 1.65) chance += 0.05;
     else if (factors.runtimeFactor >= 1.25) chance += 0.02;
     chance += clamp((factors.reliabilityFactor - 1) * 0.08, -0.05, 0.08);
-    return clamp(chance, 0.25, 0.88);
+    const baseChance = clamp(chance, 0.25, 0.88);
+    const successBonus = clamp(Number(context.selfRepairSuccessBonus) || 0, 0, 0.32);
+    return clamp(baseChance - successBonus, 0.08, 0.88);
   }
 
-  function selfRepairFailureRange(state, bay, record) {
-    const expected = selfRepairFailureChance(state, bay, record);
+  function selfRepairFailureRange(state, bay, record, context = {}) {
+    const expected = selfRepairFailureChance(state, bay, record, context);
     return {
       min: clamp(expected - 0.12, 0.2, 0.92),
       max: clamp(expected + 0.12, 0.2, 0.92)
     };
   }
 
-  function startRepair(record, downtime, planned, method, willFail) {
+  function startRepair(record, downtime, planned, method, willFail, context = {}) {
     record.status = 'repairing';
     record.riskyContinue = false;
     record.scheduledRepair = false;
@@ -245,45 +264,59 @@
     record.plannedRepair = planned;
     record.repairMethod = method || (planned ? 'planned' : 'technician');
     record.repairWillFail = willFail === true;
+    record.repairEmployeeId = Number.isInteger(context.employeeId) ? context.employeeId : null;
+    record.technicianArrivalRemainingMinutes = Math.max(0, Number(context.technicianArrivalMinutes) || 0);
+    record.technicianRepairMinutes = Math.max(0, Number(context.technicianRepairMinutes) || 0);
   }
 
   function repairNow(state, bay) {
     return repairSelf(state, bay);
   }
 
-  function getRepairOptions(state, bay) {
+  function getRepairOptions(state, bay, context = {}) {
     const record = recordAt(state, bay);
     if (!record || !record.fault || !['warning', 'major_failure'].includes(record.status)) return null;
-    const failureChance = selfRepairFailureChance(state, bay, record);
+    const failureChance = selfRepairFailureChance(state, bay, record, context);
     return {
-      self: { ...repairNumbers(record, 'self'), failureChance, failureRange: selfRepairFailureRange(state, bay, record), allowed: !record.selfRepairFailed },
+      self: { ...repairNumbers(record, 'self'), failureChance, failureRange: selfRepairFailureRange(state, bay, record, context), allowed: !record.selfRepairFailed },
       technician: repairNumbers(record, 'technician'),
       planned: repairNumbers(record, 'planned')
     };
   }
 
-  function repairSelf(state, bay) {
+  function repairSelf(state, bay, context = {}) {
     const machine = machineAt(state, bay);
     const record = recordAt(state, bay);
     if (!machine || !record || record.selfRepairFailed || !record.fault || !['warning', 'major_failure'].includes(record.status)) return null;
     const { cost, downtime } = repairNumbers(record, 'self');
-    const failureChance = selfRepairFailureChance(state, bay, record);
-    const failureRange = selfRepairFailureRange(state, bay, record);
+    const failureChance = selfRepairFailureChance(state, bay, record, context);
+    const failureRange = selfRepairFailureRange(state, bay, record, context);
     const attemptFailureChance = failureRange.min + randomValue(state) * (failureRange.max - failureRange.min);
     const willFail = randomValue(state) < attemptFailureChance;
     const fault = record.fault;
-    startRepair(record, downtime, false, 'self', willFail);
+    startRepair(record, downtime, false, 'self', willFail, context);
     return { event: 'repair', method: 'self', bay, fault, cost, downtime, failureChance, failureRange, planned: false, blocksProduction: true };
   }
 
-  function repairTechnician(state, bay) {
+  function repairTechnician(state, bay, context = {}) {
     const machine = machineAt(state, bay);
     const record = recordAt(state, bay);
     if (!machine || !record || !record.fault || !['warning', 'major_failure'].includes(record.status)) return null;
-    const { cost, downtime } = repairNumbers(record, 'technician');
+    const numbers = repairNumbers(record, 'technician');
+    const arrivalRange = numbers.arrivalRange;
+    const arrivalMinutes = Math.round(arrivalRange.min + randomValue(state) * (arrivalRange.max - arrivalRange.min));
+    const downtime = arrivalMinutes + numbers.repairMinutes;
     const fault = record.fault;
-    startRepair(record, downtime, false, 'technician', false);
-    return { event: 'repair', method: 'technician', bay, fault, cost, downtime, planned: false, blocksProduction: true };
+    startRepair(record, downtime, false, 'technician', false, {
+      ...context,
+      technicianArrivalMinutes: arrivalMinutes,
+      technicianRepairMinutes: numbers.repairMinutes
+    });
+    return {
+      event: 'repair', method: 'technician', bay, fault, cost: numbers.cost, downtime,
+      arrivalMinutes, arrivalRange, repairMinutes: numbers.repairMinutes,
+      planned: false, blocksProduction: true
+    };
   }
 
   function continueRisky(state, bay) {
@@ -300,7 +333,7 @@
     const { cost, downtime } = repairNumbers(record, 'planned');
     record.riskyContinue = false;
     record.scheduledRepair = false;
-    startRepair(record, downtime, true, 'planned', false);
+    startRepair(record, downtime, true, 'planned', false, {});
     return {
       event: 'repair_scheduled', bay, fault: record.fault, cost, downtime,
       planned: true, scheduledAfterJob: false, blocksProduction: true
@@ -409,10 +442,23 @@
       if (!record) continue;
 
       if (record.status === 'repairing') {
+        const arrivalBefore = record.technicianArrivalRemainingMinutes;
         record.repairRemainingMinutes = Math.max(0, record.repairRemainingMinutes - minutes);
+        if (record.repairMethod === 'technician' && arrivalBefore > 0) {
+          record.technicianArrivalRemainingMinutes = Math.max(0, arrivalBefore - minutes);
+          if (record.technicianArrivalRemainingMinutes <= 0 && record.repairRemainingMinutes > 0) {
+            events.push({
+              event: 'technician_arrived', bay, fault: record.fault,
+              repairMinutes: record.technicianRepairMinutes,
+              blocksProduction: true
+            });
+          }
+        }
         if (record.repairRemainingMinutes <= 0) {
           const fault = record.fault;
-          const selfRepairFailed = record.repairMethod === 'self' && record.repairWillFail;
+          const completedMethod = record.repairMethod;
+          const repairEmployeeId = record.repairEmployeeId;
+          const selfRepairFailed = completedMethod === 'self' && record.repairWillFail;
           record.riskyContinue = false;
           record.scheduledRepair = false;
           record.warningAgeMinutes = 0;
@@ -420,6 +466,9 @@
           record.plannedRepair = false;
           record.repairMethod = null;
           record.repairWillFail = false;
+          record.technicianArrivalRemainingMinutes = 0;
+          record.technicianRepairMinutes = 0;
+          record.repairEmployeeId = null;
           if (selfRepairFailed) {
             record.selfRepairFailed = true;
             record.status = record.severity >= 2 ? 'major_failure' : 'warning';
@@ -435,7 +484,7 @@
             record.fault = null;
             record.severity = 0;
             record.since = null;
-            events.push({ event: 'repair_complete', bay, fault, blocksProduction: false });
+            events.push({ event: 'repair_complete', bay, fault, method: completedMethod, repairEmployeeId, blocksProduction: false });
           }
         }
         continue;
