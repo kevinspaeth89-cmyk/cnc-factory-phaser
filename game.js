@@ -1095,11 +1095,12 @@
     const box=$('message');
     box.textContent=message;
     box.classList.toggle('payroll-message',variant==='payroll');
+    box.classList.toggle('production-message',variant==='production');
     clearTimeout(messageTimer);
     messageTimer=setTimeout(()=>{
       if(box.textContent===message){
         box.textContent='';
-        box.classList.remove('payroll-message');
+        box.classList.remove('payroll-message','production-message');
       }
     },5000);
   }
@@ -1827,7 +1828,7 @@
       reassessActiveProgrammingRoutes();
     }
     save();renderOrders();renderBusiness();
-    say(`${catalog[machine.type].name}: ${order.part} fertig · ${euro(payout)}${late?' (20 % Fristabzug)':''}${quality?.defectParts&&!quality?.undetected?' (10 % Qualitätsabzug)':''}${resumed?` · ${machine.activeOrder.part} fortgesetzt · neue Rüstzeit ${formatMinutes(resumedSetup?.totalMinutes||0)}`:''}${next?` · Nächster Auftrag gestartet${nextSetup?` · Rüstzeit ${formatMinutes(nextSetup.totalMinutes)}`:''}`:''}`);
+    say(`${catalog[machine.type].name}: ${order.part} fertig · ${euro(payout)}${late?' (20 % Fristabzug)':''}${quality?.defectParts&&!quality?.undetected?' (10 % Qualitätsabzug)':''}${resumed?` · ${machine.activeOrder.part} fortgesetzt · neue Rüstzeit ${formatMinutes(resumedSetup?.totalMinutes||0)}`:''}${next?` · Nächster Auftrag gestartet${nextSetup?` · Rüstzeit ${formatMinutes(nextSetup.totalMinutes)}`:''}`:''}`,'production');
     return true;
   }
   function startNextQueuedOrder(machine){
@@ -1855,7 +1856,7 @@
     if(task.remainingMinutes>1e-8)return true;
     machine.qualityReworkQueue.shift();
     orderMarketSystem.adjustReputation(state,task.customer,3);
-    say(`Ersatzcharge ${task.order.part} auf Platz ${machine.bay} fertig · Kundenvertrauen +3.`);
+    say(`Ersatzcharge ${task.order.part} auf Platz ${machine.bay} fertig · Kundenvertrauen +3.`,'production');
     save();renderOrders();renderBusiness();
     return true;
   }
