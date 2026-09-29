@@ -1091,10 +1091,17 @@
   }
   const conditionLabel=value=>value>0&&value<1?'<1 %':Math.round(value)+' %';
   let visual=null, currentPanel=null, businessSection='factory', messageTimer, zoomTimer, phaserGame=null, hallPreviewBay=null, employeeCardContext=null, employeeRemarkState=new Map(), employeeRemarkHistory=[], employeeShiftRemarkKeys=new Set(), shiftLeaderPanelShift=1, shiftLeaderAdviceKey='', operatorPickerShift=null, dismissalPickerShift=null, qualityPickerShift=null, rushWorkMode='regular', rushWorkModeEventId=null;
-  function say(message){
-    $('message').textContent=message;
+  function say(message,variant=''){
+    const box=$('message');
+    box.textContent=message;
+    box.classList.toggle('payroll-message',variant==='payroll');
     clearTimeout(messageTimer);
-    messageTimer=setTimeout(()=>{if($('message').textContent===message)$('message').textContent='';},5000);
+    messageTimer=setTimeout(()=>{
+      if(box.textContent===message){
+        box.textContent='';
+        box.classList.remove('payroll-message');
+      }
+    },5000);
   }
   function setupEventWindow(){
     if($('event-window'))return;
@@ -4520,7 +4527,7 @@
         if(state.payrollDue){
           book('wages',-state.payrollDue,'Monatliche Lohnabrechnung',{period:`${before.getUTCFullYear()}-${String(before.getUTCMonth()+1).padStart(2,'0')}`});
           state.wagesPaid+=state.payrollDue;
-          say(`Monatliche Lohnabrechnung: −${euro(state.payrollDue)}.`);
+          say(`Monatliche Lohnabrechnung: −${euro(state.payrollDue)}.`,'payroll');
           state.payrollDue=0;save();
         }
       }
