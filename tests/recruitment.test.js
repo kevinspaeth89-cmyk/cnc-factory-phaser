@@ -741,3 +741,101 @@ test('legacy and quality profiles do not receive shift or decision remarks', () 
   assert.equal(recruitment.eventRemark({ id: 1, profileVersion: 0 }, 'shift_start', {}), '');
   assert.equal(recruitment.eventRemark({ id: 2, profileVersion: 2, profileType: 'quality' }, 'training', {}), '');
 });
+
+
+test('rush-order memories preserve customer context and can be recalled later', () => {
+  const employee = {
+    id: 41,
+    profileVersion: 2,
+    name: 'Mira Test',
+    skills: { turning: 8, milling: 4, precision: 9, learning: 7 },
+    personality: recruitment.derivePersonality({ turning: 8, milling: 4, precision: 9, learning: 7 }),
+    memories: []
+  };
+  recruitment.recordMemory(employee, {
+    id: 'rush_order:Veltraxis:Wellenflansch:late',
+    type: 'rush_order',
+    machineType: 'rapid',
+    machineName: 'Nexora NX-420',
+    outcome: 'late',
+    orderId: 'R-1',
+    orderPart: 'Wellenflansch',
+    customer: 'Veltraxis Mobility',
+    importance: 9,
+    gameMinutes: 1000
+  });
+  const memory = recruitment.normalizeMemories(employee.memories)[0];
+  assert.equal(memory.customer, 'Veltraxis Mobility');
+  assert.match(recruitment.memoryTitle(memory), /Veltraxis Mobility/);
+
+  const remark = recruitment.recallRemark(employee, 'rush_order', {
+    machineType: 'rapid',
+    machineName: 'Nexora NX-420',
+    part: 'Andere Eilserie',
+    customer: 'Veltraxis Mobility'
+  });
+  assert.match(remark, /Veltraxis Mobility/);
+  assert.match(remark, /zu spät|früher Luft/);
+});
+
+test('quality memories return only when the new problem is meaningfully related', () => {
+  const employee = {
+    id: 42,
+    profileVersion: 2,
+    name: 'Tarek Test',
+    skills: { turning: 7, milling: 5, precision: 6, learning: 5 },
+    personality: recruitment.derivePersonality({ turning: 7, milling: 5, precision: 6, learning: 5 }),
+    memories: [{
+      id: 'quality_issue:rapid:Q-1:rework',
+      type: 'quality_issue',
+      machineType: 'rapid',
+      machineName: 'Nexora NX-420',
+      action: 'rework',
+      orderId: 'Q-1',
+      orderPart: 'Distanzring C21',
+      importance: 7,
+      gameMinutes: 800
+    }]
+  };
+  const related = recruitment.recallRemark(employee, 'quality_issue', {
+    machineType: 'rapid',
+    machineName: 'Nexora NX-420',
+    part: 'Distanzring C21'
+  });
+  assert.match(related, /Distanzring C21|Qualitätsproblem/);
+
+  const unrelated = recruitment.recallRemark(employee, 'quality_issue', {
+    machineType: 'mill5',
+    machineName: 'Orionis OM-650X',
+    part: 'Grundplatte M14'
+  });
+  assert.equal(unrelated, '');
+});
+
+test('a previous risky escalation is remembered when the same machine warns again', () => {
+  const employee = {
+    id: 43,
+    profileVersion: 2,
+    name: 'Kael Test',
+    skills: { turning: 8, milling: 5, precision: 5, learning: 6 },
+    personality: recruitment.derivePersonality({ turning: 8, milling: 5, precision: 5, learning: 6 }),
+    memories: [{
+      id: 'major_failure:rapid:sensor_error:after_risky',
+      type: 'major_failure',
+      machineType: 'rapid',
+      machineName: 'Nexora NX-420',
+      fault: 'sensor_error',
+      faultLabel: 'Sensorfehler',
+      outcome: 'after_risky',
+      importance: 10,
+      gameMinutes: 500
+    }]
+  };
+  const remark = recruitment.recallRemark(employee, 'machine_warning', {
+    machineType: 'rapid',
+    machineName: 'Nexora NX-420',
+    fault: 'sensor_error'
+  });
+  assert.match(remark, /damals|kenne ich noch/i);
+  assert.match(remark, /eskaliert|schweren Schaden/i);
+});

@@ -1628,8 +1628,19 @@
     const qualityInspector=event.inspectedById
       ?(state.qualityStaff?.['shift'+qualityShift]||[]).find(person=>person.id===event.inspectedById)||null
       :null;
-    const qualityWitness=qualityInspector||qualityOperator;
-    if(qualityWitness){
+    if(qualityOperator&&typeof recruitmentSystem.recallRemark==='function'){
+      const remembered=recruitmentSystem.recallRemark(qualityOperator,'quality_issue',{
+        machineType:machine.type,
+        machineName:catalog[machine.type]?.name,
+        part:order.part,
+        orderPart:order.part,
+        customer:order.customer,
+        timeBucket:Math.floor(state.gameMinutes/20)
+      });
+      if(remembered)queueEmployeeRemark(qualityOperator,machine,remembered);
+    }
+    const qualityWitnesses=[qualityOperator,qualityInspector].filter((person,index,list)=>person&&list.indexOf(person)===index);
+    for(const qualityWitness of qualityWitnesses){
       recruitmentSystem.recordMemory(qualityWitness,{
         id:`quality_issue:${machine.type}:${order.id}:${decision}`,
         type:'quality_issue',
@@ -1638,6 +1649,7 @@
         action:decision,
         orderId:order.id,
         orderPart:order.part,
+        customer:order.customer,
         defectParts:event.defectParts,
         importance:decision==='ship'?8:7,
         gameMinutes:state.gameMinutes,
@@ -1714,6 +1726,25 @@
         order:{...order},customer:order.customer,bay:machine.bay,defectParts:quality.defectParts,riskPct:quality.riskPct,undetected:!!quality.undetected});
     }
     state.completed++;
+    if(order?.isRushOrder){
+      const completionShift=machineShiftAt(machine,state.gameMinutes)||shiftAt(state.gameMinutes);
+      const completionEmployee=completionShift?assignedEmployee(machine,completionShift):null;
+      if(completionEmployee){
+        recruitmentSystem.recordMemory(completionEmployee,{
+          id:'rush_order:'+String(order.customer||'unknown')+':'+String(order.part||order.id)+':'+(late?'late':'success'),
+          type:'rush_order',
+          machineType:machine.type,
+          machineName:catalog[machine.type]?.name,
+          outcome:late?'late':'success',
+          orderId:order.id,
+          orderPart:order.part,
+          customer:order.customer,
+          importance:late?9:8,
+          gameMinutes:completedAt,
+          bay:machine.bay
+        });
+      }
+    }
     const interrupted=machine.suspendedOrder&&order?.isRushOrder?machine.suspendedOrder:null;
     machine.activeId=null;machine.activeOrder=null;machine.activeOrderSource=null;machine.progress=0;machine.produced=0;machine.deadlineAt=null;
     machine.setupDurationMinutes=0;machine.setupRemainingMinutes=0;machine.setupDelayMinutes=0;machine.setupPartProduced=false;
@@ -2518,17 +2549,21 @@
     }
     return null;
   }
-  function queueDecisionReaction(eventType,{subjectMachine=null,employee=null,part='',shift=null}={}){
+  function queueDecisionReaction(eventType,{subjectMachine=null,employee=null,part='',customer='',shift=null}={}){
     if(typeof recruitmentSystem.eventRemark!=='function')return false;
     const target=reactionTarget(subjectMachine,employee);
     if(!target?.employee)return false;
-    const remark=recruitmentSystem.eventRemark(target.employee,eventType,{
+    const context={
       timeBucket:Math.floor(state.gameMinutes/20),
       machineType:subjectMachine?.type||target.machine?.type||eventType,
       machineName:subjectMachine?catalog[subjectMachine.type]?.name:target.machine?catalog[target.machine.type]?.name:'',
-      part,
+      part,customer,
       shift:shift||shiftAt(state.gameMinutes)||1
-    });
+    };
+    const remembered=eventType==='rush_order'&&typeof recruitmentSystem.recallRemark==='function'
+      ?recruitmentSystem.recallRemark(target.employee,'rush_order',context)
+      :'';
+    const remark=remembered||recruitmentSystem.eventRemark(target.employee,eventType,context);
     return queueEmployeeRemark(target.employee,target.machine,remark);
   }
   function maybeQueueShiftMomentRemark(){
@@ -3838,7 +3873,7 @@
       save();renderOrders();renderBusiness();render();
       if(!options.automatic){
         say(`${accepted.part} für Platz ${m.bay} vorgemerkt (${m.orderQueue.length}/${MAX_QUEUED_ORDERS}). Material wurde reserviert.`);
-        if(accepted.isRushOrder)queueDecisionReaction('rush_order',{subjectMachine:m,part:accepted.part});
+        if(accepted.isRushOrder)queueDecisionReaction('rush_order',{subjectMachine:m,part:accepted.part,customer:accepted.customer});
         else if(m.maintenance<=25)queueDecisionReaction('maintenance_deferred',{subjectMachine:m,part:accepted.part});
       }
       return true;
@@ -3860,7 +3895,7 @@
         :m.ncProgramPending
         ?`${accepted.part} auf Platz ${m.bay} angenommen. Die Programmierung wurde automatisch zugewiesen.`
         :`${accepted.part} auf Platz ${m.bay} angenommen. Rüstzeit ${formatMinutes(setupPlan.totalMinutes)}${setupPlan.delayMinutes?` · Einrichtungsproblem verlängert um ${formatMinutes(setupPlan.delayMinutes)}`:''}.`);
-      if(accepted.isRushOrder)queueDecisionReaction('rush_order',{subjectMachine:m,part:accepted.part});
+      if(accepted.isRushOrder)queueDecisionReaction('rush_order',{subjectMachine:m,part:accepted.part,customer:accepted.customer});
       else if(m.maintenance<=25)queueDecisionReaction('maintenance_deferred',{subjectMachine:m,part:accepted.part});
     }
     return true;
@@ -4420,6 +4455,20 @@
   }
   function handleBreakdownEvent(event){
     if(!event)return;
+    if(event.event==='warning'){
+      const warningMachine=machineAt(event.bay);
+      const warningShift=shiftAt(state.gameMinutes);
+      const warningEmployee=warningMachine&&warningShift?assignedEmployee(warningMachine,warningShift):null;
+      if(warningEmployee&&typeof recruitmentSystem.recallRemark==='function'){
+        const remembered=recruitmentSystem.recallRemark(warningEmployee,'machine_warning',{
+          machineType:warningMachine.type,
+          machineName:catalog[warningMachine.type]?.name,
+          fault:event.fault,
+          timeBucket:Math.floor(state.gameMinutes/20)
+        });
+        if(remembered)queueEmployeeRemark(warningEmployee,warningMachine,remembered);
+      }
+    }
     if(event.event==='major_failure'){
       const failureMachine=machineAt(event.bay);
       const failureShift=shiftAt(state.gameMinutes);
