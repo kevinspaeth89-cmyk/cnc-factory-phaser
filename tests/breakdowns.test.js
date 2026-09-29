@@ -142,3 +142,43 @@ test('breakdown state survives JSON serialization for LocalStorage', () => {
   assert.equal(typeof JSON.stringify(restored.breakdowns), 'string');
   assert.deepEqual(Object.keys(restored.breakdowns), ['machines']);
 });
+
+
+test('technician repair includes a real arrival phase before repair work', () => {
+  const state = makeState({ random: () => 0 });
+  breakdowns.tick(state, 1, running);
+
+  const options = breakdowns.getRepairOptions(state, 1);
+  assert.ok(options.technician.arrivalRange.min >= 45);
+  assert.ok(options.technician.arrivalRange.max > options.technician.arrivalRange.min);
+  assert.ok(options.technician.repairMinutes > 0);
+
+  const repair = breakdowns.repairTechnician(state, 1);
+  assert.equal(repair.arrivalMinutes, options.technician.arrivalRange.min);
+  assert.equal(repair.downtime, repair.arrivalMinutes + repair.repairMinutes);
+
+  const travelling = breakdowns.getRecord(state, 1);
+  assert.equal(travelling.technicianArrivalRemainingMinutes, repair.arrivalMinutes);
+  assert.equal(travelling.repairMethod, 'technician');
+
+  const arrived = breakdowns.tick(state, repair.arrivalMinutes, { operatingBays: [] });
+  assert.equal(arrived[0].event, 'technician_arrived');
+  assert.equal(breakdowns.getStatus(state, 1), 'repairing');
+
+  const completed = breakdowns.tick(state, repair.repairMinutes, { operatingBays: [] });
+  assert.equal(completed[0].event, 'repair_complete');
+  assert.equal(completed[0].method, 'technician');
+  assert.equal(breakdowns.getStatus(state, 1), 'ok');
+});
+
+test('employee repair expertise can materially improve self-repair odds', () => {
+  const state = makeState({ random: () => 0 });
+  breakdowns.tick(state, 1, running);
+
+  const base = breakdowns.getRepairOptions(state, 1);
+  const experienced = breakdowns.getRepairOptions(state, 1, { selfRepairSuccessBonus: 0.24 });
+
+  assert.ok(experienced.self.failureChance < base.self.failureChance);
+  assert.ok(1 - experienced.self.failureChance > 1 - base.self.failureChance);
+  assert.ok(experienced.self.failureRange.min < base.self.failureRange.min);
+});
