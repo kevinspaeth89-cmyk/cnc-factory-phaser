@@ -2445,6 +2445,43 @@
     const card=$('employee-card');
     if(card)card.hidden=true;
   }
+  function visibleWorkplaceItems(employee){
+    if(typeof recruitmentSystem.workplaceItems!=='function')return [];
+    const items=recruitmentSystem.workplaceItems(employee);
+    return items.slice(0,(Number(employee?.xp)||0)>=2400?2:1);
+  }
+  function renderBayPersonalItems(b,machine){
+    const keep=new Set();
+    if(machine){
+      for(const shift of [1,2]){
+        const employee=assignedEmployee(machine,shift);
+        if(!employee)continue;
+        const items=visibleWorkplaceItems(employee);
+        if(!items.length)continue;
+        const key=String(shift);
+        keep.add(key);
+        let wrap=b.querySelector('.bay-personal-items[data-shift="'+key+'"]');
+        if(!wrap){
+          wrap=document.createElement('div');
+          wrap.className='bay-personal-items shift-'+shift;
+          wrap.dataset.shift=key;
+          b.append(wrap);
+        }
+        wrap.title=employee.name+' · '+items.map(item=>item.label).join(' · ');
+        wrap.dataset.employeeId=String(employee.id);
+        wrap.replaceChildren(...items.map(item=>{
+          const prop=document.createElement('span');
+          prop.className='bay-personal-item item-'+item.id;
+          prop.title=employee.name+': '+item.label;
+          prop.setAttribute('aria-hidden','true');
+          return prop;
+        }));
+      }
+    }
+    b.querySelectorAll('.bay-personal-items').forEach(wrap=>{
+      if(!keep.has(wrap.dataset.shift))wrap.remove();
+    });
+  }
   function openEmployeeCard(employee,machine,shift){
     const card=$('employee-card');
     if(!card||!employee||!machine)return;
@@ -2476,6 +2513,10 @@
 
     const familiarity=recruitmentSystem.familiarityFor(employee,machine.type);
     $('employee-card-machine').textContent=`${familiarity.label} an ${familiarity.machineName} · ${Math.floor(familiarity.workMinutes/60)} h · ${familiarity.partsProduced} Teile`;
+    const personalItems=visibleWorkplaceItems(employee);
+    $('employee-card-personal').textContent=personalItems.length
+      ?personalItems.map(item=>item.label).join(' · ')+((Number(employee.xp)||0)<2400?' · Der Platz wird mit wachsender Erfahrung noch persönlicher.':'')
+      :'Noch keine persönlichen Gegenstände am Arbeitsplatz.';
 
     const quote=typeof recruitmentSystem.workRemark==='function'
       ? recruitmentSystem.workRemark(employee,{
@@ -3722,6 +3763,7 @@
       b.classList.toggle('orionis-bay',!!machine&&machine.type==='mill5');
       b.classList.toggle('turning-bay',turning);
       b.classList.toggle('robot-loading',!!machine?.loadingRobot&&operating(machine)&&machineShiftAt(machine)===2);
+      renderBayPersonalItems(b,machine);
 
       let machineArt=b.querySelector('.bay-machine');
       let turningFrame=b.querySelector('.bay-turning-frame');
