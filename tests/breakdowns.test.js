@@ -196,5 +196,6 @@ test('technician travel time is independent of fault severity while repair time 
   const majorOptions = breakdowns.getRepairOptions(major, 1);
 
   assert.deepEqual(majorOptions.technician.arrivalRange, normalOptions.technician.arrivalRange);
-  assert.ok(majorOptions.technician.repairMinutes > normalOptions.technician.repairMinutes);
+  assert.ok(majorOptions.technician.repairMinutes >= 180);
+  assert.ok(majorOptions.technician.repairMinutes > normalOptions.technician.repairMinutes * 3);
 });
