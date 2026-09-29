@@ -180,3 +180,62 @@ test('saved market reload preserves offers, counters, and random progression', (
   assert.ok(orderMarket.getAvailable(restored).some(order => !originalIds.includes(order.id)));
   assert.doesNotThrow(() => JSON.stringify(restored));
 });
+
+
+test('customer history turns repeat business into a persistent relationship', () => {
+  const state = newState('customer-history');
+  const firstOffer = orderMarket.getAvailable(state)[0];
+  const first = orderMarket.accept(state, firstOffer.id);
+  const customer = first.customer;
+
+  orderMarket.onCompleted(state, first, { late: false, payout: 4200, qualityDefectParts: 0 });
+  let history = orderMarket.getCustomerHistory(state)[customer];
+  assert.equal(history.completed, 1);
+  assert.equal(history.onTime, 1);
+  assert.equal(history.late, 0);
+  assert.equal(history.revenue, 4200);
+  assert.equal(history.topPart, first.part);
+  assert.equal(history.punctualityPct, 100);
+  assert.equal(history.relationship, 'Wiederkehrender Kunde');
+
+  const second = {
+    ...first,
+    id: first.id + '-RETURN',
+    createdAt: first.createdAt + 100,
+    expiresAt: first.expiresAt + 100,
+    isRushOrder: true
+  };
+  orderMarket.onCompleted(state, second, { late: true, payout: 3000, qualityDefectParts: 2 });
+  orderMarket.recordComplaint(state, customer, 'rework');
+  history = orderMarket.getCustomerHistory(state)[customer];
+
+  assert.equal(history.completed, 2);
+  assert.equal(history.onTime, 1);
+  assert.equal(history.late, 1);
+  assert.equal(history.revenue, 7200);
+  assert.equal(history.rushOrders, 1);
+  assert.equal(history.qualityIssues, 1);
+  assert.equal(history.complaints, 1);
+  assert.equal(history.punctualityPct, 50);
+  assert.equal(history.lastComplaintOutcome, 'rework');
+
+  const duplicate = orderMarket.onCompleted(state, second, { late: false, payout: 9999 });
+  assert.equal(duplicate.processed, false);
+  assert.equal(orderMarket.getCustomerHistory(state)[customer].completed, 2);
+  assert.equal(orderMarket.getCustomerHistory(state)[customer].revenue, 7200);
+});
+
+test('legacy completed-customer counts migrate into customer history without inventing punctuality', () => {
+  const state = newState('customer-history-migration');
+  const customer = orderMarket.getAvailable(state)[0].customer;
+  state.orderMarket.completedCustomers[customer] = 4;
+  delete state.orderMarket.customerHistory;
+
+  orderMarket.init(state);
+
+  const history = orderMarket.getCustomerHistory(state)[customer];
+  assert.equal(history.completed, 4);
+  assert.equal(history.relationship, 'Bekannter Kunde');
+  assert.equal(history.punctualityPct, null);
+  assert.equal(history.revenue, 0);
+});
