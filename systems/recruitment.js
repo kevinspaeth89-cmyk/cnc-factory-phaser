@@ -776,7 +776,7 @@
     if (!major && Number.isFinite(selfSuccessChance)) {
       const pct = Math.round(selfSuccessChance * 100);
       const learned = expertise.successes > 0
-        ? ` Durch meine ${expertise.successes} erfolgreiche${expertise.successes===1?' Reparatur':' Reparaturen'} liegt meine Chance diesmal bei etwa ${pct} %.`
+        ? ` Durch meine ${expertise.successes} ${expertise.successes===1?'erfolgreiche Reparatur':'erfolgreichen Reparaturen'} liegt meine Chance diesmal bei etwa ${pct} %.`
         : ` Meine geschätzte Erfolgschance liegt bei etwa ${pct} %.`;
       if (selfSuccessChance >= 0.68 || (expertise.successes > 0 && selfSuccessChance >= 0.58)) {
         return {
