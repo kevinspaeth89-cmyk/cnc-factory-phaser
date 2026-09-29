@@ -650,6 +650,79 @@
     if(fault?.status==='repairing'&&fault.repairMethod==='technician')return null;
     return {employee,shift};
   }
+  function queueHallShiftHandoffs(fromShift,toShift){
+    if(fromShift!==1||toShift!==2)return false;
+    const now=Date.now();
+    let queued=false;
+    for(const machine of state.machines){
+      if(!job(machine)||machine.loadingRobot)continue;
+      const fromEmployee=machine.operator1?assignedEmployee(machine,1):null;
+      const toEmployee=machine.operator2?assignedEmployee(machine,2):null;
+      if(!fromEmployee||!toEmployee||fromEmployee.id===toEmployee.id)continue;
+      const token=now+':'+machine.bay+':'+fromEmployee.id+':'+toEmployee.id;
+      hallShiftHandoffs.set(machine.bay,{
+        token,
+        fromEmployeeId:fromEmployee.id,
+        toEmployeeId:toEmployee.id,
+        expiresAt:now+1800
+      });
+      queued=true;
+      setTimeout(()=>{
+        const current=hallShiftHandoffs.get(machine.bay);
+        if(!current||current.token!==token)return;
+        hallShiftHandoffs.delete(machine.bay);
+        if(!$('hall-view').hidden)render();
+      },1850);
+    }
+    return queued;
+  }
+  function renderBayShiftHandoff(b,machine,{workerSprite=null,workerName=null,operatorBadge=null,remarkBubble=null}={}){
+    const handoff=machine?hallShiftHandoffs.get(machine.bay):null;
+    const active=handoff&&Date.now()<handoff.expiresAt?handoff:null;
+    let layer=b.querySelector('.bay-shift-handoff');
+    if(!active){
+      if(layer)layer.remove();
+      b.classList.remove('shift-handoff-active');
+      if(workerSprite)workerSprite.style.visibility='';
+      if(workerName)workerName.style.visibility='';
+      if(operatorBadge)operatorBadge.style.visibility='';
+      return;
+    }
+    const fromEmployee=employeeById(active.fromEmployeeId),toEmployee=employeeById(active.toEmployeeId);
+    const fromSprite=hallWorkerSpriteFor(fromEmployee),toSprite=hallWorkerSpriteFor(toEmployee);
+    if(!fromEmployee||!toEmployee||!fromSprite||!toSprite){
+      hallShiftHandoffs.delete(machine.bay);
+      if(layer)layer.remove();
+      b.classList.remove('shift-handoff-active');
+      return;
+    }
+    const signature=active.token;
+    if(!layer||layer.dataset.signature!==signature){
+      if(layer)layer.remove();
+      layer=document.createElement('div');
+      layer.className='bay-shift-handoff';
+      layer.dataset.signature=signature;
+      layer.setAttribute('aria-hidden','true');
+      const outgoing=document.createElement('img');
+      outgoing.className='handoff-worker handoff-outgoing';
+      outgoing.src=fromSprite;
+      outgoing.alt='';
+      const arrow=document.createElement('span');
+      arrow.className='handoff-arrow';
+      arrow.textContent='→';
+      const incoming=document.createElement('img');
+      incoming.className='handoff-worker handoff-incoming';
+      incoming.src=toSprite;
+      incoming.alt='';
+      layer.append(outgoing,arrow,incoming);
+      b.append(layer);
+    }
+    b.classList.add('shift-handoff-active');
+    if(workerSprite)workerSprite.style.visibility='hidden';
+    if(workerName)workerName.style.visibility='hidden';
+    if(operatorBadge)operatorBadge.style.visibility='hidden';
+    if(remarkBubble)remarkBubble.hidden=true;
+  }
   const qualityEmployee=shift=>(state.qualityStaff?.['shift'+shift]||[]).find(employee=>employee.qualityCertified&&!(employee.qualityTrainingRemainingMinutes>0))||null;
   const employeeIsFree=employee=>!!employee&&employee.assignedBay===null;
   const employeeHourlyWage=(employee,shift)=>recruitmentSystem.hourlyWage(employee,shift);
@@ -1090,7 +1163,7 @@
     return changed;
   }
   const conditionLabel=value=>value>0&&value<1?'<1 %':Math.round(value)+' %';
-  let visual=null, currentPanel=null, businessSection='factory', messageTimer, zoomTimer, phaserGame=null, hallPreviewBay=null, employeeCardContext=null, employeeRemarkState=new Map(), employeeRemarkHistory=[], employeeShiftRemarkKeys=new Set(), shiftLeaderPanelShift=1, shiftLeaderAdviceKey='', operatorPickerShift=null, dismissalPickerShift=null, qualityPickerShift=null, rushWorkMode='regular', rushWorkModeEventId=null;
+  let visual=null, currentPanel=null, businessSection='factory', messageTimer, zoomTimer, phaserGame=null, hallPreviewBay=null, employeeCardContext=null, employeeRemarkState=new Map(), employeeRemarkHistory=[], employeeShiftRemarkKeys=new Set(), hallShiftHandoffs=new Map(), shiftLeaderPanelShift=1, shiftLeaderAdviceKey='', operatorPickerShift=null, dismissalPickerShift=null, qualityPickerShift=null, rushWorkMode='regular', rushWorkModeEventId=null;
   function say(message,variant=''){
     const box=$('message');
     box.textContent=message;
@@ -3971,6 +4044,7 @@
         }
         if(remarkBubble)remarkBubble.hidden=true;
       }
+      renderBayShiftHandoff(b,machine,{workerSprite,workerName,operatorBadge,remarkBubble});
       b.querySelector('span').textContent=machine?catalog[machine.type].name:`+ Platz ${bay}`;
       b.setAttribute('aria-label',machine?`${catalog[machine.type].name}, Platz ${bay} ansehen`:`Freier Stellplatz ${bay}, Maschinen kaufen`);
       b.title=machine?statusFor(machine):'Maschine kaufen';
@@ -4211,6 +4285,7 @@
     employeeRemarkState=new Map();
     employeeRemarkHistory=[];
     employeeShiftRemarkKeys=new Set();
+    hallShiftHandoffs=new Map();
     renderEmployeeRemarkHistory();
     ensureEconomyState();
     clearTimeout(zoomTimer);
@@ -4501,6 +4576,8 @@
         }
       }
       state.gameMinutes+=step;left-=step;
+      const nextShift=shiftAt(state.gameMinutes);
+      if(shift===1&&nextShift===2)queueHallShiftHandoffs(shift,nextShift);
       maybeQueueShiftMomentRemark();
       for(const m of state.machines){
         if(m.robotRepairRemainingMinutes>0){
