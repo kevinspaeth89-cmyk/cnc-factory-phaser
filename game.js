@@ -89,13 +89,13 @@
     money:14000,material:0,capacity:300,staff:{shift1:0,shift2:0},
     machines:[],selectedBay:null,speed:1,paused:false,gameMinutes:0,completed:0,
     eventQueue:[],nextRushOrderAt:null,ncPrograms:{},programmer:{hired:false,active:null,queue:[]},pendingQualityComplaints:[],
-    qualityAssurance:{inspections:0,caughtDefects:0,escapedDefects:0,inspectionMinutes:0},
+    qualityAssurance:{inspections:0,caughtDefects:0,escapedDefects:0,inspectionMinutes:0,recentChecks:[]},
     qualityPolicies:{shift1:'standard',shift2:'standard'},
     qualityStaff:{shift1:[],shift2:[]},
     payrollDue:0,wagesPaid:0,storagePaid:0,energyPaid:0,selected:null,selectedMaterialType:'c45',
     credit:{principal:0,originalAmount:0,annualRate:CREDIT_ANNUAL_RATE,paymentsRemaining:0,accruedInterest:0,nextPaymentAt:null,missedPayments:0},
     recruitment:{applicants:[],nextId:1},
-    orderOffice:{hired:false,autoPurchase:true,autoAccept:true,cashReserve:5000,maxMarketMarkupPct:0,minMaterialSurplus:1000,queueLimit:1,nextReviewAt:0},
+    orderOffice:{hired:false,autoPurchase:true,autoAccept:true,cashReserve:5000,maxMarketMarkupPct:0,minMaterialSurplus:1000,materialReserveKg:25,queueLimit:1,nextReviewAt:0},
     shiftLeader:{shift1:{hired:false,autoMaintenance:true,autoTools:true,autoBreakdowns:true,spendingLimit:2500,nextDecisionAt:0},shift2:{hired:false,autoMaintenance:true,autoTools:true,autoBreakdowns:true,spendingLimit:2500,nextDecisionAt:0}},pendingRushAssignment:null
   });
   let state=defaults();
@@ -117,7 +117,10 @@
         inspections:Math.max(0,Math.floor(Number(savedQualityAssurance.inspections)||0)),
         caughtDefects:Math.max(0,Math.floor(Number(savedQualityAssurance.caughtDefects)||0)),
         escapedDefects:Math.max(0,Math.floor(Number(savedQualityAssurance.escapedDefects)||0)),
-        inspectionMinutes:Math.max(0,Number(savedQualityAssurance.inspectionMinutes)||0)
+        inspectionMinutes:Math.max(0,Number(savedQualityAssurance.inspectionMinutes)||0),
+        recentChecks:(Array.isArray(savedQualityAssurance.recentChecks)?savedQualityAssurance.recentChecks:[])
+          .filter(item=>item&&typeof item.part==='string'&&typeof item.inspector==='string')
+          .slice(0,6)
       };
       const savedQualityPolicies=stored.qualityPolicies&&typeof stored.qualityPolicies==='object'?stored.qualityPolicies:{};
       state.qualityPolicies={
@@ -340,6 +343,7 @@
       cashReserve:choice(saved.cashReserve,[5000,10000,20000],5000),
       maxMarketMarkupPct:choice(saved.maxMarketMarkupPct,[0,10,20],0),
       minMaterialSurplus:choice(saved.minMaterialSurplus,[1000,2500,5000],1000),
+      materialReserveKg:choice(saved.materialReserveKg,[0,25,50,100],25),
       queueLimit:choice(saved.queueLimit,[1,2,3],1),
       nextReviewAt:Number.isFinite(saved.nextReviewAt)?saved.nextReviewAt:state.gameMinutes
     };
@@ -472,7 +476,8 @@
     const key=programKey(order);
     if(!key||programTaskFor(key)||state.machines.some(machine=>machine.operatorProgramming?.key===key))return false;
     const totalMinutes=programmingQuality.programmingMinutes(order,'programmer');
-    state.programmer.queue.push({key,part:order.part,kind:order.kind,orderId:order.id,totalMinutes,remainingMinutes:totalMinutes});
+    state.programmer.queue.push({key,part:order.part,kind:order.kind,orderId:order.id,totalMinutes,remainingMinutes:totalMinutes,
+      operatorMinutes:programmingQuality.programmingMinutes(order,'operator')});
     return true;
   }
   function cancelProgrammerTask(key){
@@ -527,7 +532,8 @@
 
   function completeNcProgram(task,method){
     if(!task?.key)return;
-    state.ncPrograms[task.key]={part:task.part,kind:task.kind,completedAt:state.gameMinutes,method};
+    state.ncPrograms[task.key]={part:task.part,kind:task.kind,completedAt:state.gameMinutes,method,
+      operatorMinutes:method==='programmer'?Math.max(0,Number(task.operatorMinutes)||0):0};
     for(const machine of state.machines){
       const order=job(machine);
       if(!order||programKey(order)!==task.key)continue;
@@ -553,16 +559,22 @@
     completeNcProgram(task,'programmer');
     state.programmer.active=null;
     reassessActiveProgrammingRoutes();
-    say(`NC-Programm für ${task.part} fertig. Eingeplante passende Aufträge können jetzt starten.`);
+    say(`NC-Programm für ${task.part} fertig. ${task.operatorMinutes?`${formatMinutes(task.operatorMinutes)} Bedienerprogrammierung übernommen.`:'Der Bediener kann direkt rüsten.'}`);
     save();
   }
   function renderProgrammer(){
     const active=state.programmer.active,queue=state.programmer.queue||[];
+    const prepared=Object.values(state.ncPrograms||{}).filter(record=>record?.method==='programmer');
+    const operatorMinutes=prepared.reduce((sum,record)=>sum+Math.max(0,Number(record.operatorMinutes)||0),0);
     $('programmer-status').textContent=!state.programmer.hired
       ?'Noch nicht eingestellt. Bediener können Neuteile an ihrer Maschine programmieren.'
       :active?`Programmiert ${active.part} · noch ${formatMinutes(active.remainingMinutes)} · ${queue.length} weitere geplant`
       :queue.length?`Wartet auf die Frühschicht · ${queue.length} Programm${queue.length===1?'':'e'} eingeplant`
       :'Bereit · keine neuen Programme in der Warteschlange.';
+    let benefit=$('programmer-benefit');
+    if(!benefit){benefit=document.createElement('div');benefit.id='programmer-benefit';benefit.className='programmer-benefit';$('programmer-status').after(benefit);}
+    benefit.hidden=!state.programmer.hired;
+    benefit.textContent=`${prepared.length} NC-Programm${prepared.length===1?'':'e'} fertig · ${operatorMinutes?`${formatMinutes(operatorMinutes)} Bedienerprogrammierung übernommen`:'Bediener können vorbereitete Programme direkt nutzen'}.`;
     const button=$('hire-programmer');
     button.textContent=state.programmer.hired?'NC-Programmierer eingestellt':`Programmierer einstellen · ${euro(PROGRAMMER_HIRING_FEE)}`;
     button.disabled=state.programmer.hired||state.money<PROGRAMMER_HIRING_FEE;
@@ -570,7 +582,12 @@
   function renderProgramPanel(machine,order){
     const panel=$('nc-programming-panel'),button=$('program-active-order');
     const needsProgram=!!machine&&!!order&&!programReady(order);
-    panel.hidden=!needsProgram;
+    const preparedByProgrammer=!!order&&state.ncPrograms?.[programKey(order)]?.method==='programmer';
+    panel.hidden=!needsProgram&&!preparedByProgrammer;
+    if(!needsProgram&&preparedByProgrammer){
+      $('nc-program-info').textContent=`NC-Programm für ${order.part} vom Programmierer vorbereitet. Der Bediener kann direkt mit dem Rüsten beginnen.`;
+      button.hidden=true;button.disabled=true;return;
+    }
     if(!needsProgram)return;
     const task=programTaskFor(programKey(order)),shift=shiftAt(state.gameMinutes),employee=shift?assignedEmployee(machine,shift):null;
     const operatorAvailable=[1,2].some(assignedShift=>machine['operator'+assignedShift]&&assignedEmployee(machine,assignedShift));
@@ -3017,7 +3034,7 @@
         const text=document.createElement('span');text.textContent=labelText;
         const input=document.createElement('select');input.dataset.officeKey=key;
         for(const [value,name] of options){const option=document.createElement('option');option.value=String(value);option.textContent=name;input.append(option);}
-        input.addEventListener('change',()=>{state.orderOffice[key]=Number(input.value);save();});
+        input.addEventListener('change',()=>{state.orderOffice[key]=Number(input.value);save();renderOrderOffice();});
         label.append(text,input);settings.append(label);
       };
       toggle('Passende Aufträge automatisch annehmen','autoAccept');
@@ -3025,13 +3042,14 @@
       select('Mindestguthaben','cashReserve',[[5000,'€ 5.000'],[10000,'€ 10.000'],[20000,'€ 20.000']]);
       select('Max. Aufschlag zum Grundpreis','maxMarketMarkupPct',[[0,'0 %'],[10,'10 %'],[20,'20 %']]);
       select('Mindestüberschuss nach Material','minMaterialSurplus',[[1000,'€ 1.000'],[2500,'€ 2.500'],[5000,'€ 5.000']]);
+      select('Materialreserve nach Annahme','materialReserveKg',[[0,'Keine'],[25,'25 kg je benötigter Sorte'],[50,'50 kg je benötigter Sorte'],[100,'100 kg je benötigter Sorte']]);
       select('Warteschlange je Maschine','queueLimit',[[1,'1 Auftrag'],[2,'2 Aufträge'],[3,'3 Aufträge']]);
       panel.append(title,intro,status,hire,settings);
       shop.parentElement.insertBefore(panel,shop.previousElementSibling);
     }
     const office=state.orderOffice,unlocked=state.factoryExpansion.level>=2;
     $('order-office-status').textContent=office.hired
-      ?'Besetzt · prüft alle 30 Spielminuten (Mo–Fr, 08–16 Uhr), solange Aufträge und Lager nicht geöffnet sind.'
+      ?`Besetzt · prüft alle 30 Spielminuten (Mo–Fr, 08–16 Uhr). Nach Auftragsannahme bleiben nach Möglichkeit ${office.materialReserveKg} kg der benötigten Materialsorte im Lager.`
       :unlocked?'Noch unbesetzt. Der Disponent kostet € 12.000 einmalig und € 36 je Spielstunde (Mo–Fr, 08–16 Uhr).'
       :'Wird mit der ersten Hallenerweiterung (6 Plätze) verfügbar.';
     $('hire-order-office').hidden=office.hired;
@@ -3648,12 +3666,16 @@
     intro.textContent=`QS ist eine eigene Personalgruppe. Externe QS-Kräfte sind sofort qualifiziert. Ein Maschinenbediener kann befördert werden, benötigt dafür aber ${formatMinutes(QS_PROMOTION_TRAINING_MINUTES)} QS-Schulung für ${euro(QS_PROMOTION_TRAINING_COST)} und steht danach nicht mehr als Bediener zur Verfügung.`;
     const stats=document.createElement('p');stats.className='hint';
     stats.textContent=`QS-Prüfungen ${state.qualityAssurance.inspections} · Prüfzeit ${formatMinutes(state.qualityAssurance.inspectionMinutes)} · Fehlerteile abgefangen ${state.qualityAssurance.caughtDefects} · durch QS gerutscht ${state.qualityAssurance.escapedDefects}`;
+    const impact=document.createElement('div');impact.className='qs-impact';
+    impact.textContent=state.qualityAssurance.caughtDefects
+      ?`${state.qualityAssurance.caughtDefects} fehlerhafte Teile hat die QS vor der Auslieferung entdeckt. Du konntest über Nacharbeit oder Auslieferung entscheiden.`
+      :'Die QS prüft fertige Aufträge vor der Auslieferung. Entdeckte Fehler lösen eine Entscheidung zur Nacharbeit aus.';
     const rows=document.createElement('div');
 
     for(const shift of [1,2]){
       const roster=state.qualityStaff?.['shift'+shift]||[],employee=roster[0]||null;
       const row=document.createElement('div');row.className='staff-row';
-      const info=document.createElement('span');
+      const info=document.createElement('span');info.className='qs-info';
       const label=document.createElement('strong');
       label.textContent=`Schicht ${shift} · ${employee?employee.name:'QS unbesetzt'}`;
       const small=document.createElement('small');
@@ -3696,7 +3718,21 @@
         recruit.addEventListener('click',()=>tab('recruitment'));
         actions.append(promote,recruit);
       }
+      if(employee){
+        const portrait=document.createElement('img');portrait.className='qs-portrait';
+        portrait.src=employee.portrait||recruitmentSystem.portraitFor(employee.id,employee.gender);
+        portrait.alt=`Porträt von ${employee.name}`;portrait.loading='lazy';
+        row.append(portrait);
+      }else row.classList.add('qs-unoccupied');
       row.append(info,actions);rows.append(row);
+    }
+
+    const history=document.createElement('div');history.className='qs-history';
+    const historyTitle=document.createElement('strong');historyTitle.textContent='Letzte QS-Prüfungen';history.append(historyTitle);
+    const checks=state.qualityAssurance.recentChecks||[];
+    if(!checks.length){const empty=document.createElement('small');empty.textContent='Noch keine Aufträge geprüft.';history.append(empty);}
+    for(const check of checks.slice(0,4)){
+      const item=document.createElement('small');item.textContent=`${check.part} · ${check.result} · ${check.inspector}`;history.append(item);
     }
 
     const picker=document.createElement('div');picker.className='operator-picker';picker.hidden=![1,2].includes(qualityPickerShift);
@@ -3731,7 +3767,7 @@
       }
       picker.append(pickerTitle,list);
     }
-    panel.replaceChildren(title,intro,stats,rows,picker);
+    panel.replaceChildren(title,intro,impact,stats,rows,history,picker);
   }
 
   function renderBusiness(){
@@ -4255,14 +4291,18 @@
         .sort((a,b)=>a.projection.percent-b.projection.percent||
           (b.projection.critical?.bufferMinutes||0)-(a.projection.critical?.bufferMinutes||0)||a.machine.bay-b.machine.bay);
       const machine=candidates[0]?.machine;if(!machine)continue;
-      const shortage=Math.max(0,required-materialSystem.available(state,order));
-      if(shortage>1e-9){
-        if(!office.autoPurchase||state.material+shortage>state.capacity+1e-9)continue;
-        const cost=Math.round(unit*shortage*100)/100;
-        if(state.money-cost<office.cashReserve-1e-9)continue;
-        const added=inventorySystem.addMaterial(state,type,shortage);if(!added.ok)continue;
-        if(!book('material',-cost,`${shortage.toLocaleString('de-DE')} kg ${materialSystem.catalog[type].label} durch Auftragsbüro gekauft`,{quantityKg:shortage,type,pricePerKg:unit,automatic:true}).ok){
-          inventorySystem.removeMaterial(state,type,shortage);syncMaterialMirror();continue;
+      const available=materialSystem.available(state,order);
+      const shortage=Math.max(0,Math.ceil(required-available));
+      const reserveNeeded=office.autoPurchase?Math.max(0,Math.ceil(required+office.materialReserveKg-available)):0;
+      const canBuy=quantity=>quantity>0&&state.material+quantity<=state.capacity+1e-9&&
+        state.money-Math.round(unit*quantity*100)/100>=office.cashReserve-1e-9;
+      const quantity=canBuy(reserveNeeded)?reserveNeeded:shortage;
+      if(shortage>1e-9&&(!office.autoPurchase||!canBuy(quantity)))continue;
+      if(quantity>0&&office.autoPurchase&&canBuy(quantity)){
+        const cost=Math.round(unit*quantity*100)/100;
+        const added=inventorySystem.addMaterial(state,type,quantity);if(!added.ok)continue;
+        if(!book('material',-cost,`${quantity.toLocaleString('de-DE')} kg ${materialSystem.catalog[type].label} durch Auftragsbüro gekauft`,{quantityKg:quantity,type,pricePerKg:unit,automatic:true,reserveKg:office.materialReserveKg}).ok){
+          inventorySystem.removeMaterial(state,type,quantity);syncMaterialMirror();continue;
         }
         syncMaterialMirror();
       }
@@ -4471,10 +4511,17 @@
       state.qualityAssurance.inspections+=1;
       qsInspector.xp=Math.round((qsInspector.xp+10*recruitmentSystem.qualityLearningMultiplier(qsInspector))*1000)/1000;
     }
+    const recordCheck=result=>{
+      if(!qsInspector)return;
+      state.qualityAssurance.recentChecks.unshift({orderId:order.id,part:order.part,inspector:qsInspector.name,
+        shift:inspectionShift,result,at:state.gameMinutes});
+      state.qualityAssurance.recentChecks.length=Math.min(6,state.qualityAssurance.recentChecks.length);
+    };
     if(defects>0){
       const detected=Math.random()<detectionChance;
       if(detected){
         if(qsInspector)state.qualityAssurance.caughtDefects+=defects;
+        recordCheck(`${defects} Fehlerteil${defects===1?'':'e'} vor Auslieferung entdeckt`);
         const event={event:'quality_issue',id:`quality_issue:${order.id}`,bay:machine.bay,order:{...order},riskPct,defectParts:defects,
           detectionChance,inspectedById:qsInspector?.id??null,inspectedByName:qsInspector?.name||null,
           reworkCost:Math.max(250,Math.round(order.reward*defects/Math.max(1,order.qty)*.55)),createdAt:state.gameMinutes};
@@ -4482,9 +4529,11 @@
         state.paused=true;renderEventWindow();save();return 'paused';
       }
       if(qsInspector)state.qualityAssurance.escapedDefects+=defects;
+      recordCheck('Geprüft und freigegeben');
       finishOrder(machine,order,{defectParts:defects,riskPct,undetected:true},state.gameMinutes);
       return 'finished';
     }
+    recordCheck('Geprüft und freigegeben');
     finishOrder(machine,order,null,state.gameMinutes);
     return 'finished';
   }
