@@ -76,14 +76,14 @@
     })
   });
   const WORKPLACE_ITEMS = Object.freeze({
-    mug: Object.freeze({ id: 'mug', label: 'Thermobecher', about: 'steht bei fast jeder Schicht griffbereit am Arbeitsplatz' }),
-    notebook: Object.freeze({ id: 'notebook', label: 'Mess- & Notizheft', about: 'enthält eigene Notizen zu Maßen, Werkzeugen und Abläufen' }),
-    gloves: Object.freeze({ id: 'gloves', label: 'Eigene Arbeitshandschuhe', about: 'liegen immer am vertrauten Platz neben der Maschine' }),
-    toolbox: Object.freeze({ id: 'toolbox', label: 'Kleine Werkzeugtasche', about: 'ein paar persönliche Helfer für die tägliche Arbeit' }),
-    photo: Object.freeze({ id: 'photo', label: 'Kleines Foto', about: 'ein persönliches Detail zwischen all der Technik' }),
-    sticker: Object.freeze({ id: 'sticker', label: 'Glücksaufkleber', about: 'ein kleiner Wiedererkennungsmarker am eigenen Platz' }),
-    bottle: Object.freeze({ id: 'bottle', label: 'Trinkflasche', about: 'wandert bei einem dauerhaften Maschinenwechsel mit' }),
-    marker: Object.freeze({ id: 'marker', label: 'Stift & Prüfzettel', about: 'für schnelle Notizen direkt an der Maschine' })
+    mug: Object.freeze({ id: 'mug', icon: '☕', label: 'Thermobecher', about: 'steht bei fast jeder Schicht griffbereit am Arbeitsplatz' }),
+    notebook: Object.freeze({ id: 'notebook', icon: '📒', label: 'Mess- & Notizheft', about: 'enthält eigene Notizen zu Maßen, Werkzeugen und Abläufen' }),
+    gloves: Object.freeze({ id: 'gloves', icon: '🧤', label: 'Eigene Arbeitshandschuhe', about: 'liegen immer am vertrauten Platz neben der Maschine' }),
+    toolbox: Object.freeze({ id: 'toolbox', icon: '🧰', label: 'Kleine Werkzeugtasche', about: 'ein paar persönliche Helfer für die tägliche Arbeit' }),
+    photo: Object.freeze({ id: 'photo', icon: '🖼️', label: 'Kleines Foto', about: 'ein persönliches Detail zwischen all der Technik' }),
+    sticker: Object.freeze({ id: 'sticker', icon: '⭐', label: 'Glücksaufkleber', about: 'ein kleiner Wiedererkennungsmarker am eigenen Platz' }),
+    bottle: Object.freeze({ id: 'bottle', icon: '🧴', label: 'Trinkflasche', about: 'wandert bei einem dauerhaften Maschinenwechsel mit' }),
+    marker: Object.freeze({ id: 'marker', icon: '✏️', label: 'Stift & Prüfzettel', about: 'für schnelle Notizen direkt an der Maschine' })
   });
   const LEGACY_NAMES = ['Mira Altspan', 'Tarek Stahlwind', 'Elira Kupferhand', 'Joren Maßstern', 'Vaska Spindelruh', 'Neris Werkfink', 'Kael Eisenherz', 'Zora Fräsborn'];
   const QUALITY_PROFILE_VERSION = 1;
@@ -324,6 +324,11 @@
     if (second === first) second = pool[(firstIndex + 1) % pool.length];
     return [first,second].filter(Boolean).map(id=>({ ...WORKPLACE_ITEMS[id] }));
   }
+  function workplaceGiftFor(employee) {
+    const existing=new Set(workplaceItems(employee).map(item=>item.id));
+    const choices=Object.values(WORKPLACE_ITEMS).filter(item=>!existing.has(item.id));
+    return choices[Math.abs(Number(employee?.id)||0)%choices.length]||null;
+  }
 
   function qualityRiskModifier(employee) {
     if (employee?.profileVersion !== 2) return 0;
@@ -547,6 +552,7 @@
       outcome: typeof memory.outcome === 'string' && memory.outcome ? memory.outcome : null,
       orderId,
       orderPart: typeof memory.orderPart === 'string' && memory.orderPart.trim() ? memory.orderPart.trim().slice(0, 100) : null,
+      personalItem: typeof memory.personalItem === 'string' && memory.personalItem.trim() ? memory.personalItem.trim().slice(0, 80) : null,
       customer: typeof memory.customer === 'string' && memory.customer.trim() ? memory.customer.trim().slice(0, 100) : null,
       defectParts: Math.max(0, Math.floor(Number(memory.defectParts) || 0)),
       importance: clamp(Math.floor(Number(memory.importance) || 5), 1, 10),
@@ -577,6 +583,7 @@
         previous.machineName = memory.machineName || previous.machineName;
         previous.faultLabel = memory.faultLabel || previous.faultLabel;
         previous.orderPart = memory.orderPart || previous.orderPart;
+        previous.personalItem = memory.personalItem || previous.personalItem;
         previous.customer = memory.customer || previous.customer;
         previous.defectParts = memory.defectParts || previous.defectParts;
       }
@@ -602,6 +609,7 @@
       existing.machineName = memory.machineName || existing.machineName;
       existing.faultLabel = memory.faultLabel || existing.faultLabel;
       existing.orderPart = memory.orderPart || existing.orderPart;
+      existing.personalItem = memory.personalItem || existing.personalItem;
       existing.customer = memory.customer || existing.customer;
       existing.defectParts = memory.defectParts || existing.defectParts;
     } else {
@@ -614,6 +622,7 @@
   function memoryTitle(memory) {
     const item = normalizeMemory(memory);
     if (!item) return '';
+    if (item.type === 'personal_gift') return `🎁 Eigener Platz: ${item.personalItem || 'persönlichen Wunsch erfüllt'}`;
     const machine = item.machineName || item.machineType || 'Maschine';
     const fault = item.faultLabel || 'Störung';
     if (item.type === 'major_failure') {
@@ -1264,6 +1273,7 @@
       machineHistory: normalizeMachineHistory(entry?.machineHistory),
       repairExperience: normalizeRepairExperience(entry?.repairExperience),
       memories: normalizeMemories(entry?.memories),
+      personalGiftId: WORKPLACE_ITEMS[entry?.personalGiftId] ? entry.personalGiftId : null,
       baseHourlyWage: Number.isFinite(entry?.baseHourlyWage)
         ? clamp(Math.round(entry.baseHourlyWage), qualityProfile ? 23 : 20, qualityProfile ? 34 : 31)
         : qualityProfile
@@ -1314,6 +1324,7 @@
     derivePersonality,
     personalityIds,
     workplaceItems,
+    workplaceGiftFor,
     qualityRiskModifier,
     incidentExperience,
     normalizeMachineHistory,

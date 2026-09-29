@@ -7,7 +7,7 @@
   const START = Date.UTC(2026, 0, 5, 6);
   const GAME_MINUTES_PER_REAL_SECOND = 10;
   const EMPLOYEE_REMARK_VISIBLE_MS = 5000;
-  const EMPLOYEE_REMARK_COOLDOWN_MS = 9000;
+  const EMPLOYEE_REMARK_COOLDOWN_MS = 30000;
   const EMPLOYEE_REMARK_HISTORY_LIMIT = 3;
   const RUSH_OVERTIME_WAGE_MULTIPLIER = 1.5;
   const RUSH_SATURDAY_WAGE_MULTIPLIER = 2;
@@ -1182,7 +1182,7 @@
     return changed;
   }
   const conditionLabel=value=>value>0&&value<1?'<1 %':Math.round(value)+' %';
-  let visual=null, currentPanel=null, businessSection='factory', messageTimer, zoomTimer, phaserGame=null, hallPreviewBay=null, employeeCardContext=null, employeeRemarkState=new Map(), employeeRemarkHistory=[], employeeShiftRemarkKeys=new Set(), hallShiftHandoffs=new Map(), shiftLeaderPanelShift=1, shiftLeaderAdviceKey='', operatorPickerShift=null, dismissalPickerShift=null, qualityPickerShift=null, rushWorkMode='regular', rushWorkModeEventId=null;
+  let visual=null, currentPanel=null, businessSection='factory', messageTimer, zoomTimer, phaserGame=null, hallPreviewBay=null, employeeCardContext=null, employeeRemarkState=new Map(), employeeRemarkHistory=[], hallShiftHandoffs=new Map(), shiftLeaderPanelShift=1, shiftLeaderAdviceKey='', operatorPickerShift=null, dismissalPickerShift=null, qualityPickerShift=null, rushWorkMode='regular', rushWorkModeEventId=null;
   function say(message,variant=''){
     const box=$('message');
     box.textContent=message;
@@ -2686,7 +2686,10 @@
   function visibleWorkplaceItems(employee){
     if(typeof recruitmentSystem.workplaceItems!=='function')return [];
     const items=recruitmentSystem.workplaceItems(employee);
-    return items.slice(0,(Number(employee?.xp)||0)>=2400?2:1);
+    const visible=items.slice(0,(Number(employee?.xp)||0)>=2400?2:1);
+    const gift=employee.personalGiftId&&recruitmentSystem.workplaceGiftFor?.(employee);
+    if(gift?.id===employee.personalGiftId&&!visible.some(item=>item.id===gift.id))visible.push(gift);
+    return visible;
   }
   function renderBayPersonalItems(b,machine){
     const keep=new Set();
@@ -2694,7 +2697,8 @@
       for(const shift of [1,2]){
         const employee=assignedEmployee(machine,shift);
         if(!employee)continue;
-        const items=visibleWorkplaceItems(employee);
+        const allItems=visibleWorkplaceItems(employee);
+        const items=allItems.length>2?[allItems[0],allItems[allItems.length-1]]:allItems;
         if(!items.length)continue;
         const key=String(shift);
         keep.add(key);
@@ -2703,6 +2707,12 @@
           wrap=document.createElement('div');
           wrap.className='bay-personal-items shift-'+shift;
           wrap.dataset.shift=key;
+          const bay=machine.bay;
+          wrap.addEventListener('click',event=>{
+            event.preventDefault();event.stopPropagation();
+            const currentMachine=machineAt(bay),currentEmployee=currentMachine&&assignedEmployee(currentMachine,shift);
+            if(currentEmployee)openEmployeeCard(currentEmployee,currentMachine,shift);
+          });
           b.append(wrap);
         }
         wrap.title=employee.name+' · '+items.map(item=>item.label).join(' · ');
@@ -2710,8 +2720,9 @@
         wrap.replaceChildren(...items.map(item=>{
           const prop=document.createElement('span');
           prop.className='bay-personal-item item-'+item.id;
+          prop.textContent=item.icon||'•';
           prop.title=employee.name+': '+item.label;
-          prop.setAttribute('aria-hidden','true');
+          prop.setAttribute('role','img');prop.setAttribute('aria-label',`${employee.name}: ${item.label}`);
           return prop;
         }));
       }
@@ -2753,10 +2764,52 @@
     $('employee-card-machine').textContent=`${familiarity.label} an ${familiarity.machineName} · ${Math.floor(familiarity.workMinutes/60)} h · ${familiarity.partsProduced} Teile`;
     const personalItems=visibleWorkplaceItems(employee);
     $('employee-card-personal').textContent=personalItems.length
-      ?personalItems.map(item=>item.label).join(' · ')+((Number(employee.xp)||0)<2400?' · Der Platz wird mit wachsender Erfahrung noch persönlicher.':'')
+      ?personalItems.map(item=>`${item.icon||''} ${item.label}`.trim()).join(' · ')
       :'Noch keine persönlichen Gegenstände am Arbeitsplatz.';
 
-    const quote=typeof recruitmentSystem.workRemark==='function'
+    let conversation=$('employee-card-conversation');
+    if(!conversation){
+      conversation=document.createElement('div');conversation.id='employee-card-conversation';
+      conversation.className='employee-card-section employee-card-conversation';
+      $('employee-card-personal').closest('.employee-card-section').after(conversation);
+    }
+    conversation.replaceChildren();
+    const conversationTitle=document.createElement('strong');conversationTitle.textContent='Mitarbeitergespräch';
+    const conversationText=document.createElement('p');
+    const gift=recruitmentSystem.workplaceGiftFor?.(employee);
+    const fulfilled=!!gift&&employee.personalGiftId===gift.id;
+    conversationText.textContent=fulfilled
+      ?`„Danke für ${gift.label}. Der Platz fühlt sich jetzt wirklich nach meinem an.“`
+      :gift?`„${gift.label} wäre schön an meinem Platz – ${gift.about}.“`:'„Schön, dass du nachfragst.“';
+    const conversationActions=document.createElement('div');conversationActions.className='employee-conversation-actions';
+    const ask=document.createElement('button');ask.type='button';ask.className='action';ask.textContent='Wie läuft die Schicht?';
+    ask.addEventListener('click',()=>{
+      const current=job(machine),machineName=catalog[machine.type].name;
+      const remembered=recruitmentSystem.memoryReference(employee,{machineType:machine.type,machineName});
+      conversationText.textContent=machine.tool<=25
+        ?`„Die Schneide sieht fertig aus. Leg mir bitte ein Ersatzwerkzeug bereit, bevor die Oberfläche leidet.“`
+        :machine.maintenance<=35
+          ?`„${machineName} klingt heute anders. Nach der Serie würde ich die Maschine prüfen lassen.“`
+          :current?`„${remembered}${current.part} läuft gerade ruhig. Ich behalte Maß und Oberfläche im Blick.“`
+          :`„${remembered}Im Moment ist es hier ruhig. Ich bin bereit für den nächsten Auftrag.“`;
+    });
+    conversationActions.append(ask);
+    if(gift&&!fulfilled){
+      const give=document.createElement('button');give.type='button';give.className='action';
+      give.textContent=`Wunsch erfüllen · ${euro(180)}`;give.disabled=state.money<180;
+      give.addEventListener('click',()=>{
+        if(employee.personalGiftId||state.money<180||!book('other',-180,`Persönlicher Arbeitsplatz für ${employee.name}`,{employeeId:employee.id,item:gift.id}).ok)return;
+        employee.personalGiftId=gift.id;
+        recruitmentSystem.recordMemory(employee,{id:`personal_gift:${gift.id}`,type:'personal_gift',personalItem:gift.label,
+          importance:8,gameMinutes:state.gameMinutes,bay:machine.bay});
+        save();render();openEmployeeCard(employee,machine,shift);
+        queueEmployeeRemark(employee,machine,`Danke für ${gift.label} – jetzt hat mein Platz etwas Eigenes.`);
+      });
+      conversationActions.append(give);
+    }
+    conversation.append(conversationTitle,conversationText,conversationActions);
+
+    const quote=(machine.tool<=12||machine.maintenance<=12)&&typeof recruitmentSystem.workRemark==='function'
       ? recruitmentSystem.workRemark(employee,{
         timeBucket:Math.floor(state.gameMinutes/20),
         machineType:machine.type,
@@ -2791,16 +2844,6 @@
       line.append(name,text);
       return line;
     }));
-  }
-  function employeeRemarkImportance(machine){
-    if(!machine)return 'casual';
-    if(machine.tool<=12||machine.maintenance<=12)return 'urgent';
-    const active=job(machine);
-    if(active){
-      const remaining=Math.max(0,(active.qty||0)-(machine.produced||0));
-      if(remaining>0&&remaining<=Math.max(3,Math.ceil((active.qty||0)*.12)))return 'notable';
-    }
-    return 'casual';
   }
   function pushEmployeeRemarkHistory(employee,text){
     if(!employee||!text)return;
@@ -2863,38 +2906,6 @@
     const remark=remembered||recruitmentSystem.eventRemark(target.employee,eventType,context);
     return queueEmployeeRemark(target.employee,target.machine,remark);
   }
-  function maybeQueueShiftMomentRemark(){
-    if(typeof recruitmentSystem.eventRemark!=='function')return;
-    const d=dateAt(state.gameMinutes),weekday=d.getUTCDay();
-    if(weekday===0||weekday===6)return;
-    const minuteOfDay=d.getUTCHours()*60+d.getUTCMinutes();
-    const moments=[
-      {shift:1,phase:'shift_start',from:360,to:365},
-      {shift:1,phase:'shift_end',from:830,to:835},
-      {shift:2,phase:'shift_start',from:840,to:845},
-      {shift:2,phase:'shift_end',from:1310,to:1315}
-    ];
-    const dateKey=gameDateKey();
-    for(const moment of moments){
-      if(minuteOfDay<moment.from||minuteOfDay>=moment.to)continue;
-      const key=dateKey+':'+moment.shift+':'+moment.phase;
-      if(employeeShiftRemarkKeys.has(key))continue;
-      employeeShiftRemarkKeys.add(key);
-      const candidates=(state.staffRoster['shift'+moment.shift]||[]).map(employee=>({employee,machine:Number.isInteger(employee.assignedBay)?machineAt(employee.assignedBay):null}))
-        .filter(item=>item.machine&&item.machine['operator'+moment.shift]&&job(item.machine));
-      if(!candidates.length)continue;
-      const daySeed=Math.floor(state.gameMinutes/1440)+moment.shift*17+(moment.phase==='shift_end'?11:3);
-      if(Math.abs(daySeed)%3===0)continue;
-      const target=candidates[Math.abs(daySeed)%candidates.length];
-      const remark=recruitmentSystem.eventRemark(target.employee,moment.phase,{
-        shift:moment.shift,
-        timeBucket:Math.floor(state.gameMinutes/20),
-        machineType:target.machine.type,
-        machineName:catalog[target.machine.type]?.name||''
-      });
-      queueEmployeeRemark(target.employee,target.machine,remark);
-    }
-  }
   function hallEmployeeRemark(machine,employee){
     if(!machine||!employee||typeof recruitmentSystem.workRemark!=='function')return '';
     const key=machine.bay+':'+employee.id;
@@ -2911,37 +2922,13 @@
       return entry.text;
     }
 
-    const importance=employeeRemarkImportance(machine);
-    if(state.speed>=5&&importance==='casual'){
-      employeeRemarkState.set(key,entry);
-      return '';
-    }
-    if(entry.nextAllowedAt>now){
-      employeeRemarkState.set(key,entry);
-      return '';
-    }
-
-    const slot=Math.floor(state.gameMinutes/20);
-    const cadence=importance==='urgent'?3:importance==='notable'?5:10;
-    const triggerKey=slot+':'+importance;
-    if(entry.lastTriggerKey===triggerKey){
-      employeeRemarkState.set(key,entry);
-      return '';
-    }
-    entry.lastTriggerKey=triggerKey;
-    const show=importance==='urgent'
-      ? (slot+employee.id+machine.bay)%cadence===0
-      : importance==='notable'
-        ? (slot+employee.id*2+machine.bay)%cadence===0
-        : (slot+employee.id*3+machine.bay*5)%cadence===0;
-    if(!show){
-      employeeRemarkState.set(key,entry);
-      return '';
-    }
-
+    const condition=machine.tool<=12?'tool':machine.maintenance<=12?'maintenance':'';
+    if(!condition){entry.lastCondition='';employeeRemarkState.set(key,entry);return '';}
+    if(entry.lastCondition===condition||entry.nextAllowedAt>now){employeeRemarkState.set(key,entry);return '';}
+    entry.lastCondition=condition;
     const active=job(machine);
     const remark=recruitmentSystem.workRemark(employee,{
-      timeBucket:slot,
+      timeBucket:Math.floor(state.gameMinutes/20),
       machineType:machine.type,
       machineName:catalog[machine.type]?.name||'die Maschine',
       tool:machine.tool,
@@ -4417,7 +4404,6 @@
     hallPreviewBay=null;
     employeeRemarkState=new Map();
     employeeRemarkHistory=[];
-    employeeShiftRemarkKeys=new Set();
     hallShiftHandoffs=new Map();
     renderEmployeeRemarkHistory();
     ensureEconomyState();
@@ -4722,7 +4708,6 @@
       state.gameMinutes+=step;left-=step;
       const nextShift=shiftAt(state.gameMinutes);
       if(shift===1&&nextShift===2)queueHallShiftHandoffs(shift,nextShift);
-      maybeQueueShiftMomentRemark();
       for(const m of state.machines){
         if(m.robotRepairRemainingMinutes>0){
           m.robotRepairRemainingMinutes=Math.max(0,m.robotRepairRemainingMinutes-step);
