@@ -659,6 +659,12 @@
     const portraitFile=String(employee.portrait||'').split('?')[0].split('/').pop();
     return hallWorkerPortraitSprites[portraitFile]||hallWorkerSprites[employee.name]||null;
   }
+  const detailWorkerArt=[...new Set(Object.values(hallWorkerPortraitSprites))];
+  const detailWorkerTextureFor=employee=>{
+    const source=hallWorkerSpriteFor(employee);
+    const index=detailWorkerArt.indexOf(source);
+    return index<0?null:'detail-worker-'+index;
+  };
   function hallWorkingOperator(machine){
     const shift=machineShiftAt(machine);
     if(!machine||!shift||!machine['operator'+shift]||!job(machine))return null;
@@ -2691,6 +2697,32 @@
     if(gift?.id===employee.personalGiftId&&!visible.some(item=>item.id===gift.id))visible.push(gift);
     return visible;
   }
+  function detailOperatorFor(machine){
+    if(!machine)return null;
+    const activeShift=machineShiftAt(machine);
+    const activeEmployee=activeShift&&machine['operator'+activeShift]?assignedEmployee(machine,activeShift):null;
+    if(activeEmployee)return {employee:activeEmployee,shift:activeShift,present:true};
+    for(const shift of [1,2]){
+      const employee=assignedEmployee(machine,shift);
+      if(employee)return {employee,shift,present:false};
+    }
+    return null;
+  }
+  function renderDetailWorkplace(machine){
+    const panel=$('detail-workplace'),operator=detailOperatorFor(machine);
+    if(!panel)return;
+    panel.hidden=!operator;
+    if(!operator)return;
+    const {employee,shift}=operator,items=visibleWorkplaceItems(employee);
+    panel.dataset.bay=String(machine.bay);panel.dataset.shift=String(shift);
+    $('detail-workplace-owner').textContent=`${employee.name} · Schicht ${shift}`;
+    $('detail-workplace-items').replaceChildren(...items.map(item=>{
+      const badge=document.createElement('span');badge.className='detail-workplace-item';
+      const icon=document.createElement('span'),label=document.createElement('span');
+      icon.className='detail-workplace-icon';icon.textContent=item.icon||'•';
+      label.textContent=item.label;badge.append(icon,label);return badge;
+    }));
+  }
   function renderBayPersonalItems(b,machine){
     const keep=new Set();
     if(machine){
@@ -4043,7 +4075,7 @@
       b.classList.toggle('orionis-bay',!!machine&&machine.type==='mill5');
       b.classList.toggle('turning-bay',turning);
       b.classList.toggle('robot-loading',!!machine?.loadingRobot&&operating(machine)&&machineShiftAt(machine)===2);
-      renderBayPersonalItems(b,machine);
+      b.querySelectorAll('.bay-personal-items').forEach(items=>items.remove());
 
       let machineArt=b.querySelector('.bay-machine');
       let turningFrame=b.querySelector('.bay-turning-frame');
@@ -4177,8 +4209,9 @@
       visual.running=!!m&&operating(m);
       visual.condition=!m?'idle':(m.maintenance<8||m.tool<1)?'fault':operating(m)?'running':o?'waiting':'idle';
       visual.robotEnabled=!!m?.loadingRobot;
-      if(m)visual.setMachineType(m.type,m.loadingRobot);
+      if(m){visual.setMachineType(m.type,m.loadingRobot);visual.setOperator(m);}
     }
+    renderDetailWorkplace(m);
   }
   function startOrder(id,bay,options={}){
     orderMarketSystem.tick(state,state.gameMinutes);
@@ -4977,7 +5010,14 @@
   $('open-warehouse-from-business').addEventListener('click',()=>tab('warehouse'));
   $('recruitment-back').addEventListener('click',()=>tab('business'));
   $('close-drawer').addEventListener('click',closeDrawer);
+  $('stage').append($('employee-card'));
   $('employee-card-close').addEventListener('click',closeEmployeeCard);
+  $('detail-workplace').addEventListener('click',()=>{
+    const machine=machineAt(Number($('detail-workplace').dataset.bay));
+    const shift=Number($('detail-workplace').dataset.shift);
+    const employee=machine&&assignedEmployee(machine,shift);
+    if(employee)openEmployeeCard(employee,machine,shift);
+  });
   $('scrim').addEventListener('click',closeDrawer);
   for(let bay=5;bay<=8;bay++){
     const button=document.createElement('button'),label=document.createElement('span');
@@ -5096,15 +5136,13 @@
   class FactoryScene extends (typeof Phaser==='undefined'?class{}:Phaser.Scene) {
     constructor(){super('factory');this.running=false;this.condition='idle';this.elapsed=0;}
     preload(){
-      this.load.image('machine-standard','cell-nexora.jpg?v=c523bfea');
-      this.load.image('machine-rapid','cell-nexora-nx420.webp?v=1');
-      this.load.image('machine-premium','cell-aurex-at600.webp?v=1');
-      this.load.image('machine-standard-robot','cell-nexora-robot.webp?v=1');
-      this.load.image('machine-rapid-robot','cell-nexora-nx420-robot.webp?v=1');
-      this.load.image('machine-premium-robot','cell-aurex-at600-robot.webp?v=1');
+      this.load.image('machine-standard','assets/cell-nexora-clean.png?v=1');
+      this.load.image('machine-rapid','assets/cell-nexora-nx420-clean.png?v=1');
+      this.load.image('machine-premium','assets/cell-aurex-at600-clean.png?v=1');
       this.load.image('machine-mill3','assets/veltron-vx500-detail-hd.png?v=1');
       this.load.image('machine-mill5','assets/orionis-om650x-detail-hd.webp?v=1');
       this.load.image('loading-robot','assets/loading-robot.webp?v=1');
+      detailWorkerArt.forEach((source,index)=>this.load.image('detail-worker-'+index,source));
     }
     create(){
       visual=this;
@@ -5180,7 +5218,28 @@
       });
       this.robotShadow=this.add.ellipse(0,0,200,22,0x10191c,.42).setVisible(false);
       this.robotImage=this.add.image(200,502,'loading-robot').setDisplaySize(470,510).setFlipX(true).setVisible(false);
+      this.workerShadow=this.add.ellipse(540,778,125,24,0x10191c,.4).setVisible(false);
+      this.workerImage=this.add.image(540,778,'detail-worker-0').setOrigin(.5,1).setVisible(false).setInteractive({useHandCursor:true});
+      this.workerImage.on('pointerdown',()=>{
+        const machine=selectedMachine(),operator=detailOperatorFor(machine);
+        if(operator?.present)openEmployeeCard(operator.employee,machine,operator.shift);
+      });
       render();
+    }
+    setOperator(machine){
+      const operator=detailOperatorFor(machine);
+      const key=operator?.present?detailWorkerTextureFor(operator.employee):null;
+      const visible=!!key;
+      this.workerImage.setVisible(visible);
+      this.workerShadow.setVisible(visible);
+      if(!visible)return;
+      if(this.workerImage.texture.key!==key)this.workerImage.setTexture(key);
+      const source=this.workerImage.texture.getSourceImage();
+      const height=this.isMilling?330:295;
+      const width=Math.min(this.isMilling?240:205,height*(source.naturalWidth||source.width)/(source.naturalHeight||source.height));
+      const x=this.isMilling?782:533,y=this.isMilling?785:786;
+      this.workerImage.setPosition(x,y).setDisplaySize(width,height);
+      this.workerShadow.setPosition(x,y-4).setSize(width*.72,22);
     }
     setMachineType(type,loadingRobot=false){
       const milling=catalog[type].kind==='Fräsen';
@@ -5201,7 +5260,7 @@
       this.robotShadow.setPosition(robotLayout.x-robotLayout.width*.18,robotLayout.y+robotLayout.height*.42);
       this.millGroup.setVisible(false);
       this.machineImage.setVisible(true);
-      const key='machine-'+type+(loadingRobot&&!milling?'-robot':'');
+      const key='machine-'+type;
       if(this.machineImage.texture.key!==key)this.machineImage.setTexture(key);
       if(milling){
         const source=this.machineImage.texture.getSourceImage();
