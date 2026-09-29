@@ -251,8 +251,8 @@
   function selfRepairFailureRange(state, bay, record, context = {}) {
     const expected = selfRepairFailureChance(state, bay, record, context);
     return {
-      min: clamp(expected - 0.12, 0.2, 0.92),
-      max: clamp(expected + 0.12, 0.2, 0.92)
+      min: clamp(expected - 0.12, 0.05, 0.92),
+      max: clamp(expected + 0.12, 0.05, 0.92)
     };
   }
 
