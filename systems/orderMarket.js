@@ -145,6 +145,7 @@
       available: [],
       pendingFollowUps: [],
       completedCustomers: {},
+      customerHistory: {},
       completedOrderIds: [],
       nextRefreshAt: now,
       nextOrderNumber: 1,
@@ -173,6 +174,63 @@
     };
   }
 
+  function normalizeCustomerHistoryRecord(record, completedFallback = 0) {
+    const source = record && typeof record === 'object' && !Array.isArray(record) ? record : {};
+    const partCounts = source.partCounts && typeof source.partCounts === 'object' && !Array.isArray(source.partCounts)
+      ? Object.fromEntries(Object.entries(source.partCounts)
+        .filter(([part,count])=>typeof part === 'string' && part && Number.isFinite(count) && count > 0)
+        .map(([part,count])=>[part,Math.max(0,Math.floor(count))]))
+      : {};
+    const completed = Math.max(Math.floor(finite(source.completed, 0)), Math.floor(finite(completedFallback, 0)));
+    return {
+      completed,
+      onTime: Math.max(0, Math.floor(finite(source.onTime, 0))),
+      late: Math.max(0, Math.floor(finite(source.late, 0))),
+      revenue: Math.max(0, finite(source.revenue, 0)),
+      rushOrders: Math.max(0, Math.floor(finite(source.rushOrders, 0))),
+      qualityIssues: Math.max(0, Math.floor(finite(source.qualityIssues, 0))),
+      complaints: Math.max(0, Math.floor(finite(source.complaints, 0))),
+      partCounts,
+      firstCompletedAt: Number.isFinite(source.firstCompletedAt) ? source.firstCompletedAt : null,
+      lastCompletedAt: Number.isFinite(source.lastCompletedAt) ? source.lastCompletedAt : null,
+      lastPart: typeof source.lastPart === 'string' && source.lastPart ? source.lastPart : null,
+      lastOrderId: typeof source.lastOrderId === 'string' && source.lastOrderId ? source.lastOrderId : null,
+      lastComplaintOutcome: typeof source.lastComplaintOutcome === 'string' && source.lastComplaintOutcome ? source.lastComplaintOutcome : null
+    };
+  }
+
+  function customerHistoryRecord(market, customer) {
+    const completedFallback = Math.max(0, finite(market.completedCustomers?.[customer], 0));
+    const current = normalizeCustomerHistoryRecord(market.customerHistory?.[customer], completedFallback);
+    market.customerHistory = market.customerHistory && typeof market.customerHistory === 'object' && !Array.isArray(market.customerHistory)
+      ? market.customerHistory : {};
+    market.customerHistory[customer] = current;
+    return current;
+  }
+
+  function relationshipLabel(completed) {
+    const count = Math.max(0, Math.floor(finite(completed, 0)));
+    if (count >= 10) return 'Langjähriger Stammkunde';
+    if (count >= 6) return 'Stammkunde';
+    if (count >= 3) return 'Bekannter Kunde';
+    if (count >= 1) return 'Wiederkehrender Kunde';
+    return 'Neuer Kunde';
+  }
+
+  function historySnapshot(customer, record) {
+    const normalized = normalizeCustomerHistoryRecord(record, 0);
+    const entries = Object.entries(normalized.partCounts).sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0],'de'));
+    const trackedDeadlines = normalized.onTime + normalized.late;
+    return {
+      customer,
+      ...normalized,
+      relationship: relationshipLabel(normalized.completed),
+      topPart: entries[0]?.[0] || null,
+      topPartCount: entries[0]?.[1] || 0,
+      punctualityPct: trackedDeadlines > 0 ? Math.round(normalized.onTime / trackedDeadlines * 100) : null
+    };
+  }
+
   function normalizeMarket(market, now) {
     const previousVersion = Math.max(0, Math.floor(finite(market.version, 0)));
     market.version = VERSION;
@@ -188,6 +246,12 @@
     market.completedCustomers = market.completedCustomers && typeof market.completedCustomers === 'object' && !Array.isArray(market.completedCustomers)
       ? market.completedCustomers
       : {};
+    market.customerHistory = market.customerHistory && typeof market.customerHistory === 'object' && !Array.isArray(market.customerHistory)
+      ? market.customerHistory
+      : {};
+    for (const [customer,count] of Object.entries(market.completedCustomers)) {
+      market.customerHistory[customer] = normalizeCustomerHistoryRecord(market.customerHistory[customer], count);
+    }
     market.completedOrderIds = Array.isArray(market.completedOrderIds)
       ? market.completedOrderIds.filter(id => typeof id === 'string').slice(-MAX_COMPLETED_IDS)
       : [];
@@ -547,6 +611,20 @@
     }
     const customer = typeof order.customer === 'string' && order.customer ? order.customer : 'Unbekannter Kunde';
     market.completedCustomers[customer] = Math.max(0, finite(market.completedCustomers[customer], 0)) + 1;
+    const history = customerHistoryRecord(market, customer);
+    history.completed = market.completedCustomers[customer];
+    if (options.late) history.late += 1; else history.onTime += 1;
+    const realizedRevenue = Number.isFinite(options.payout) ? Math.max(0, options.payout) : Math.max(0, finite(order.reward, 0));
+    history.revenue += realizedRevenue;
+    if (order.isRushOrder) history.rushOrders += 1;
+    if (Math.max(0, Math.floor(finite(options.qualityDefectParts, 0))) > 0) history.qualityIssues += 1;
+    if (typeof order.part === 'string' && order.part) {
+      history.partCounts[order.part] = Math.max(0, finite(history.partCounts[order.part], 0)) + 1;
+      history.lastPart = order.part;
+    }
+    history.firstCompletedAt = Number.isFinite(history.firstCompletedAt) ? history.firstCompletedAt : market.now;
+    history.lastCompletedAt = market.now;
+    history.lastOrderId = order.id;
     changeReputation(state,customer,order.isRushOrder?(options.late?-12:8):(options.late?-6:4));
 
     const profile = profiles.find(item => item.key === order.customerProfile) ||
@@ -581,6 +659,28 @@
     };
   }
 
+  function recordComplaint(state, customer, outcome = null) {
+    const market = ensureMarket(state);
+    if (typeof customer !== 'string' || !customer) return null;
+    const history = customerHistoryRecord(market, customer);
+    history.complaints += 1;
+    history.lastComplaintOutcome = typeof outcome === 'string' && outcome ? outcome : null;
+    return historySnapshot(customer, history);
+  }
+
+  function getCustomerHistory(state) {
+    const market = ensureMarket(state);
+    const names = new Set([
+      ...profiles.map(profile=>profile.customer),
+      ...Object.keys(market.completedCustomers || {}),
+      ...Object.keys(market.customerHistory || {})
+    ]);
+    return Object.fromEntries([...names].map(customer=>[
+      customer,
+      historySnapshot(customer, customerHistoryRecord(market, customer))
+    ]));
+  }
+
   return Object.freeze({
     init,
     tick,
@@ -591,6 +691,8 @@
     recordRushDecision,
     withdrawRushOffer,
     onCompleted,
+    recordComplaint,
+    getCustomerHistory,
     adjustReputation: (state, customer, delta) => changeReputation(state, customer, delta),
     getReputation: state => ({ ...ensureReputation(state) }),
     limits: Object.freeze({ minOffers: MIN_OFFERS, startOffers: START_OFFERS, maxOffers: MAX_OFFERS })
