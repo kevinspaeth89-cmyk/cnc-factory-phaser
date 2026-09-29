@@ -75,6 +75,16 @@
       about: 'fühlt sich sowohl beim Drehen als auch beim Fräsen wohl'
     })
   });
+  const WORKPLACE_ITEMS = Object.freeze({
+    mug: Object.freeze({ id: 'mug', label: 'Thermobecher', about: 'steht bei fast jeder Schicht griffbereit am Arbeitsplatz' }),
+    notebook: Object.freeze({ id: 'notebook', label: 'Mess- & Notizheft', about: 'enthält eigene Notizen zu Maßen, Werkzeugen und Abläufen' }),
+    gloves: Object.freeze({ id: 'gloves', label: 'Eigene Arbeitshandschuhe', about: 'liegen immer am vertrauten Platz neben der Maschine' }),
+    toolbox: Object.freeze({ id: 'toolbox', label: 'Kleine Werkzeugtasche', about: 'ein paar persönliche Helfer für die tägliche Arbeit' }),
+    photo: Object.freeze({ id: 'photo', label: 'Kleines Foto', about: 'ein persönliches Detail zwischen all der Technik' }),
+    sticker: Object.freeze({ id: 'sticker', label: 'Glücksaufkleber', about: 'ein kleiner Wiedererkennungsmarker am eigenen Platz' }),
+    bottle: Object.freeze({ id: 'bottle', label: 'Trinkflasche', about: 'wandert bei einem dauerhaften Maschinenwechsel mit' }),
+    marker: Object.freeze({ id: 'marker', label: 'Stift & Prüfzettel', about: 'für schnelle Notizen direkt an der Maschine' })
+  });
   const LEGACY_NAMES = ['Mira Altspan', 'Tarek Stahlwind', 'Elira Kupferhand', 'Joren Maßstern', 'Vaska Spindelruh', 'Neris Werkfink', 'Kael Eisenherz', 'Zora Fräsborn'];
   const QUALITY_PROFILE_VERSION = 1;
   const SKILL_SCALE = 2;
@@ -290,6 +300,29 @@
       ? employee.personality
       : employee.skills ? derivePersonality(employee.skills) : [];
     return traits.map(trait => typeof trait === 'string' ? trait : trait?.id).filter(Boolean);
+  }
+
+  function workplaceItems(employee) {
+    if (!employee || employee.profileVersion !== 2 || employee.profileType === 'quality') return [];
+    const ids = personalityIds(employee);
+    const preferred = [];
+    if (ids.includes('gruendlich')) preferred.push('notebook','marker');
+    if (ids.includes('pragmatisch')) preferred.push('gloves','toolbox');
+    if (ids.includes('bedacht')) preferred.push('mug','notebook');
+    if (ids.includes('neugierig')) preferred.push('notebook','sticker');
+    if (ids.includes('routineorientiert')) preferred.push('mug','gloves');
+    if (ids.includes('anpassungsfaehig')) preferred.push('bottle','toolbox');
+    if (ids.includes('flexibel')) preferred.push('toolbox','sticker');
+    const all = Object.keys(WORKPLACE_ITEMS);
+    const pool = [...new Set([...preferred,...all])];
+    let seed = Math.max(1,Number(employee.id)||1) * 97;
+    const name = String(employee.name || '');
+    for (let index=0;index<name.length;index+=1) seed = Math.imul(seed ^ name.charCodeAt(index), 16777619);
+    const firstIndex = Math.abs(seed) % pool.length;
+    const first = pool[firstIndex];
+    let second = pool[(firstIndex + 1 + Math.abs(seed >>> 3) % Math.max(1,pool.length-1)) % pool.length];
+    if (second === first) second = pool[(firstIndex + 1) % pool.length];
+    return [first,second].filter(Boolean).map(id=>({ ...WORKPLACE_ITEMS[id] }));
   }
 
   function qualityRiskModifier(employee) {
@@ -1207,6 +1240,7 @@
     hourlyWage,
     derivePersonality,
     personalityIds,
+    workplaceItems,
     qualityRiskModifier,
     incidentExperience,
     normalizeMachineHistory,

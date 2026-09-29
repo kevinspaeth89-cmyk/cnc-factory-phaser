@@ -839,3 +839,40 @@ test('a previous risky escalation is remembered when the same machine warns agai
   assert.match(remark, /damals|kenne ich noch/i);
   assert.match(remark, /eskaliert|schweren Schaden/i);
 });
+
+
+test('operators receive stable personal workstation items', () => {
+  const employee = {
+    id: 51,
+    profileVersion: 2,
+    name: 'Mira Test',
+    skills: { turning: 8, milling: 4, precision: 9, learning: 8 },
+    personality: recruitment.derivePersonality({ turning: 8, milling: 4, precision: 9, learning: 8 })
+  };
+  const first = recruitment.workplaceItems(employee);
+  const second = recruitment.workplaceItems(employee);
+  assert.deepEqual(first, second);
+  assert.equal(first.length, 2);
+  assert.notEqual(first[0].id, first[1].id);
+  assert.ok(first.every(item => item.id && item.label && item.about));
+});
+
+test('personal workstation items vary between employees and stay off QS profiles', () => {
+  const a = {
+    id: 52,
+    profileVersion: 2,
+    name: 'Tarek Test',
+    skills: { turning: 8, milling: 3, precision: 3, learning: 4 },
+    personality: recruitment.derivePersonality({ turning: 8, milling: 3, precision: 3, learning: 4 })
+  };
+  const b = {
+    id: 53,
+    profileVersion: 2,
+    name: 'Elira Test',
+    skills: { turning: 5, milling: 7, precision: 7, learning: 9 },
+    personality: recruitment.derivePersonality({ turning: 5, milling: 7, precision: 7, learning: 9 })
+  };
+  assert.notDeepEqual(recruitment.workplaceItems(a), recruitment.workplaceItems(b));
+  assert.deepEqual(recruitment.workplaceItems({ id: 54, profileVersion: 2, profileType: 'quality' }), []);
+  assert.deepEqual(recruitment.workplaceItems({ id: 55, profileVersion: 0 }), []);
+});
