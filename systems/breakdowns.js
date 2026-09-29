@@ -203,7 +203,9 @@
       return { cost: Math.round(info.cost * factor), downtime: Math.max(1, Math.round(info.downtime * timeFactor)) };
     }
     if (method === 'technician') {
-      const repairMinutes = Math.max(1, Math.round(info.downtime * (major ? 2.15 : 1.15) + (major ? 35 : 12)));
+      const repairMinutes = major
+        ? Math.max(180, Math.round(info.downtime * 7.5 + 45))
+        : Math.max(1, Math.round(info.downtime * 1.15 + 12));
       const arrivalRange = technicianTravelRange(record);
       return {
         cost: Math.round(info.cost * (major ? 3.1 : 1.65) + (major ? 900 : 250)),
