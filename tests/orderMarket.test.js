@@ -239,3 +239,49 @@ test('legacy completed-customer counts migrate into customer history without inv
   assert.equal(history.punctualityPct, null);
   assert.equal(history.revenue, 0);
 });
+
+
+test('customers expose stable fantasy brand identities and industrial sectors', () => {
+  const expected = {
+    'Veltraxis Mobility': 'Automobil & E-Mobility',
+    'Orionis Fluidics': 'Lebensmittel-, Pharma- & Fluidtechnik',
+    'Kaeldor Components': 'Luftfahrt & Präzisionskomponenten',
+    'Asteron Robotics': 'Robotik & Automation'
+  };
+
+  for (const [customer, sector] of Object.entries(expected)) {
+    const identity = orderMarket.getCustomerIdentity(customer);
+    assert.equal(identity.customer, customer);
+    assert.equal(identity.sector, sector);
+    assert.ok(identity.brandClass);
+    assert.ok(identity.logoMark);
+    assert.ok(identity.slogan);
+    assert.ok(Array.isArray(identity.specialties));
+    assert.ok(identity.specialties.length >= 3);
+  }
+
+  const classes = Object.keys(expected).map(customer => orderMarket.getCustomerIdentity(customer).brandClass);
+  assert.equal(new Set(classes).size, classes.length);
+});
+
+test('generated orders carry customer sector metadata while old orders can still derive identity by customer', () => {
+  const state = newState('customer-brand-metadata');
+  const orders = orderMarket.getAvailable(state);
+  assert.ok(orders.every(order => order.customerSector === orderMarket.getCustomerIdentity(order.customer).sector));
+  assert.ok(orders.every(order => order.customerBrandClass === orderMarket.getCustomerIdentity(order.customer).brandClass));
+
+  const legacy = { ...orders[0] };
+  delete legacy.customerSector;
+  delete legacy.customerBrandClass;
+  const identity = orderMarket.getCustomerIdentity(legacy.customer);
+  assert.ok(identity.sector);
+  assert.ok(identity.brandClass);
+});
+
+test('customer history snapshots include brand identity', () => {
+  const state = newState('customer-brand-history');
+  const customer = orderMarket.getAvailable(state)[0].customer;
+  const history = orderMarket.getCustomerHistory(state)[customer];
+  assert.equal(history.identity.customer, customer);
+  assert.equal(history.identity.sector, orderMarket.getCustomerIdentity(customer).sector);
+});

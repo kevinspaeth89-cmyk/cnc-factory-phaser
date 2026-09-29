@@ -25,26 +25,33 @@
   const profiles = [
     {
       key: 'standard', customer: 'Veltraxis Mobility', label: 'Standardkunde', weight: 42,
+      sector: 'Automobil & E-Mobility', district: 'Mobilitätspark', brandClass: 'veltraxis', logoMark: 'V',
+      slogan: 'Motion, machined.', specialties: ['Wellenflansche','Distanzringe','Antriebsteile'],
       qty: [25, 55], rewardPerPart: [135, 185], duration: [100, 164], deadline: [28, 48],
       difficulty: [1, 3], lifetime: [2880, 4320], followUpChance: 0.18
     },
     {
       key: 'premium', customer: 'Orionis Fluidics', label: 'Premiumkunde', weight: 22,
+      sector: 'Lebensmittel-, Pharma- & Fluidtechnik', district: 'Clean Process Campus', brandClass: 'orionis', logoMark: 'O',
+      slogan: 'Clean flow. Precise parts.', specialties: ['Ventilbuchsen','Pumpengehäuse','Edelstahlteile'],
       qty: [20, 45], rewardPerPart: [185, 255], duration: [124, 200], deadline: [40, 68],
       difficulty: [3, 5], lifetime: [2520, 4320], followUpChance: 0.30
     },
     {
       key: 'series', customer: 'Kaeldor Components', label: 'Serienkunde', weight: 21,
+      sector: 'Luftfahrt & Präzisionskomponenten', district: 'Aero Industrial Park', brandClass: 'kaeldor', logoMark: 'K',
+      slogan: 'Built light. Built exact.', specialties: ['Spannprismen','Leichtbauteile','Serienkomponenten'],
       qty: [60, 100], rewardPerPart: [85, 125], duration: [124, 210], deadline: [60, 96],
       difficulty: [2, 4], lifetime: [3600, 5760], followUpChance: 0.34
     },
     {
       key: 'express', customer: 'Asteron Robotics', label: 'Expresskunde', weight: 15,
+      sector: 'Robotik & Automation', district: 'Technologiepark', brandClass: 'asteron', logoMark: 'A',
+      slogan: 'Precision in motion.', specialties: ['Sensorhalter','Robotikbauteile','Eilserien'],
       qty: [15, 32], rewardPerPart: [220, 300], duration: [88, 140], deadline: [20, 34],
       difficulty: [2, 4], lifetime: [1680, 2880], followUpChance: 0.16
     }
   ];
-
   const parts = [
     { key: 'turn-flange', name: 'Wellenflansch', kind: 'Drehen', material: '1.4301 Edelstahl', materialType: 'stainless14301', kgPerPart: 1.45 },
     { key: 'turn-valve', name: 'Ventilbuchse', kind: 'Drehen', material: '1.4404 Edelstahl', materialType: 'stainless14404', kgPerPart: 2.1 },
@@ -227,7 +234,8 @@
       relationship: relationshipLabel(normalized.completed),
       topPart: entries[0]?.[0] || null,
       topPartCount: entries[0]?.[1] || 0,
-      punctualityPct: trackedDeadlines > 0 ? Math.round(normalized.onTime / trackedDeadlines * 100) : null
+      punctualityPct: trackedDeadlines > 0 ? Math.round(normalized.onTime / trackedDeadlines * 100) : null,
+      identity: customerIdentity(customer)
     };
   }
 
@@ -404,6 +412,8 @@
       customer: profile.customer,
       customerType: profile.label,
       customerProfile: profile.key,
+      customerSector: profile.sector,
+      customerBrandClass: profile.brandClass,
       part: partName,
       partKey: part.key,
       kind,
@@ -668,6 +678,28 @@
     return historySnapshot(customer, history);
   }
 
+  function customerIdentity(customer) {
+    const profile = profiles.find(item => item.customer === customer);
+    if (!profile) return {
+      customer: typeof customer === 'string' && customer ? customer : 'Unbekannter Kunde',
+      sector: 'Industrie',
+      district: 'Gewerbegebiet',
+      brandClass: 'generic',
+      logoMark: '?',
+      slogan: 'Industrial partner',
+      specialties: []
+    };
+    return {
+      customer: profile.customer,
+      sector: profile.sector,
+      district: profile.district,
+      brandClass: profile.brandClass,
+      logoMark: profile.logoMark,
+      slogan: profile.slogan,
+      specialties: [...profile.specialties]
+    };
+  }
+
   function getCustomerHistory(state) {
     const market = ensureMarket(state);
     const names = new Set([
@@ -693,6 +725,7 @@
     onCompleted,
     recordComplaint,
     getCustomerHistory,
+    getCustomerIdentity: customer => customerIdentity(customer),
     adjustReputation: (state, customer, delta) => changeReputation(state, customer, delta),
     getReputation: state => ({ ...ensureReputation(state) }),
     limits: Object.freeze({ minOffers: MIN_OFFERS, startOffers: START_OFFERS, maxOffers: MAX_OFFERS })
