@@ -1828,7 +1828,7 @@
       reassessActiveProgrammingRoutes();
     }
     save();renderOrders();renderBusiness();
-    say(`${catalog[machine.type].name}: ${order.part} fertig · ${euro(payout)}${late?' (20 % Fristabzug)':''}${quality?.defectParts&&!quality?.undetected?' (10 % Qualitätsabzug)':''}${resumed?` · ${machine.activeOrder.part} fortgesetzt · neue Rüstzeit ${formatMinutes(resumedSetup?.totalMinutes||0)}`:''}${next?` · Nächster Auftrag gestartet${nextSetup?` · Rüstzeit ${formatMinutes(nextSetup.totalMinutes)}`:''}`:''}`,'production');
+    say(`${catalog[machine.type].name}: ${order.part} fertig · ${euro(payout)}${late?' (20 % Fristabzug)':''}${quality?.defectParts&&!quality?.undetected?' (10 % Qualitätsabzug)':''}`,'production');
     return true;
   }
   function startNextQueuedOrder(machine){
