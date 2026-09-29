@@ -27,7 +27,7 @@
       key: 'standard', customer: 'Veltraxis Mobility', label: 'Standardkunde', weight: 42,
       sector: 'Automobil & E-Mobility', district: 'Mobilitätspark', brandClass: 'veltraxis', logoMark: 'V',
       slogan: 'Motion, machined.', specialties: ['Wellenflansche','Distanzringe','Antriebsteile'],
-      playStyle: 'Größere Serien · planbare Abrufe', preferredParts: ['turn-flange','turn-spacer','turn-sleeve'], partBias: 3,
+      playStyle: 'Größere Serien · planbare Abrufe', preferredParts: ['turn-flange','turn-spacer','turn-sleeve','mill-plate'], partBias: 3,
       rushAffinity: 0.8,
       qty: [40, 78], rewardPerPart: [128, 176], duration: [112, 178], deadline: [30, 52],
       difficulty: [1, 3], lifetime: [2880, 4320], followUpChance: 0.22
