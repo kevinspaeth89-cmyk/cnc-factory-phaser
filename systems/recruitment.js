@@ -372,6 +372,48 @@
     return result;
   }
 
+  function normalizeRepairExperience(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+    const result = {};
+    for (const [key, entry] of Object.entries(value)) {
+      if (!key || !entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+      result[key] = {
+        successes: Math.max(0, Math.floor(Number(entry.successes) || 0)),
+        failures: Math.max(0, Math.floor(Number(entry.failures) || 0)),
+        lastAt: Number.isFinite(entry.lastAt) ? entry.lastAt : null
+      };
+    }
+    return result;
+  }
+
+  function repairExperienceKey(machineType, fault) {
+    return String(machineType || 'unknown') + ':' + String(fault || 'unknown');
+  }
+
+  function repairExpertise(employee, machineType, fault) {
+    const history = normalizeRepairExperience(employee?.repairExperience);
+    const entry = history[repairExperienceKey(machineType, fault)] || { successes: 0, failures: 0, lastAt: null };
+    const bonusSuccessChance = Math.min(0.32, entry.successes * 0.08);
+    return {
+      ...entry,
+      bonusSuccessChance,
+      label: entry.successes >= 4 ? 'Störungsspezialist' : entry.successes >= 2 ? 'Erfahren mit dieser Störung' : entry.successes >= 1 ? 'Schon einmal erfolgreich behoben' : 'Noch keine erfolgreiche Reparatur'
+    };
+  }
+
+  function recordRepairResult(employee, context = {}) {
+    if (!employee || employee.profileVersion !== 2 || typeof context.machineType !== 'string' || !context.machineType ||
+      typeof context.fault !== 'string' || !context.fault) return null;
+    employee.repairExperience = normalizeRepairExperience(employee.repairExperience);
+    const key = repairExperienceKey(context.machineType, context.fault);
+    const entry = employee.repairExperience[key] || { successes: 0, failures: 0, lastAt: null };
+    if (context.success === true) entry.successes += 1;
+    else entry.failures += 1;
+    entry.lastAt = Number.isFinite(context.gameMinutes) ? context.gameMinutes : entry.lastAt;
+    employee.repairExperience[key] = entry;
+    return repairExpertise(employee, context.machineType, context.fault);
+  }
+
   function machineExperience(employee, machineType) {
     if (!employee || typeof machineType !== 'string' || !machineType) return null;
     const history = normalizeMachineHistory(employee.machineHistory);
@@ -708,11 +750,16 @@
     const experience = machineExperience(employee, context.machineType);
     const machineName = typeof context.machineName === 'string' && context.machineName.trim() ? context.machineName.trim() : experience?.machineName;
     const specificMemory = memoryReference(employee, context);
-    const memoryLead = specificMemory || (experience?.incidents > 0
+    const expertise = repairExpertise(employee, context.machineType, context.fault);
+    const selfSuccessChance = Number(context.selfSuccessChance);
+    const experienceLead = expertise.successes > 0
+      ? `Ich habe genau diese Störung schon ${expertise.successes}× erfolgreich selbst behoben. `
+      : '';
+    const memoryLead = experienceLead + (specificMemory || (experience?.incidents > 0
       ? experience.incidents === 1
         ? `Mit ${machineName || 'diesem Maschinentyp'} hatten wir schon einmal eine Störung. `
         : `Mit ${machineName || 'diesem Maschinentyp'} hatten wir schon ${experience.incidents} Störungen. `
-      : '');
+      : ''));
 
     if (selfRepairFailed) {
       return {
@@ -724,6 +771,31 @@
             ? 'Mein Selbstversuch hat die Störung nicht behoben. Ich würde jetzt nach Verfahren weitermachen und den Monteur beauftragen.'
             : 'Leider hat mein Selbstversuch nicht funktioniert. Ich würde jetzt den Monteur beauftragen, damit die Störung fachgerecht behoben wird.'
       };
+    }
+
+    if (!major && Number.isFinite(selfSuccessChance)) {
+      const pct = Math.round(selfSuccessChance * 100);
+      const learned = expertise.successes > 0
+        ? ` Durch meine ${expertise.successes} ${expertise.successes===1?'erfolgreiche Reparatur':'erfolgreichen Reparaturen'} liegt meine Chance diesmal bei etwa ${pct} %.`
+        : ` Meine geschätzte Erfolgschance liegt bei etwa ${pct} %.`;
+      if (selfSuccessChance >= 0.68 || (expertise.successes > 0 && selfSuccessChance >= 0.58)) {
+        return {
+          employeeName: name,
+          action: 'repairSelf',
+          confidence: selfSuccessChance,
+          expertiseSuccesses: expertise.successes,
+          text: memoryLead + 'Ich würde sie selbst reparieren.' + learned
+        };
+      }
+      if (selfSuccessChance < 0.48) {
+        return {
+          employeeName: name,
+          action: 'repairTechnician',
+          confidence: 1 - selfSuccessChance,
+          expertiseSuccesses: expertise.successes,
+          text: memoryLead + 'Diesmal würde ich den Monteur holen.' + learned
+        };
+      }
     }
 
     if (major) {
@@ -1190,6 +1262,7 @@
       assignedBay: Number.isInteger(entry?.assignedBay) ? entry.assignedBay : null,
       assignedRole: entry?.assignedRole === 'quality' ? 'quality' : null,
       machineHistory: normalizeMachineHistory(entry?.machineHistory),
+      repairExperience: normalizeRepairExperience(entry?.repairExperience),
       memories: normalizeMemories(entry?.memories),
       baseHourlyWage: Number.isFinite(entry?.baseHourlyWage)
         ? clamp(Math.round(entry.baseHourlyWage), qualityProfile ? 23 : 20, qualityProfile ? 34 : 31)
@@ -1244,6 +1317,9 @@
     qualityRiskModifier,
     incidentExperience,
     normalizeMachineHistory,
+    normalizeRepairExperience,
+    repairExpertise,
+    recordRepairResult,
     machineExperience,
     FAMILIARITY_LEVELS,
     familiarityFor,

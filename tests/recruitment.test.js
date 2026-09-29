@@ -876,3 +876,81 @@ test('personal workstation items vary between employees and stay off QS profiles
   assert.deepEqual(recruitment.workplaceItems({ id: 54, profileVersion: 2, profileType: 'quality' }), []);
   assert.deepEqual(recruitment.workplaceItems({ id: 55, profileVersion: 0 }), []);
 });
+
+
+test('successful repairs build fault-specific employee expertise', () => {
+  const employee = {
+    id: 71,
+    profileVersion: 2,
+    name: 'Mira Test',
+    skills: { turning: 8, milling: 4, precision: 9, learning: 8 },
+    personality: recruitment.derivePersonality({ turning: 8, milling: 4, precision: 9, learning: 8 }),
+    repairExperience: {}
+  };
+
+  let expertise = recruitment.repairExpertise(employee, 'standard', 'sensor_error');
+  assert.equal(expertise.successes, 0);
+  assert.equal(expertise.bonusSuccessChance, 0);
+
+  expertise = recruitment.recordRepairResult(employee, {
+    machineType: 'standard',
+    fault: 'sensor_error',
+    success: true,
+    gameMinutes: 100
+  });
+  assert.equal(expertise.successes, 1);
+  assert.equal(expertise.bonusSuccessChance, 0.08);
+
+  expertise = recruitment.recordRepairResult(employee, {
+    machineType: 'standard',
+    fault: 'sensor_error',
+    success: true,
+    gameMinutes: 200
+  });
+  assert.equal(expertise.successes, 2);
+  assert.equal(expertise.bonusSuccessChance, 0.16);
+
+  const otherFault = recruitment.repairExpertise(employee, 'standard', 'tool_break');
+  assert.equal(otherFault.successes, 0);
+  assert.equal(otherFault.bonusSuccessChance, 0);
+});
+
+test('fault-specific repair expertise survives employee normalization', () => {
+  const normalized = recruitment.normalizeEmployee({
+    profileVersion: 2,
+    name: 'Mira Stahlwind',
+    skills: { turning: 8, milling: 4, precision: 9, learning: 8 },
+    repairExperience: {
+      'standard:sensor_error': { successes: 3, failures: 1, lastAt: 900 }
+    }
+  }, 72);
+
+  const expertise = recruitment.repairExpertise(normalized, 'standard', 'sensor_error');
+  assert.equal(expertise.successes, 3);
+  assert.equal(expertise.failures, 1);
+  assert.equal(expertise.bonusSuccessChance, 0.24);
+});
+
+test('breakdown advice uses employee-specific repair odds when available', () => {
+  const employee = {
+    id: 73,
+    profileVersion: 2,
+    name: 'Mira Test',
+    skills: { turning: 8, milling: 4, precision: 9, learning: 8 },
+    personality: recruitment.derivePersonality({ turning: 8, milling: 4, precision: 9, learning: 8 }),
+    repairExperience: {
+      'standard:sensor_error': { successes: 2, failures: 0, lastAt: 500 }
+    }
+  };
+
+  const advice = recruitment.breakdownAdvice(employee, 'warning', {
+    machineType: 'standard',
+    machineName: 'Nexora NX-350',
+    fault: 'sensor_error',
+    selfSuccessChance: 0.74
+  });
+
+  assert.equal(advice.action, 'repairSelf');
+  assert.match(advice.text, /2× erfolgreich/);
+  assert.match(advice.text, /74 %/);
+});

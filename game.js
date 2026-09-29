@@ -619,6 +619,7 @@
   const resaleValue=m=>m?Math.round((Number.isFinite(m.purchasePrice)?m.purchasePrice:LEGACY_MACHINE_PRICES[m.type]||catalog[m.type].price)*SELL_BASE_RATE+upgradeInvestment(m)*SELL_UPGRADE_RATE+(m.loadingRobot?LOADING_ROBOT_COST*.4:0)):0;
   const skillLevel=employee=>employee?Math.min(3,Math.max(employee.trained,employee.xp>=1500?3:employee.xp>=600?2:employee.xp>=180?1:0)):0;
   const assignedEmployee=(m,shift)=>state.staffRoster['shift'+shift].find(employee=>employee.assignedBay===m.bay);
+  const employeeById=id=>[...(state.staffRoster?.shift1||[]),...(state.staffRoster?.shift2||[])].find(employee=>employee.id===id)||null;
   const hallWorkerSprites=Object.freeze({
     'Vaska Feilensang':'assets/vaska-working.webp?v=2',
     'Kael Drehkamm':'assets/kael-working.webp?v=2'
@@ -1099,13 +1100,19 @@
     if($('event-window'))return;
     const overlay=document.createElement('section'),card=document.createElement('article');
     const eyebrow=document.createElement('span'),title=document.createElement('h2'),detail=document.createElement('p');
+    const operatorAdvice=document.createElement('aside'),operatorPortrait=document.createElement('img'),operatorCopy=document.createElement('div'),operatorHead=document.createElement('strong'),operatorText=document.createElement('p'),operatorStats=document.createElement('small');
     const consequence=document.createElement('div'),managerAdvice=document.createElement('p'),orderTiming=document.createElement('div'),rushCapacity=document.createElement('section'),actions=document.createElement('div'),count=document.createElement('p');
     const rushStyle=document.createElement('style');
-    rushStyle.textContent='.rush-machine-actions{display:grid;grid-template-columns:1fr;gap:8px;margin-top:10px}.rush-machine-choice{width:100%;min-height:64px;padding:9px 10px;text-align:left;font-size:11px;line-height:1.3}.rush-machine-choice>span{display:block;font-size:10px;font-weight:800;letter-spacing:.04em;opacity:.78;margin-bottom:2px}.rush-machine-choice small{display:block;margin-top:5px;color:#dbe5e8;font-size:9px;font-weight:650;line-height:1.45;white-space:pre-line}.rush-machine-choice.rush-option-safe{background:#173f33;border-color:#69d49e}.rush-machine-choice.rush-option-late{background:#482c2c;border-color:#f17b7b}.rush-interrupt-choice{background:#4b3523;border-color:#d3944d}.rush-interrupt-choice.rush-option-safe{background:#203b2d;border-color:#69d49e}.rush-interrupt-choice.rush-option-late{background:#4b3024;border-color:#e59a55}.rush-capacity-rows{max-height:min(44vh,390px)}.rush-capacity-row{border-color:#47626a}.rush-capacity-window{white-space:pre-line}.rush-capacity-status{font-size:9px;opacity:.78}.rush-reject-choice{width:100%;min-height:58px}.rush-reject-choice small{display:block;margin-top:4px}.rush-option-summary{font-weight:750}.shift-leader-event-advice{margin:7px 0;padding:8px 10px;border-left:3px solid #74d7a4;border-radius:5px;background:#102a31;color:#d7f0e3;font-size:11px;line-height:1.4}.shift-leader-event-advice[hidden]{display:none}.rush-work-mode{display:grid;gap:4px;margin:7px 0;padding:8px;border:1px solid #456a78;border-radius:8px;background:#102630}.rush-work-mode label{color:#e8f4f6;font-size:10px;font-weight:800}.rush-work-mode select{width:100%;min-height:34px;padding:5px 8px;border:1px solid #527784;border-radius:6px;background:#18343e;color:#fff;font-size:11px}.rush-work-mode small{color:#b7cbd1;font-size:9px;line-height:1.3}';
+    rushStyle.textContent='.rush-machine-actions{display:grid;grid-template-columns:1fr;gap:8px;margin-top:10px}.rush-machine-choice{width:100%;min-height:64px;padding:9px 10px;text-align:left;font-size:11px;line-height:1.3}.rush-machine-choice>span{display:block;font-size:10px;font-weight:800;letter-spacing:.04em;opacity:.78;margin-bottom:2px}.rush-machine-choice small{display:block;margin-top:5px;color:#dbe5e8;font-size:9px;font-weight:650;line-height:1.45;white-space:pre-line}.rush-machine-choice.rush-option-safe{background:#173f33;border-color:#69d49e}.rush-machine-choice.rush-option-late{background:#482c2c;border-color:#f17b7b}.rush-interrupt-choice{background:#4b3523;border-color:#d3944d}.rush-interrupt-choice.rush-option-safe{background:#203b2d;border-color:#69d49e}.rush-interrupt-choice.rush-option-late{background:#4b3024;border-color:#e59a55}.rush-capacity-rows{max-height:min(44vh,390px)}.rush-capacity-row{border-color:#47626a}.rush-capacity-window{white-space:pre-line}.rush-capacity-status{font-size:9px;opacity:.78}.rush-reject-choice{width:100%;min-height:58px}.rush-reject-choice small{display:block;margin-top:4px}.rush-option-summary{font-weight:750}.shift-leader-event-advice{margin:7px 0;padding:8px 10px;border-left:3px solid #74d7a4;border-radius:5px;background:#102a31;color:#d7f0e3;font-size:11px;line-height:1.4}.shift-leader-event-advice[hidden]{display:none}.rush-work-mode{display:grid;gap:4px;margin:7px 0;padding:8px;border:1px solid #456a78;border-radius:8px;background:#102630}.rush-work-mode label{color:#e8f4f6;font-size:10px;font-weight:800}.rush-work-mode select{width:100%;min-height:34px;padding:5px 8px;border:1px solid #527784;border-radius:6px;background:#18343e;color:#fff;font-size:11px}.rush-work-mode small{color:#b7cbd1;font-size:9px;line-height:1.3}.operator-advice-card{display:grid;grid-template-columns:48px minmax(0,1fr);gap:9px;align-items:start;margin:8px 0 12px;padding:10px;border:1px solid #68b7a2;border-left:4px solid #75e0b3;border-radius:9px;background:linear-gradient(145deg,#12352f,#10252b);box-shadow:0 4px 14px #0005}.operator-advice-card[hidden]{display:none}.operator-advice-card img{width:48px;height:48px;border:1px solid #7ccbb6;border-radius:50%;object-fit:cover;background:#0c1e25}.operator-advice-copy{min-width:0}.operator-advice-copy strong{display:block;color:#c7ffe8;font-size:11px;letter-spacing:.02em}.operator-advice-copy p{margin:3px 0 5px!important;color:#edf8f4!important;font-size:12px!important;line-height:1.42}.operator-advice-copy small{display:block;color:#9ed8ca;font-size:9px;line-height:1.35}.event-choice[data-operator-recommended="true"]{position:relative;border:2px solid #72d8ae!important;background:#1d5544!important;box-shadow:0 0 0 2px #72d8ae22,0 5px 16px #0005}.event-choice[data-operator-recommended="true"]:before{content:"MITARBEITER-EMPFEHLUNG";display:block;margin-bottom:4px;color:#bff8df;font-size:8px;font-weight:1000;letter-spacing:.06em}.event-choice .experience-gain{color:#a7efcf!important}';
     document.head.append(rushStyle);
     overlay.id='event-window';overlay.hidden=true;overlay.setAttribute('role','dialog');overlay.setAttribute('aria-modal','true');overlay.setAttribute('aria-labelledby','event-title');
     card.className='event-card';eyebrow.id='event-eyebrow';eyebrow.className='event-eyebrow';
-    title.id='event-title';detail.id='event-detail';consequence.id='event-consequence';consequence.className='event-consequence';
+    title.id='event-title';detail.id='event-detail';
+    operatorAdvice.id='operator-advice-card';operatorAdvice.className='operator-advice-card';operatorAdvice.hidden=true;
+    operatorPortrait.id='operator-advice-portrait';operatorPortrait.alt='';
+    operatorCopy.className='operator-advice-copy';operatorHead.id='operator-advice-head';operatorText.id='operator-advice-text';operatorStats.id='operator-advice-stats';
+    operatorCopy.append(operatorHead,operatorText,operatorStats);operatorAdvice.append(operatorPortrait,operatorCopy);
+    consequence.id='event-consequence';consequence.className='event-consequence';
     managerAdvice.id='shift-leader-event-advice';managerAdvice.className='shift-leader-event-advice';managerAdvice.hidden=true;
     orderTiming.id='event-order-timing';orderTiming.className='event-order-timing';
     const deadlineCell=document.createElement('div'),deadlineLabel=document.createElement('small'),deadlineValue=document.createElement('strong');
@@ -1116,7 +1123,7 @@
     processCell.append(processLabel,processValue);orderTiming.append(deadlineCell,processCell);
     rushCapacity.id='rush-capacity-check';rushCapacity.className='rush-capacity-check';rushCapacity.hidden=true;
     actions.id='event-actions';actions.className='event-actions';count.id='event-count';count.className='event-count';
-    card.append(eyebrow,title,detail,consequence,managerAdvice,orderTiming,rushCapacity,actions,count);overlay.append(card);document.querySelector('main').append(overlay);
+    card.append(eyebrow,title,detail,operatorAdvice,consequence,managerAdvice,orderTiming,rushCapacity,actions,count);overlay.append(card);document.querySelector('main').append(overlay);
     const selfButton=$('repair-now'),selfDetail=document.createElement('b');selfDetail.id='repair-self-detail';
     selfButton.replaceChildren(document.createTextNode('Selbst reparieren'),selfDetail);
     const technician=document.createElement('button'),technicianDetail=document.createElement('b');
@@ -1334,15 +1341,17 @@
     if(!leader?.hired)return '';
     if(event.event==='robot_failure')return leader.autoBreakdowns?'Schichtleiter S2 übernimmt die Roboterstörung automatisch, sofern die Reparatur innerhalb des Ausgabenlimits liegt.':'Schichtleiter S2 ist für automatische Störungsbehandlung deaktiviert.';
     if(event.event==='warning'||event.event==='major_failure'){
-      const options=breakdownSystem.getRepairOptions(state,event.bay);
+      const machine=machineAt(event.bay),shift=shiftAt(state.gameMinutes),employee=machine&&shift?assignedEmployee(machine,shift):null;
+      const expertise=employee&&typeof recruitmentSystem.repairExpertise==='function'?recruitmentSystem.repairExpertise(employee,machine.type,event.fault):null;
+      const options=breakdownSystem.getRepairOptions(state,event.bay,{selfRepairSuccessBonus:expertise?.bonusSuccessChance||0});
       if(!options)return '';
-      const selfChance=Number(options.self.failureChance);
-      const preferSelf=!event.selfRepairFailed&&Number.isFinite(selfChance)&&selfChance>=.75&&
+      const successChance=1-Number(options.self.failureChance);
+      const preferSelf=!event.selfRepairFailed&&Number.isFinite(successChance)&&successChance>=.75&&
         options.self.cost<=options.technician.cost&&options.self.downtime<options.technician.downtime;
-      if(preferSelf)return 'Schichtleiter empfiehlt Selbstreparatur: '+Math.round(selfChance*100)+' % Erfolgschance, geringere Kosten und kürzerer Stillstand als beim Monteur.';
+      if(preferSelf)return 'Schichtleiter empfiehlt Selbstreparatur: '+Math.round(successChance*100)+' % Erfolgschance, geringere Kosten und kürzerer Stillstand als beim Monteur.';
       return event.selfRepairFailed
         ?'Schichtleiter empfiehlt den Monteur: Der Selbstversuch ist für diese Störung gesperrt.'
-        :'Schichtleiter empfiehlt den Monteur: Die Selbstreparatur ist bei diesem Risiko die unsicherere Wahl.';
+        :'Schichtleiter empfiehlt den Monteur: Die Selbstreparatur liegt hier nur bei '+Math.round(successChance*100)+' % Erfolgschance.';
     }
     if(event.event==='quality_issue'){
       const machine=machineAt(event.bay),order=event.order;
@@ -1398,17 +1407,43 @@
     addChoice('Servicetechniker rufen',euro(ROBOT_TECHNICIAN_COST)+' · '+formatMinutes(ROBOT_TECHNICIAN_MINUTES[0])+'–'+formatMinutes(ROBOT_TECHNICIAN_MINUTES[1])+' · zuverlässig','technician',ROBOT_TECHNICIAN_COST);
     $('event-count').textContent='Das Spiel ist pausiert, bis du den Roboter wieder einsatzbereit machst.';
   }
-  function breakdownOperatorAdvice(machine,event){
-    if(!machine||!event)return null;
+  function breakdownOperatorContext(machine,event){
+    if(!machine||!event)return {employee:null,expertise:null,options:breakdownSystem.getRepairOptions(state,event?.bay),advice:null};
     const shift=shiftAt(state.gameMinutes);
     const employee=shift?assignedEmployee(machine,shift):null;
+    const expertise=employee&&typeof recruitmentSystem.repairExpertise==='function'
+      ?recruitmentSystem.repairExpertise(employee,machine.type,event.fault)
+      :null;
+    const options=breakdownSystem.getRepairOptions(state,event.bay,{
+      selfRepairSuccessBonus:expertise?.bonusSuccessChance||0
+    });
+    const selfSuccessChance=options?.self?1-options.self.failureChance:null;
     const advice=employee?recruitmentSystem.breakdownAdvice(employee,event.event,{
-      machineType: machine.type,
-      machineName: catalog[machine.type]?.name,
-      fault: event.fault,
-      selfRepairFailed: event.selfRepairFailed===true
+      machineType:machine.type,
+      machineName:catalog[machine.type]?.name,
+      fault:event.fault,
+      selfRepairFailed:event.selfRepairFailed===true,
+      selfSuccessChance
     }):null;
-    return advice?{employee,...advice}:null;
+    return {employee,expertise,options,advice,selfSuccessChance};
+  }
+  function renderOperatorAdvice(context,event){
+    const panel=$('operator-advice-card');
+    if(!panel)return;
+    const employee=context?.employee,advice=context?.advice;
+    panel.hidden=!employee||!advice;
+    if(panel.hidden)return;
+    const portrait=$('operator-advice-portrait');
+    portrait.src=employee.portrait||recruitmentSystem.portraitFor(employee.id,employee.gender);
+    portrait.alt='Porträt von '+employee.name;
+    $('operator-advice-head').textContent='Empfehlung von '+employee.name;
+    $('operator-advice-text').textContent='„'+advice.text+'“';
+    const stats=[];
+    if(Number.isFinite(context.selfSuccessChance)&&!event.selfRepairFailed)stats.push('Selbstreparatur: '+Math.round(context.selfSuccessChance*100)+' % Erfolgschance');
+    if(context.expertise?.successes>0)stats.push(context.expertise.successes+'× genau diese Störung erfolgreich behoben');
+    if(context.expertise?.bonusSuccessChance>0)stats.push('Erfahrungsbonus +'+Math.round(context.expertise.bonusSuccessChance*100)+' %-Punkte');
+    stats.push('Empfehlung: '+({repairSelf:'selbst reparieren',repairTechnician:'Monteur beauftragen',continueRisky:'weiterproduzieren'}[advice.action]||advice.action));
+    $('operator-advice-stats').textContent=stats.join(' · ');
   }
 
   function renderEventWindow(){
@@ -1419,6 +1454,7 @@
     if(capacityPanel)capacityPanel.hidden=true;
     const event=state.eventQueue[0];overlay.hidden=!event;
     if(!event)return;
+    const operatorPanel=$('operator-advice-card');if(operatorPanel)operatorPanel.hidden=true;
     const managerAdvice=$('shift-leader-event-advice'),advice=shiftLeaderEventAdvice(event);
     if(managerAdvice){managerAdvice.textContent=advice;managerAdvice.hidden=!advice;}
     try{
@@ -1443,18 +1479,16 @@
     $('event-order-deadline-label').textContent='AUFTRAGSFRIST';
     $('event-order-processing-label').textContent='BEARBEITUNG NOCH';
     const machine=machineAt(event.bay),warning=event.event==='warning',selfRepairFailed=event.selfRepairFailed===true;
-    const fault=breakdownSystem.getFaultInfo(event.fault),options=breakdownSystem.getRepairOptions(state,event.bay);
+    const fault=breakdownSystem.getFaultInfo(event.fault),operatorContext=breakdownOperatorContext(machine,event),options=operatorContext.options,operatorAdvice=operatorContext.advice;
     $('event-eyebrow').textContent=selfRepairFailed?'SELBSTREPARATUR GESCHEITERT':event.sudden?'PLÖTZLICHER MASCHINENCRASH':warning?'MASCHINENWARNUNG':'SCHWERER MASCHINENSCHADEN';
     $('event-title').textContent=`${fault?.label||'Maschinenstörung'} · Platz ${event.bay}`;
-    const operatorAdvice=breakdownOperatorAdvice(machine,event);
     const baseDetail=selfRepairFailed
       ?'Der Selbstversuch ist fehlgeschlagen. Ein weiterer Selbstversuch ist für diese Störung gesperrt; beauftrage einen Monteur oder entscheide später.'
       :event.sudden
       ?'Die Maschine ist ohne vorherige Warnung ausgefallen. Die Produktion auf diesem Platz steht.'
       :warning?'Die Maschine meldet eine Störung. Entscheide jetzt, wie der Betrieb weitergeht.':'Ein schwerer Maschinenschaden hat die Produktion gestoppt.';
-    $('event-detail').textContent=operatorAdvice
-      ?`${baseDetail} ${operatorAdvice.employeeName}: „${operatorAdvice.text}“`
-      :baseDetail;
+    $('event-detail').textContent=baseDetail;
+    renderOperatorAdvice(operatorContext,event);
     const effects=[];
     const activeOrder=machine&&job(machine);
     if(activeOrder)effects.push(`Laufender Auftrag: ${activeOrder.part} · ${machine.produced}/${activeOrder.qty} Teile`);
@@ -1475,17 +1509,21 @@
       button.type='button';button.className='action event-choice'+(risky?' event-risk':'');
       button.append(document.createTextNode(label));
       const recommended=operatorAdvice&&operatorAdvice.action===action;
-      small.textContent=detailText+(recommended?` · Empfehlung von ${operatorAdvice.employeeName}`:'');
+      small.textContent=detailText+(recommended?` · ${operatorAdvice.employeeName} empfiehlt diese Option`:'');
       button.append(small);
       if(recommended)button.dataset.operatorRecommended='true';
       button.disabled=cost>state.money;button.addEventListener('click',()=>chooseBreakdown(action,event.bay,event.id));actions.append(button);
     };
     if(options){
-      const selfDuration=options.self.downtime>options.technician.downtime?' · langsamer als Monteur':'';
       const selfRange=options.self.failureRange;
-      const selfRisk=selfRange?`${Math.round(selfRange.min*100)}–${Math.round(selfRange.max*100)}% Fehlerrisiko`:`${Math.round(options.self.failureChance*100)}% Fehlerrisiko`;
-      if(!selfRepairFailed)addChoice('Selbst reparieren',`${euro(options.self.cost)} · ${formatMinutes(options.self.downtime)} bei Erfolg · ${selfRisk}${selfDuration}`, 'repairSelf',options.self.cost);
-      addChoice('Monteur beauftragen',`${euro(options.technician.cost)} · ${formatMinutes(options.technician.downtime)} · verlässlich`, 'repairTechnician',options.technician.cost);
+      const selfSuccessMin=selfRange?Math.round((1-selfRange.max)*100):Math.round((1-options.self.failureChance)*100);
+      const selfSuccessMax=selfRange?Math.round((1-selfRange.min)*100):selfSuccessMin;
+      const successText=selfSuccessMin===selfSuccessMax?`${selfSuccessMin}% Erfolgschance`:`${selfSuccessMin}–${selfSuccessMax}% Erfolgschance`;
+      const expertiseGain=operatorContext.employee?' · Erfolg verbessert seine Chance bei dieser Störung künftig um +8 %-Punkte':'';
+      if(!selfRepairFailed)addChoice('Selbst reparieren',`${euro(options.self.cost)} · ${formatMinutes(options.self.downtime)} bei Erfolg · ${successText}${expertiseGain}`, 'repairSelf',options.self.cost);
+      const arrival=options.technician.arrivalRange;
+      const arrivalText=arrival?`Anfahrt ${formatMinutes(arrival.min)}–${formatMinutes(arrival.max)} · Reparatur ca. ${formatMinutes(options.technician.repairMinutes)}`:`${formatMinutes(options.technician.downtime)}`;
+      addChoice('Monteur beauftragen',`${euro(options.technician.cost)} · ${arrivalText} · zuverlässig`, 'repairTechnician',options.technician.cost);
       if(warning){
         if(!selfRepairFailed)addChoice('Riskant weiterproduzieren','Keine Sofortkosten · höheres Crash- und Ausschussrisiko','continueRisky');
       }
@@ -1820,7 +1858,11 @@
     if(m.maintenanceRemainingMinutes>0)return `Wartung läuft · ${formatMinutes(m.maintenanceRemainingMinutes)}`;
     const fault=breakdownSystem.getRecord(state,m.bay);
     if(fault?.status==='major_failure')return 'Schwerer Maschinenschaden';
-    if(fault?.status==='repairing')return `Reparatur · ${formatMinutes(fault.repairRemainingMinutes)}`;
+    if(fault?.status==='repairing'){
+      if(fault.repairMethod==='technician'&&fault.technicianArrivalRemainingMinutes>0)return `Monteur unterwegs · ${formatMinutes(fault.technicianArrivalRemainingMinutes)}`;
+      if(fault.repairMethod==='technician')return `Monteur repariert · ${formatMinutes(fault.repairRemainingMinutes)}`;
+      return `Reparatur · ${formatMinutes(fault.repairRemainingMinutes)}`;
+    }
     if(fault?.status==='warning'&&!fault.riskyContinue&&!fault.scheduledRepair)return 'Störung · Entscheidung nötig';
     if(fault?.status==='warning')return fault.scheduledRepair?'Reparatur vorgemerkt':'Riskanter Betrieb';
     if(m.maintenance<8)return 'Wartung fällig';
@@ -4496,9 +4538,11 @@
   function tryShiftLeaderRepair(event){
     const shift=shiftAt(state.gameMinutes),leader=shiftLeaderFor(shift);
     if(!leader?.hired||!leader.autoBreakdowns)return false;
-    const options=breakdownSystem.getRepairOptions(state,event.bay);
+    const machine=machineAt(event.bay),employee=machine&&shift?assignedEmployee(machine,shift):null;
+    const expertise=employee&&typeof recruitmentSystem.repairExpertise==='function'?recruitmentSystem.repairExpertise(employee,machine.type,event.fault):null;
+    const options=breakdownSystem.getRepairOptions(state,event.bay,{selfRepairSuccessBonus:expertise?.bonusSuccessChance||0});
     if(!options)return false;
-    const selfChance=Number(options.self.failureChance);
+    const selfChance=1-Number(options.self.failureChance);
     const selfAllowed=!event.selfRepairFailed&&options.self.allowed!==false&&Number.isFinite(selfChance);
     let action=null;
     if(selfAllowed&&selfChance>=.9&&options.self.cost<=leader.spendingLimit&&options.self.cost<=state.money&&
@@ -4551,6 +4595,40 @@
   }
   function handleBreakdownEvent(event){
     if(!event)return;
+    if(event.event==='technician_arrived'){
+      say(`Platz ${event.bay}: Monteur angekommen · Reparatur beginnt · ca. ${formatMinutes(event.repairMinutes)}.`);
+      save();return;
+    }
+    if(event.selfRepairFailed&&Number.isInteger(event.repairEmployeeId)){
+      const failedEmployee=employeeById(event.repairEmployeeId),failedMachine=machineAt(event.bay);
+      if(failedEmployee&&failedMachine&&typeof recruitmentSystem.recordRepairResult==='function'){
+        recruitmentSystem.recordRepairResult(failedEmployee,{
+          machineType:failedMachine.type,fault:event.fault,success:false,gameMinutes:state.gameMinutes
+        });
+      }
+    }
+    if(event.event==='repair_complete'&&event.method==='self'&&Number.isInteger(event.repairEmployeeId)){
+      const repairEmployee=employeeById(event.repairEmployeeId),repairMachine=machineAt(event.bay);
+      if(repairEmployee&&repairMachine&&typeof recruitmentSystem.recordRepairResult==='function'){
+        const learned=recruitmentSystem.recordRepairResult(repairEmployee,{
+          machineType:repairMachine.type,fault:event.fault,success:true,gameMinutes:state.gameMinutes
+        });
+        recruitmentSystem.recordMemory(repairEmployee,{
+          id:`repair_success:${repairMachine.type}:${event.fault}`,
+          type:'machine_incident',
+          machineType:repairMachine.type,
+          machineName:catalog[repairMachine.type]?.name,
+          fault:event.fault,
+          faultLabel:breakdownSystem.getFaultInfo(event.fault)?.label,
+          action:'repairSelf',
+          outcome:'success',
+          importance:7,
+          gameMinutes:state.gameMinutes,
+          bay:event.bay
+        });
+        say(`${repairEmployee.name} hat die Störung auf Platz ${event.bay} erfolgreich selbst behoben · Erfahrung mit diesem Fehler: ${learned.successes}× · künftige Erfolgschance +${Math.round(learned.bonusSuccessChance*100)} %-Punkte.`);
+      }
+    }
     if(event.event==='warning'){
       const warningMachine=machineAt(event.bay);
       const warningShift=shiftAt(state.gameMinutes);
@@ -4605,32 +4683,39 @@
       if(!state.eventQueue.some(item=>item.id===id))state.eventQueue.push({...event,id});
       state.paused=true;
       renderEventWindow();
-    }else if(event.event==='repair_complete')say(`Platz ${event.bay}: Reparatur abgeschlossen.`);
+    }else if(event.event==='repair_complete'&&event.method!=='self')say(`Platz ${event.bay}: Reparatur abgeschlossen.`);
     save();
   }
   function chooseBreakdown(action,bay=selectedMachine()?.bay,eventId=null){
     const m=machineAt(Number(bay));if(!m)return false;
     const before=breakdownSystem.getRecord(state,m.bay);
-    const event=breakdownSystem[action](state,m.bay);
+    const decisionShift=shiftAt(state.gameMinutes);
+    const decisionEmployee=decisionShift?assignedEmployee(m,decisionShift):null;
+    const expertise=decisionEmployee&&typeof recruitmentSystem.repairExpertise==='function'
+      ?recruitmentSystem.repairExpertise(decisionEmployee,m.type,before?.fault)
+      :null;
+    const repairContext={
+      employeeId:decisionEmployee?.id??null,
+      selfRepairSuccessBonus:expertise?.bonusSuccessChance||0
+    };
+    const event=breakdownSystem[action](state,m.bay,repairContext);
     if(!event)return false;
     if(event.cost>0&&state.money<event.cost){
       state.breakdowns.machines[String(m.bay)]=before;
       say(`Für diese Reparatur fehlen ${euro(event.cost-state.money)}.`);
       return false;
     }
-    const decisionShift=shiftAt(state.gameMinutes);
-    const decisionEmployee=decisionShift?assignedEmployee(m,decisionShift):null;
     const incidentXp=decisionEmployee?recruitmentSystem.incidentExperience(decisionEmployee,action):0;
     if(decisionEmployee&&incidentXp>0){
       decisionEmployee.xp=Math.round((decisionEmployee.xp+incidentXp)*1000)/1000;
       recruitmentSystem.recordMachineIncident(decisionEmployee,{
-        machineType: m.type,
-        machineName: catalog[m.type]?.name,
-        eventType: before?.status==='major_failure'?'major_failure':'warning',
+        machineType:m.type,
+        machineName:catalog[m.type]?.name,
+        eventType:before?.status==='major_failure'?'major_failure':'warning',
         action,
-        fault: event.fault,
-        gameMinutes: state.gameMinutes,
-        bay: m.bay
+        fault:event.fault,
+        gameMinutes:state.gameMinutes,
+        bay:m.bay
       });
       recruitmentSystem.recordMemory(decisionEmployee,{
         id:`machine_incident:${m.type}:${event.fault}:${action}`,
@@ -4649,7 +4734,10 @@
     if(action==='continueRisky')queueDecisionReaction('continue_risky',{subjectMachine:m,employee:decisionEmployee});
     if(action==='scheduleRepair')queueDecisionReaction('repair_scheduled',{subjectMachine:m,employee:decisionEmployee});
     const experienceText=decisionEmployee&&incidentXp>0?` · ${decisionEmployee.name} +${incidentXp} min Erfahrung`:'';
-    if(event.event==='repair')say(`Platz ${m.bay}: ${event.method==='technician'?'Monteur beauftragt':'Selbstreparatur gestartet'} · ${euro(event.cost)} · ${formatMinutes(event.downtime)}.${experienceText}`);
+    if(event.event==='repair'){
+      if(event.method==='technician')say(`Platz ${m.bay}: Monteur beauftragt · ${euro(event.cost)} · Anfahrt ca. ${formatMinutes(event.arrivalMinutes)} · Reparatur ca. ${formatMinutes(event.repairMinutes)} · gesamt ${formatMinutes(event.downtime)}.${experienceText}`);
+      else say(`Platz ${m.bay}: Selbstreparatur gestartet · ${euro(event.cost)} · ${formatMinutes(event.downtime)}.${experienceText}`);
+    }
     if(event.event==='repair_scheduled')say(`Platz ${m.bay}: Reparatur eingeplant · ${euro(event.cost)}.${experienceText}`);
     if(event.event==='continue_risky')say(`Platz ${m.bay}: Produktion läuft mit erhöhtem Risiko weiter.${experienceText}`);
     if(eventId){
@@ -4661,6 +4749,7 @@
     render();renderBusiness();
     return true;
   }
+
   for(const name of ['orders','machine','business'])
     $(name+'-tab').addEventListener('click',()=>currentPanel===name?closeDrawer():tab(name));
   document.querySelectorAll('.business-section-tab').forEach(button=>button.addEventListener('click',()=>setBusinessSection(button.dataset.businessSection)));
