@@ -1223,10 +1223,10 @@
     $('event-eyebrow').textContent='STAMMKUNDEN-ANFRAGE · EILAUFTRAG';
     $('event-title').textContent=`${order.customer} braucht kurzfristig ${order.part}`;
     $('event-detail').textContent=`${order.qty} Teile · ${order.kind} · ${order.material} · ${order.kg} kg. Entscheide unten direkt, ob der Auftrag hinten eingeplant oder vorgezogen wird.`;
-    $('event-consequence').textContent=`Eilzuschlag: +${order.rushBonusPct||20} % (${euro(bonus)}). Der Liefertermin ${formatDeliveryAt(order.deadlineAt)} steht bereits fest. Die Prognosen unten berücksichtigen Schichten, Rüst-/Programmierzeit und die aktuelle Maschinenbelegung.`;
+    $('event-consequence').textContent=`Eilzuschlag: +${order.rushBonusPct||20} % (${euro(bonus)}). Der Liefertermin ${formatDeliveryAt(order.deadlineAt)} steht fest. Die obere Zeit ist eine Grundschätzung bei freier Maschine; unten siehst du die Fertigstellung mit Schichten und vorhandenen Aufträgen.`;
     const timing=$('event-order-timing');timing.hidden=false;
     $('event-order-deadline-label').textContent='FESTER LIEFERTERMIN';
-    $('event-order-processing-label').textContent='REINE BEARBEITUNGSZEIT';
+    $('event-order-processing-label').textContent='PROGRAMMIEREN + RÜSTEN + FERTIGEN';
     $('event-order-deadline-cell').classList.remove('deadline-overdue');
     $('event-order-deadline').textContent=formatDeliveryAt(order.deadlineAt);
     $('event-order-processing').textContent=`Ca. ${formatMinutes(processing)}`;
@@ -1259,10 +1259,14 @@
       const option=document.createElement('option');option.value=value;option.textContent=label;option.disabled=disabled;modeSelect.append(option);
     };
     addMode('regular','Normale Schichten · Mo–Fr, 06–22 Uhr');
-    addMode('overtime','Überstunden · Mo–Fr bis 24 Uhr · +50 % Lohn',!machines.some(machine=>!rushWorkModeReason(machine,'overtime')));
+    addMode('overtime','Überstunden · Mo–Fr 22–24 Uhr · +50 % Lohn',!machines.some(machine=>!rushWorkModeReason(machine,'overtime')));
     addMode('saturday','Samstagsarbeit · 06–14 Uhr · doppelter Lohn',!machines.some(machine=>!rushWorkModeReason(machine,'saturday')));
     modeSelect.value=rushWorkMode;
-    modeHelp.textContent='Der Zuschlag wird über die Lohnabrechnung verbucht.';
+    modeHelp.textContent=rushWorkMode==='overtime'
+      ?'Überstunden laufen nur werktags von 22 bis 24 Uhr. Die Schicht beginnt erst nach 22 Uhr und wird mit 50 % Zuschlag abgerechnet.'
+      :rushWorkMode==='saturday'
+        ?'Samstagsarbeit läuft von 06 bis 14 Uhr und wird doppelt bezahlt.'
+        :'Der Liefertermin bleibt fest. Zusätzliche Schichten können nur die tatsächliche Fertigstellung vorziehen.';
     modeControl.append(modeLabel,modeSelect,modeHelp);
     modeSelect.addEventListener('change',()=>{
       rushWorkMode=modeSelect.value;
@@ -1272,17 +1276,23 @@
       const empty=document.createElement('p');empty.className='rush-capacity-empty';empty.textContent='Keine passende '+order.kind+'-Maschine vorhanden.';rows.append(empty);
     }
     const plannedOrder=rushWorkMode==='regular'?order:{...order,workMode:rushWorkMode};
-    const modeGainText=(regularFinish,selectedFinish)=>{
+    const modeGainText=(regularFinish,selectedFinish,extraBeforeDeadline)=>{
       if(rushWorkMode==='regular'||!Number.isFinite(regularFinish)||!Number.isFinite(selectedFinish))return '';
       const gain=Math.max(0,regularFinish-selectedFinish);
       const label=rushWorkMode==='saturday'?'Samstagsarbeit':'Überstunden';
-      return '\n'+label+': '+(gain>0?formatEstimateMinutes(gain)+' früher fertig':'kein Zeitgewinn bei dieser Einplanung');
+      return '\n'+label+': '+(extraBeforeDeadline>0
+        ?'+'+formatEstimateMinutes(extraBeforeDeadline)+' Schichtzeit vor der Frist'
+        :'keine zusätzliche Schichtzeit vor der Frist')+' · '+
+        (gain>0?formatEstimateMinutes(gain)+' früher fertig':'kein Zeitgewinn');
     };
     machines.forEach(machine=>{
       const projected=plannedMachineLoad(machine,plannedOrder),interruption=rushInterruptionForecast(machine,plannedOrder);
       const regularOrder=rushWorkMode==='regular'?null:{...order,workMode:'regular'};
       const regularProjected=regularOrder?plannedMachineLoad(machine,regularOrder):null;
       const regularInterruption=regularOrder?rushInterruptionForecast(machine,regularOrder):null;
+      const extraBeforeDeadline=rushWorkMode==='regular'?0:Math.max(0,
+        scheduledWorkMinutesBetween(machine,state.gameMinutes,order.deadlineAt,rushWorkMode)-
+        scheduledWorkMinutesBetween(machine,state.gameMinutes,order.deadlineAt,'regular'));
       const rushCheck=projected.deadlineChecks.find(check=>check.orderId===order.id);
       const regularRushCheck=regularProjected?.deadlineChecks.find(check=>check.orderId===order.id);
       const activeOrder=job(machine);
@@ -1331,8 +1341,9 @@
           ?'Laufender Auftrag: bleibt in seiner Reihenfolge und wird nicht unterbrochen.'
           :'Laufender Auftrag: keiner – der Eilauftrag kann direkt starten.';
         normalDetail.textContent=rushImpact+' · fertig '+formatDeliveryAt(rushCheck.finishAt)+
-          (activeOrder?'\nLaufender Auftrag bleibt unverändert.':'');
-        normalExtraText.textContent=existingLine+modeGainText(regularRushCheck?.finishAt,rushCheck.finishAt)+'\n'+materialLine;
+          (activeOrder?'\nLaufender Auftrag bleibt unverändert.':'')+
+          modeGainText(regularRushCheck?.finishAt,rushCheck.finishAt,extraBeforeDeadline);
+        normalExtraText.textContent=existingLine+'\n'+materialLine;
       }else{
         normalDetail.textContent=reason||(!projected.shifts.length?'Keine besetzte Schicht':'Fertigstellung nicht berechenbar.');
         normalExtraText.textContent=materialLine;
@@ -1361,9 +1372,10 @@
             :'ZU SPÄT · '+formatEstimateMinutes(-interruption.bufferMinutes);
           interruptButton.classList.add(rushBuffer>=0?'rush-option-safe':'rush-option-late');
           interruptDetail.textContent='Eilauftrag '+rushImpact+' · fertig '+formatDeliveryAt(interruption.rushFinishAt)+'\n'+
-            'Laufender Auftrag danach: '+currentImpact;
+            'Laufender Auftrag danach: '+currentImpact+
+            modeGainText(regularInterruption?.rushFinishAt,interruption.rushFinishAt,extraBeforeDeadline);
           interruptExtraText.textContent='Laufender Auftrag '+interruption.interrupted.part+': danach fertig in '+formatEstimateMinutes(afterFinish)+'\n'+
-            'Neues Rüsten beim Fortsetzen: '+formatMinutes(interruption.resumedSetup)+modeGainText(regularInterruption?.rushFinishAt,interruption.rushFinishAt)+'\n'+materialLine;
+            'Neues Rüsten beim Fortsetzen: '+formatMinutes(interruption.resumedSetup)+'\n'+materialLine;
         }else{
           interruptDetail.textContent=interruptReason||'Unterbrechungsfolge nicht berechenbar.';
           interruptExtraText.textContent=materialLine;
