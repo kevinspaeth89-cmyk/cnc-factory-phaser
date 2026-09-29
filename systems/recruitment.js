@@ -472,6 +472,7 @@
       outcome: typeof memory.outcome === 'string' && memory.outcome ? memory.outcome : null,
       orderId,
       orderPart: typeof memory.orderPart === 'string' && memory.orderPart.trim() ? memory.orderPart.trim().slice(0, 100) : null,
+      customer: typeof memory.customer === 'string' && memory.customer.trim() ? memory.customer.trim().slice(0, 100) : null,
       defectParts: Math.max(0, Math.floor(Number(memory.defectParts) || 0)),
       importance: clamp(Math.floor(Number(memory.importance) || 5), 1, 10),
       count: Math.max(1, Math.floor(Number(memory.count) || 1)),
@@ -501,6 +502,7 @@
         previous.machineName = memory.machineName || previous.machineName;
         previous.faultLabel = memory.faultLabel || previous.faultLabel;
         previous.orderPart = memory.orderPart || previous.orderPart;
+        previous.customer = memory.customer || previous.customer;
         previous.defectParts = memory.defectParts || previous.defectParts;
       }
       if (previous.firstAt === null || (memory.firstAt !== null && memory.firstAt < previous.firstAt)) previous.firstAt = memory.firstAt;
@@ -525,6 +527,7 @@
       existing.machineName = memory.machineName || existing.machineName;
       existing.faultLabel = memory.faultLabel || existing.faultLabel;
       existing.orderPart = memory.orderPart || existing.orderPart;
+      existing.customer = memory.customer || existing.customer;
       existing.defectParts = memory.defectParts || existing.defectParts;
     } else {
       employee.memories.push(memory);
@@ -542,6 +545,13 @@
       return item.outcome === 'after_risky'
         ? `💥 ${fault} an ${machine} nach Weiterfahrt eskaliert`
         : `💥 Schweren Schaden an ${machine} erlebt`;
+    }
+    if (item.type === 'rush_order') {
+      const part = item.orderPart || 'Eilauftrag';
+      const customer = item.customer ? ' für ' + item.customer : '';
+      return item.outcome === 'late'
+        ? '⏱️ ' + part + customer + ' zu spät abgeschlossen'
+        : '⚡ ' + part + customer + ' pünktlich geschafft';
     }
     if (item.type === 'quality_issue') {
       const part = item.orderPart || 'Bauteil';
@@ -587,6 +597,75 @@
     return '';
   }
 
+  function relevantMemory(employee, trigger, context = {}) {
+    if (!employee || employee.profileVersion !== 2 || employee.profileType === 'quality') return null;
+    const memories = normalizeMemories(employee.memories);
+    if (!memories.length) return null;
+    const machineType = typeof context.machineType === 'string' ? context.machineType : null;
+    const fault = typeof context.fault === 'string' ? context.fault : null;
+    const part = typeof context.part === 'string' ? context.part : typeof context.orderPart === 'string' ? context.orderPart : null;
+    const customer = typeof context.customer === 'string' ? context.customer : null;
+    const scored = memories.map(memory => {
+      let score = memory.importance;
+      if (trigger === 'machine_warning') {
+        if (!['major_failure','machine_incident'].includes(memory.type) || !machineType || memory.machineType !== machineType) return null;
+        score += 8;
+        if (fault && memory.fault === fault) score += 6;
+        if (memory.type === 'major_failure') score += 4;
+        if (memory.outcome === 'after_risky') score += 5;
+      } else if (trigger === 'quality_issue') {
+        if (memory.type !== 'quality_issue') return null;
+        if (part && memory.orderPart === part) score += 9;
+        else if (machineType && memory.machineType === machineType) score += 4;
+        else return null;
+      } else if (trigger === 'rush_order') {
+        if (memory.type !== 'rush_order') return null;
+        if (customer && memory.customer === customer) score += 8;
+        if (part && memory.orderPart === part) score += 6;
+        if ((!customer || memory.customer !== customer) && (!part || memory.orderPart !== part)) return null;
+      } else return null;
+      return { memory, score };
+    }).filter(Boolean).sort((a,b)=>b.score-a.score||(b.memory.lastAt??-1)-(a.memory.lastAt??-1));
+    return scored[0]?.memory || null;
+  }
+
+  function recallRemark(employee, trigger, context = {}) {
+    const memory = relevantMemory(employee, trigger, context);
+    if (!memory) return '';
+    const ids = personalityIds(employee);
+    const machine = context.machineName || memory.machineName || 'der Maschine';
+    const part = context.part || context.orderPart || memory.orderPart || 'dem Teil';
+    if (trigger === 'machine_warning') {
+      const fault = memory.faultLabel || 'Störung';
+      if (memory.type === 'major_failure' && memory.outcome === 'after_risky')
+        return 'Die Meldung kenne ich noch. Bei der ' + fault + ' an ' + machine + ' sind wir damals weitergefahren – das ist eskaliert.';
+      if (memory.type === 'major_failure')
+        return 'An ' + machine + ' hatten wir schon einmal einen schweren Schaden. Die Warnung nehme ich diesmal ernst.';
+      if (memory.action === 'repairSelf')
+        return 'Die ' + fault + ' hatten wir an ' + machine + ' schon einmal. Damals habe ich selbst nachgesehen.';
+      if (memory.action === 'repairTechnician')
+        return 'Die ' + fault + ' kenne ich noch. Letztes Mal haben wir an ' + machine + ' den Monteur geholt.';
+      return 'Die Warnung hatten wir an ' + machine + ' schon einmal. Ich behalte genau im Auge, ob sie sich wieder gleich verhält.';
+    }
+    if (trigger === 'quality_issue') {
+      if (memory.action === 'ship')
+        return 'Bei ' + part + ' hatten wir schon einmal Maßprobleme und haben trotzdem ausgeliefert. Das würde ich diesmal nicht einfach abhaken.';
+      if (ids.includes('gruendlich'))
+        return 'Bei ' + part + ' hatten wir schon einmal ein Qualitätsproblem. Ich würde diesmal direkt die gleichen Stellen mitprüfen.';
+      return 'Das kommt mir bekannt vor: Bei ' + (memory.orderPart || part) + ' hatten wir schon einmal Qualitätsprobleme.';
+    }
+    if (trigger === 'rush_order') {
+      const customer = context.customer || memory.customer || 'dem Kunden';
+      if (memory.outcome === 'late')
+        return 'Für ' + customer + ' hatten wir schon einmal so einen Eilauftrag. Damals waren wir zu spät – diesmal sollten wir früher Luft schaffen.';
+      if (ids.includes('routineorientiert'))
+        return 'Für ' + customer + ' hatten wir schon einmal einen Eilauftrag. Der Ablauf hat funktioniert – daran würde ich mich wieder orientieren.';
+      if (ids.includes('pragmatisch'))
+        return 'Den Stress mit ' + customer + ' kenne ich. Letztes Mal haben wir den Eilauftrag pünktlich durchgezogen.';
+      return 'Für ' + customer + ' hatten wir schon einmal einen Eilauftrag. Den haben wir pünktlich geschafft – das kriegen wir wieder hin.';
+    }
+    return '';
+  }
   function breakdownAdvice(employee, eventType = 'warning', context = {}) {
     if (employee?.profileVersion !== 2) return null;
     const ids = personalityIds(employee);
@@ -1143,6 +1222,8 @@
     memoryTitle,
     latestMachineMemory,
     memoryReference,
+    relevantMemory,
+    recallRemark,
     breakdownAdvice,
     workRemark,
     eventRemark,
