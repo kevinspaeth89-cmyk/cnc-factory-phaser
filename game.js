@@ -2052,18 +2052,46 @@
       const machine=machineAt(Number(card.dataset.bay));if(machine)updateMachineLoadCard(card,machine);
     });
   }
+  function customerBrandIdentity(customer){
+    return typeof orderMarketSystem.getCustomerIdentity==='function'
+      ?orderMarketSystem.getCustomerIdentity(customer)
+      :{customer,sector:'Industrie',district:'Gewerbegebiet',brandClass:'generic',logoMark:'?',slogan:'Industrial partner',specialties:[]};
+  }
+  function createCustomerLogo(customer,compact=false){
+    const brand=customerBrandIdentity(customer);
+    const logo=document.createElement('span'),mark=document.createElement('span');
+    logo.className='customer-logo customer-logo-'+brand.brandClass+(compact?' compact':'');
+    logo.title=brand.customer+' · '+brand.sector;
+    logo.setAttribute('aria-label','Logo '+brand.customer);
+    mark.className='customer-logo-mark';
+    mark.textContent=brand.logoMark;
+    logo.append(mark);
+    return logo;
+  }
+  function createCustomerBrandLine(customer,compact=false){
+    const brand=customerBrandIdentity(customer);
+    const line=document.createElement('span'),textWrap=document.createElement('span'),name=document.createElement('strong'),sector=document.createElement('small');
+    line.className='customer-brand-line'+(compact?' compact':'');
+    textWrap.className='customer-brand-copy';
+    name.textContent=brand.customer;
+    sector.textContent=brand.sector;
+    textWrap.append(name,sector);
+    line.append(createCustomerLogo(customer,compact),textWrap);
+    return line;
+  }
   function renderOrders(){
     const customerHistories=typeof orderMarketSystem.getCustomerHistory==='function'?orderMarketSystem.getCustomerHistory(state):{};
     $('customer-reputation').replaceChildren(...Object.entries(orderMarketSystem.getReputation(state)).map(([customer,score])=>{
-      const row=document.createElement('div'),identity=document.createElement('span'),name=document.createElement('strong'),detail=document.createElement('small'),status=document.createElement('b');
-      const history=customerHistories[customer];
-      row.className='reputation-row';
+      const row=document.createElement('div'),identity=document.createElement('span'),brandMeta=document.createElement('small'),detail=document.createElement('small'),status=document.createElement('b');
+      const history=customerHistories[customer],brand=customerBrandIdentity(customer);
+      row.className='reputation-row reputation-'+brand.brandClass;
       identity.className='reputation-identity';
-      name.textContent=customer;
+      brandMeta.className='reputation-brand-meta';
+      brandMeta.textContent=brand.sector+' · '+brand.district+' · „'+brand.slogan+'“';
       detail.textContent=history?.completed
         ?`${history.relationship} · ${history.completed} Auftrag${history.completed===1?'':'e'} · ${euro(history.revenue)} Umsatz · ${history.punctualityPct===null?'Pünktlichkeit noch offen':history.punctualityPct+' % pünktlich'} · ${history.topPart?'häufig '+history.topPart:'noch kein typisches Teil'}`
-        :'Noch keine gemeinsame Auftragshistorie';
-      identity.append(name,detail);
+        :'Noch keine gemeinsame Auftragshistorie · Typisch: '+brand.specialties.join(', ');
+      identity.append(createCustomerBrandLine(customer),brandMeta,detail);
       const bonus=Math.round((score-50)*.3);
       status.textContent=`Vertrauen ${score}/100 · ${bonus>=0?'+':''}${bonus} %`;
       row.append(identity,status);return row;
@@ -2113,6 +2141,14 @@
       const risks=compatibleMachines.map(machine=>qualityRiskFor(machine,o)).sort((a,b)=>a-b);
       const qualityHint=` · ${programmingQuality.toleranceClass(o)}${risks.length?` · Qualitätsrisiko ${risks[0]}${risks.length>1&&risks[0]!==risks[risks.length-1]?`–${risks[risks.length-1]}`:''} %`:''}`;
       card.innerHTML=`<div class="top"><span>${o.customer}</span><span>${o.kind} · #${o.id}</span></div><h3>${o.part}</h3><p>${customerType}${o.material} · ${o.qty} Teile${difficulty}${qualityHint}</p><div class="values"><span>${o.kg} kg · Liefertermin ${formatDeliveryAt(o.deadlineAt)}${o.reputationBonusPct?` · ${o.reputationBonusPct<0?'Kundenabschlag':'Kundenbonus'} ${o.reputationBonusPct>0?'+':''}${o.reputationBonusPct} %`:''}</span><b>${euro(o.reward)}</b></div><div class="order-economics${materialContribution!==null&&materialContribution<0?' loss':''}"><div class="order-economics-grid"><span>Material zum Tageskurs<strong>${materialCost===null?'—':euro(materialCost)}</strong></span><span>Nach Material<strong>${materialContribution===null?'—':euro(materialContribution)}</strong></span></div><p>${contributionPerHour===null?'':`Etwa ${euro(contributionPerHour)} je Maschinenstunde · ${formatMinutes(estimateMinutes)} Rüst- und Maschinenzeit`}</p><small>Grundmaschine, ohne Lohn, Strom und Verschleiß</small></div>`;
+      const orderBrand=customerBrandIdentity(o.customer),orderTop=card.querySelector('.top');
+      orderTop.firstElementChild.replaceWith(createCustomerBrandLine(o.customer,true));
+      orderTop.classList.add('customer-order-top','customer-order-'+orderBrand.brandClass);
+      card.dataset.customerBrand=orderBrand.brandClass;
+      const sectorLine=document.createElement('p');
+      sectorLine.className='customer-sector-line';
+      sectorLine.textContent=orderBrand.sector+' · '+orderBrand.district+' · Typisch: '+orderBrand.specialties.join(', ');
+      card.querySelector('h3').before(sectorLine);
       const customerHistory=customerHistories[o.customer];
       if(customerHistory?.completed){
         const badge=document.createElement('p');
