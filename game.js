@@ -8,7 +8,7 @@
   const GAME_MINUTES_PER_REAL_SECOND = 10;
   const EMPLOYEE_REMARK_VISIBLE_MS = 5000;
   const EMPLOYEE_REMARK_COOLDOWN_MS = 30000;
-  const EMPLOYEE_REMARK_HISTORY_LIMIT = 3;
+  const EMPLOYEE_REMARK_HISTORY_LIMIT = 1;
   const RUSH_OVERTIME_WAGE_MULTIPLIER = 1.5;
   const RUSH_SATURDAY_WAGE_MULTIPLIER = 2;
   const HIRING_FEE = 150;
@@ -2918,6 +2918,7 @@
       entry.pendingText='';
       entry.expiresAt=now+EMPLOYEE_REMARK_VISIBLE_MS;
       entry.nextAllowedAt=now+EMPLOYEE_REMARK_COOLDOWN_MS;
+      setTimeout(render,EMPLOYEE_REMARK_VISIBLE_MS+50);
       employeeRemarkState.set(key,entry);
       return entry.text;
     }
@@ -2944,6 +2945,7 @@
     entry.text=remark;
     entry.expiresAt=now+EMPLOYEE_REMARK_VISIBLE_MS;
     entry.nextAllowedAt=now+EMPLOYEE_REMARK_COOLDOWN_MS;
+    setTimeout(render,EMPLOYEE_REMARK_VISIBLE_MS+50);
     employeeRemarkState.set(key,entry);
     pushEmployeeRemarkHistory(employee,remark);
     return remark;
@@ -4004,6 +4006,7 @@
     $('upgrade').disabled=!m||state.money<9000*m.level;
     $('sell-machine-value').textContent=m?euro(resaleValue(m)):'—';
     $('sell-machine').disabled=!m||!!o||!!m.orderQueue.length||!!m.qualityReworkQueue.length||maintenanceRemaining>0;
+    let hallBubbleShown=false;
     for(let bay=1;bay<=8;bay++){
       const b=$('bay-'+bay),machine=machineAt(bay);
       const slot=layout.bays.find(entry=>entry.bay===bay);
@@ -4019,8 +4022,9 @@
         b.style.removeProperty('--six-art-height');
       }
       if(layout.level===3){
-        b.style.setProperty('--eight-art-width',(19/slot.width*100)+'%');
-        b.style.setProperty('--eight-art-height',(19/slot.height*100)+'%');
+        const artSize=bay>=5?22:19;
+        b.style.setProperty('--eight-art-width',(artSize/slot.width*100)+'%');
+        b.style.setProperty('--eight-art-height',(artSize/slot.height*100)+'%');
         b.style.setProperty('--eight-art-bottom',(1/slot.height*100)+'%');
         b.style.setProperty('--eight-robot-width',(11/slot.width*100)+'%');
         b.style.setProperty('--eight-robot-height',(15/slot.height*100)+'%');
@@ -4098,8 +4102,9 @@
         workerName.dataset.employeeId=String(employee.id);
         workerName.dataset.shift=String(workingOperator.shift);
         workerName.hidden=false;
-        const remark=hallEmployeeRemark(machine,employee);
-        if(remark){
+        const remark=hallBubbleShown?'':hallEmployeeRemark(machine,employee);
+        if(remark&&!hallBubbleShown){
+          hallBubbleShown=true;
           if(!remarkBubble){
             remarkBubble=document.createElement('div');
             remarkBubble.className='bay-worker-remark';
