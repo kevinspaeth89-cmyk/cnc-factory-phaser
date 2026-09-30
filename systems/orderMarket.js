@@ -418,7 +418,7 @@
     market.nextOrderNumber += 1;
     const id = `OM-${String(number).padStart(4, '0')}`;
     const qty = range(market, profile.qty);
-    const difficulty = range(market, profile.difficulty);
+    const difficulty = Number.isFinite(opts.programDifficulty) ? opts.programDifficulty : range(market, profile.difficulty);
     const duration = range(market, profile.duration);
     const baseDeadline = range(market, profile.deadline);
     const deadlineHours = Math.max(3, Math.round(baseDeadline - Math.max(0, difficulty - 3) * 0.5));
@@ -431,7 +431,8 @@
     const expiresAt = Math.min(createdAt + lifetime, deadlineAt - 60);
     const isFollowUp = !!opts.isFollowUp;
     const partSuffix = String(number).padStart(4, '0');
-    const partName = isFollowUp ? `${part.name} · Folgeauftrag ${partSuffix}` : `${part.name} ${partSuffix}`;
+    const programVariant=opts.programVariant||integer(market,1,4);
+    const partName = isFollowUp ? `${part.name} V${programVariant} · Folgeauftrag ${partSuffix}` : `${part.name} V${programVariant} ${partSuffix}`;
     const order = {
       id,
       customer: profile.customer,
@@ -442,6 +443,7 @@
       customerPlayStyle: profile.playStyle,
       part: partName,
       partKey: part.key,
+      programVariant,
       kind,
       qty,
       duration,
@@ -677,6 +679,8 @@
       kind: isValidKind(order.kind) ? order.kind : undefined,
       profileKey: sourceProfileKey,
       partKey: typeof order.partKey === 'string' ? order.partKey : undefined,
+      programVariant: order.programVariant,
+      programDifficulty: order.difficulty,
       isFollowUp: true,
       defer: true,
       parentOrderId: order.id

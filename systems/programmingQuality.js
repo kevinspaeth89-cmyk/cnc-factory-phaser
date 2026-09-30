@@ -45,7 +45,8 @@
     const part = typeof order.partKey === 'string' && order.partKey
       ? order.partKey
       : typeof order.part === 'string' ? order.part.trim().toLocaleLowerCase('de-DE') : '';
-    return part ? `${order.kind || 'Drehen'}:${part}` : null;
+    const variant=order.programVariant;
+    return part ? `${order.kind || 'Drehen'}:${part}${variant?`:kunde=${order.customer||''}:variante=${variant}:material=${order.materialType||order.material||''}:aufwand=${order.difficulty||1}`:''}` : null;
   }
 
   function programmingMinutes(order, method = 'programmer') {

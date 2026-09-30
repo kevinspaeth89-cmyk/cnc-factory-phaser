@@ -122,7 +122,7 @@
       state={...defaults(),...stored};
       state.ncPrograms=stored.ncPrograms&&typeof stored.ncPrograms==='object'&&!Array.isArray(stored.ncPrograms)?stored.ncPrograms:{};
       const savedProgrammer=stored.programmer&&typeof stored.programmer==='object'?stored.programmer:{};
-      state.programmer={hired:!!savedProgrammer.hired,active:savedProgrammer.active&&typeof savedProgrammer.active.key==='string'?savedProgrammer.active:null,
+      state.programmer={hired:!!savedProgrammer.hired,paidMinutes:Math.max(0,Number(savedProgrammer.paidMinutes)||0),savedProductionMinutes:Math.max(0,Number(savedProgrammer.savedProductionMinutes)||0),optimization:savedProgrammer.optimization&&typeof savedProgrammer.optimization.key==='string'&&Number.isFinite(savedProgrammer.optimization.remainingMinutes)?savedProgrammer.optimization:null,recent:Array.isArray(savedProgrammer.recent)?savedProgrammer.recent.slice(0,6):[],active:savedProgrammer.active&&typeof savedProgrammer.active.key==='string'?savedProgrammer.active:null,
         queue:Array.isArray(savedProgrammer.queue)?savedProgrammer.queue.filter(task=>task&&typeof task.key==='string'&&Number.isFinite(task.remainingMinutes)&&Number.isFinite(task.totalMinutes)):[]};
       state.pendingQualityComplaints=Array.isArray(stored.pendingQualityComplaints)?stored.pendingQualityComplaints.filter(item=>item&&typeof item.id==='string'&&Number.isFinite(item.dueAt)&&item.order&&typeof item.order.id==='string'):[];
       const savedQualityAssurance=stored.qualityAssurance&&typeof stored.qualityAssurance==='object'?stored.qualityAssurance:{};
@@ -437,6 +437,7 @@
   }
   const programKey=order=>programmingQuality.programKey(order);
   const programReady=order=>!!(programKey(order)&&state.ncPrograms?.[programKey(order)]);
+  const effectiveDuration=order=>Math.max(0,Number(order?.duration)||0)*(1-Math.min(.09,Math.max(0,Number(state.ncPrograms?.[programKey(order)]?.optimizationLevel)||0)*.03));
   function programTaskFor(key){
     if(state.programmer?.active?.key===key)return state.programmer.active;
     return state.programmer?.queue?.find(task=>task.key===key)||null;
@@ -549,12 +550,16 @@
     if(!task?.key)return;
     state.ncPrograms[task.key]={part:task.part,kind:task.kind,completedAt:state.gameMinutes,method,
       operatorMinutes:method==='programmer'?Math.max(0,Number(task.operatorMinutes)||0):0};
+    if(method==='programmer')recordProgrammerWork(`Vorbereitet: ${task.part} · ${formatMinutes(task.operatorMinutes||0)} Bedienerprogrammierung übernommen`);
     for(const machine of state.machines){
       const order=job(machine);
       if(!order||programKey(order)!==task.key)continue;
       machine.ncProgramPending=false;
       if(machine.setupRemainingMinutes<=0&&!machine.setupPartProduced)beginMachineSetup(machine,order);
     }
+  }
+  function recordProgrammerWork(text){
+    state.programmer.recent=[{text,at:state.gameMinutes},...(state.programmer.recent||[])].slice(0,6);
   }
   function hireProgrammer(){
     if(state.programmer.hired||state.money<PROGRAMMER_HIRING_FEE)return;
@@ -568,7 +573,24 @@
     if(!state.programmer?.hired||shift!==1)return;
     if(!state.programmer.active)state.programmer.active=state.programmer.queue.shift()||null;
     const task=state.programmer.active;
-    if(!task)return;
+    if(!task){
+      const candidates=state.machines.flatMap(machine=>[job(machine),...(machine.orderQueue||[]).map(entry=>entry.order)])
+        .filter(order=>order&&programReady(order)&&(state.ncPrograms[programKey(order)].optimizationLevel||0)<3);
+      let optimization=state.programmer.optimization;
+      if(!optimization||!candidates.some(order=>programKey(order)===optimization.key)){
+        const order=candidates[0];
+        if(!order){state.programmer.optimization=null;return;}
+        optimization=state.programmer.optimization={key:programKey(order),part:order.part,remainingMinutes:240+(order.difficulty||1)*60};
+      }
+      optimization.remainingMinutes=Math.max(0,optimization.remainingMinutes-step);
+      if(optimization.remainingMinutes<=1e-8){
+        const record=state.ncPrograms[optimization.key];
+        record.optimizationLevel=Math.min(3,(record.optimizationLevel||0)+1);
+        recordProgrammerWork(`Optimiert: ${optimization.part} · ${record.optimizationLevel*3} % kürzere reine Bearbeitungszeit`);
+        state.programmer.optimization=null;save();
+      }
+      return;
+    }
     task.remainingMinutes=Math.max(0,task.remainingMinutes-step);
     if(task.remainingMinutes>1e-8)return;
     completeNcProgram(task,'programmer');
@@ -585,11 +607,17 @@
       ?'Noch nicht eingestellt. Bediener können Neuteile an ihrer Maschine programmieren.'
       :active?`Programmiert ${active.part} · noch ${formatMinutes(active.remainingMinutes)} · ${queue.length} weitere geplant`
       :queue.length?`Wartet auf die Frühschicht · ${queue.length} Programm${queue.length===1?'':'e'} eingeplant`
-      :'Bereit · keine neuen Programme in der Warteschlange.';
+      :state.programmer.optimization?`Optimiert ${state.programmer.optimization.part} · noch ${formatMinutes(state.programmer.optimization.remainingMinutes)} Arbeitszeit. Neue Programme haben Vorrang.`
+      :'Bereit · kein Neuteil eingeplant und kein eingeplantes Programm mehr optimierbar.';
     let benefit=$('programmer-benefit');
     if(!benefit){benefit=document.createElement('div');benefit.id='programmer-benefit';benefit.className='programmer-benefit';$('programmer-status').after(benefit);}
     benefit.hidden=!state.programmer.hired;
-    benefit.textContent=`${prepared.length} NC-Programm${prepared.length===1?'':'e'} fertig · ${operatorMinutes?`${formatMinutes(operatorMinutes)} Bedienerprogrammierung übernommen`:'Bediener können vorbereitete Programme direkt nutzen'}.`;
+    benefit.style.whiteSpace='pre-line';
+    benefit.textContent=`Programme vorbereitet: ${prepared.length} insgesamt\nBedienerprogrammierung übernommen: ${formatMinutes(operatorMinutes)} (ältere Ersparnisse nicht erfasst)\nProgramme optimiert: ${Object.values(state.ncPrograms||{}).filter(record=>record.optimizationLevel>0).length} · je 3–9 % kürzere Bearbeitung\nMaschinenzeit durch Optimierung gespart: ${formatMinutes(state.programmer.savedProductionMinutes||0)}\nLohn seit diesem Update: ${euro((state.programmer.paidMinutes||0)/60*PROGRAMMER_HOURLY_WAGE)}`;
+    let history=$('programmer-history');
+    if(!history){history=document.createElement('div');history.id='programmer-history';benefit.after(history);}
+    history.replaceChildren(...(state.programmer.recent||[]).map(item=>{const line=document.createElement('p');line.textContent=item.text;return line;}));
+    history.hidden=!state.programmer.hired;
     const button=$('hire-programmer');
     button.textContent=state.programmer.hired?'NC-Programmierer eingestellt':`Programmierer einstellen · ${euro(PROGRAMMER_HIRING_FEE)}`;
     button.disabled=state.programmer.hired||state.money<PROGRAMMER_HIRING_FEE;
@@ -829,14 +857,14 @@
     const setupRemaining=Math.max(0,Number(machine.setupRemainingMinutes)||0);
     const qsShift=[shiftAt(state.gameMinutes),1,2].find(candidate=>candidate&&qualityEmployee(candidate));
     const inspection=qsShift?programmingQuality.inspectionMinutes({order,policy:qualityPolicyFor(qsShift).id}):0;
-    return programmingETA(order,machine)+setupRemaining+Math.max(0,(100-productionProgress)*order.duration*6/(100*factor))+inspection;
+    return programmingETA(order,machine)+setupRemaining+Math.max(0,(100-productionProgress)*effectiveDuration(order)*6/(100*factor))+inspection;
   };
   const plannedOrderMinutes=(machine,order,factor)=>{
     if(!order||!Number.isFinite(order.duration))return 0;
     const quantity=Math.max(1,Number(order.qty)||1);
     const qsShift=[1,2].find(candidate=>qualityEmployee(candidate));
     const inspection=qsShift?programmingQuality.inspectionMinutes({order,policy:qualityPolicyFor(qsShift).id}):0;
-    return programmingETA(order,machine)+expectedSetupMinutes(machine,order)+Math.max(0,(quantity-1)/quantity)*order.duration*6/factor+inspection;
+    return programmingETA(order,machine)+expectedSetupMinutes(machine,order)+Math.max(0,(quantity-1)/quantity)*effectiveDuration(order)*6/factor+inspection;
   };
   function scheduledWorkCompletionAt(machine,startAt,workMinutes,operatorOnly=false,workMode='regular'){
     if(!Number.isFinite(startAt)||!Number.isFinite(workMinutes))return Infinity;
@@ -917,7 +945,7 @@
       :programmingQuality.programmingMinutes(order,'operator');
     const processMinutes=isActive
       ?Math.max(0,remainingMinutes(machine,order,factor)-programmingETA(order,machine))
-      :setupMinutesForOrder(order)+Math.max(0,(Math.max(1,Number(order.qty)||1)-1)/Math.max(1,Number(order.qty)||1)*order.duration*6/factor);
+      :setupMinutesForOrder(order)+Math.max(0,(Math.max(1,Number(order.qty)||1)-1)/Math.max(1,Number(order.qty)||1)*effectiveDuration(order)*6/factor);
     let startsAt=Math.max(state.gameMinutes,freeAt),operatorProgrammingMinutes=0,programReadyAt=state.gameMinutes;
     if(programReady(order)){
       programReadyAt=state.gameMinutes;
@@ -992,7 +1020,7 @@
     if(!shifts.length)return null;
     const factor=shifts.reduce((sum,shift)=>sum+productionFactorForShift(machine,shift),0)/shifts.length;
     const rush=forecastOrderOnMachine(machine,rushOrder,state.gameMinutes,factor,false);
-    const quantity=Math.max(1,Number(interrupted.qty)||1),duration=Math.max(0,Number(interrupted.duration)||0);
+    const quantity=Math.max(1,Number(interrupted.qty)||1),duration=effectiveDuration(interrupted);
     const hasProduced=machine.setupPartProduced||machine.produced>0;
     const remainingProduction=hasProduced
       ?Math.max(0,(100-Math.max(0,Number(machine.progress)||0))*duration*6/(100*factor))
@@ -1256,7 +1284,7 @@
     if(rushWorkModeEventId!==event.id){rushWorkModeEventId=event.id;rushWorkMode='regular';}
     const order=event.order,bonus=Number.isFinite(order.rushBonus)?order.rushBonus:Math.max(0,order.reward-(order.baseReward||order.reward));
     const rate=order.kind==='Fräsen'?catalog.mill3.rate:catalog.standard.rate;
-    const processing=programmingETA(order)+setupMinutesForOrder(order)+Math.max(0,(order.qty-1)/Math.max(1,order.qty)*order.duration*6/rate);
+    const processing=programmingETA(order)+setupMinutesForOrder(order)+Math.max(0,(order.qty-1)/Math.max(1,order.qty)*effectiveDuration(order)*6/rate);
     $('event-window').querySelector('.event-card').classList.add('rush-event-card');
     $('event-eyebrow').textContent='STAMMKUNDEN-ANFRAGE · EILAUFTRAG';
     $('event-title').textContent=`${order.customer} braucht kurzfristig ${order.part}`;
@@ -2337,7 +2365,7 @@
       const materialCost=Number.isFinite(materialPrice)&&Number.isFinite(materialKg)?materialPrice*materialKg:null;
       const materialContribution=Number.isFinite(materialCost)?o.reward-materialCost:null;
       const baseMachineRate=o.kind==='Fräsen'?catalog.mill3.rate:catalog.standard.rate;
-      const estimateMinutes=programmingETA(o)+setupMinutesForOrder(o)+Math.max(0,(o.qty-1)/Math.max(1,o.qty)*o.duration*6/baseMachineRate);
+      const estimateMinutes=programmingETA(o)+setupMinutesForOrder(o)+Math.max(0,(o.qty-1)/Math.max(1,o.qty)*effectiveDuration(o)*6/baseMachineRate);
       const contributionPerHour=Number.isFinite(materialContribution)&&estimateMinutes>0?materialContribution/(estimateMinutes/60):null;
       const risks=compatibleMachines.map(machine=>qualityRiskFor(machine,o)).sort((a,b)=>a-b);
       const qualityHint=` · ${programmingQuality.toleranceClass(o)}${risks.length?` · Qualitätsrisiko ${risks[0]}${risks.length>1&&risks[0]!==risks[risks.length-1]?`–${risks[risks.length-1]}`:''} %`:''}`;
@@ -4616,7 +4644,7 @@
       const before=dateAt(state.gameMinutes),shift=shiftAt(state.gameMinutes);
       if(shift)state.payrollDue+=shiftHourlyPayroll(shift)*step/60;
       if(state.orderOffice.hired&&officeOpenAt(state.gameMinutes))state.payrollDue+=ORDER_OFFICE_HOURLY_WAGE*step/60;
-      if(state.programmer.hired&&shift===1)state.payrollDue+=PROGRAMMER_HOURLY_WAGE*step/60;
+      if(state.programmer.hired&&shift===1){state.payrollDue+=PROGRAMMER_HOURLY_WAGE*step/60;state.programmer.paidMinutes=(state.programmer.paidMinutes||0)+step;}
       const leader=shiftLeaderFor(shift);
       if(shift&&leader?.hired)state.payrollDue+=SHIFT_LEADER_HOURLY_WAGE*step/60;
       if(shift){
@@ -4735,7 +4763,10 @@
           }
         }
         if(productionStep>1e-8){
-          const gain=100/o.duration*(productionStep/6)*factor;
+          const gain=100/effectiveDuration(o)*(productionStep/6)*factor;
+          const actualGain=Math.min(100-m.progress,gain);
+          const savedMinutes=actualGain/100*(o.duration-effectiveDuration(o))*6/factor;
+          state.programmer.savedProductionMinutes=(state.programmer.savedProductionMinutes||0)+Math.max(0,savedMinutes);
           m.progress=Math.min(100,m.progress+gain);
           m.produced=Math.max(m.produced,Math.min(o.qty,Math.floor(o.qty*m.progress/100)));
           m.maintenance=Math.max(0,m.maintenance-gain*.12);
