@@ -1,0 +1,20 @@
+/* Shared sizes come from the hall row, independent of bay box height. */
+.hall-map .bay.installed .bay-machine{
+  left:50%!important;bottom:var(--model-bottom)!important;
+  height:var(--model-height)!important;width:auto!important;max-width:none!important;
+  transform:translateX(-50%)!important;object-fit:contain!important;
+}
+.hall-map .bay .bay-worker-sprite,.hall-map .bay .handoff-worker{
+  left:var(--worker-left)!important;bottom:var(--worker-bottom)!important;
+  height:var(--worker-height)!important;width:auto!important;max-width:none!important;
+}
+.hall-map .bay .bay-worker-sprite{transform:none!important}
+.hall-map .bay .handoff-worker{--handoff-scale:1!important}
+.hall-map .bay.installed .bay-robot{
+  left:4%!important;bottom:var(--model-bottom)!important;
+  height:var(--robot-height)!important;width:auto!important;max-width:none!important;
+}
+.customer-logo{border-radius:9px!important;clip-path:none!important;transform:none!important}
+.customer-logo::before,.customer-logo::after{content:none!important}
+.customer-logo .customer-logo-mark{display:block;width:100%;height:100%;object-fit:contain;transform:none!important}
+.customer-logo.compact{border-radius:7px!important}

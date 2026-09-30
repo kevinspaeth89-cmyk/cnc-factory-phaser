@@ -70,6 +70,19 @@
     mill3:'assets/veltron-vx500-hall-front.png?v=1',
     mill5:'assets/orionis-om650x-hall-straight.webp?v=2'
   };
+  // Compensate transparent padding, then use one visible height per hall row.
+  const hallArtHeightCorrection={standard:941/885,rapid:1024/1004,premium:1024/994,mill3:1024/985,mill5:1086/1070};
+  function setHallModelScale(b,slot,level,type){
+    const rear=slot.bay<=(level===3?4:level===2?3:2);
+    const height=level===3?(rear?15:17.5):level===2?(rear?20:23):(rear?21:23);
+    const bottom=level===1?3:2;
+    b.style.setProperty('--model-height',height*(hallArtHeightCorrection[type]||1)/slot.height*100+'%');
+    b.style.setProperty('--model-bottom',bottom/slot.height*100+'%');
+    b.style.setProperty('--worker-height',height*.72/slot.height*100+'%');
+    b.style.setProperty('--worker-bottom',(bottom-.3)/slot.height*100+'%');
+    b.style.setProperty('--worker-left',type==='mill3'||type==='mill5'?'65%':'58%');
+    b.style.setProperty('--robot-height',height*.82/slot.height*100+'%');
+  }
   const legacyOrders = [
     {id:'A12',kind:'Drehen',customer:'Veltraxis Mobility',part:'Wellenflansch A12',material:'1.4301 Edelstahl',kg:72,qty:50,reward:8400,duration:48,deadlineHours:7},
     {id:'B07',kind:'Drehen',customer:'Orionis Fluidics',part:'Ventilgehäuse B07',material:'1.4404 Edelstahl',kg:96,qty:40,reward:11200,duration:62,deadlineHours:9},
@@ -2246,12 +2259,13 @@
   }
   function createCustomerLogo(customer,compact=false){
     const brand=customerBrandIdentity(customer);
-    const logo=document.createElement('span'),mark=document.createElement('span');
+    const logo=document.createElement('span'),mark=document.createElement('img');
     logo.className='customer-logo customer-logo-'+brand.brandClass+(compact?' compact':'');
     logo.title=brand.customer+' · '+brand.sector;
     logo.setAttribute('aria-label','Logo '+brand.customer);
     mark.className='customer-logo-mark';
-    mark.textContent=brand.logoMark;
+    mark.src='assets/customer-'+(['veltraxis','orionis','kaeldor','asteron'].includes(brand.brandClass)?brand.brandClass:'generic')+'.svg?v=1';
+    mark.alt='';
     logo.append(mark);
     return logo;
   }
@@ -2832,17 +2846,21 @@
       $('employee-card-personal').closest('.employee-card-section').after(conversation);
     }
     conversation.replaceChildren();
-    const conversationTitle=document.createElement('strong');conversationTitle.textContent='Mitarbeitergespräch';
+    const conversationTitle=document.createElement('strong');conversationTitle.textContent='Schichtbericht & Handlungsbedarf';
     const conversationText=document.createElement('p');
-    conversationText.textContent=employeeShiftBriefing(machine).report;
+    const updateBriefing=()=>{
+      const briefing=employeeShiftBriefing(machine);
+      conversationText.textContent=briefing.report+' '+briefing.advice;
+    };
+    updateBriefing();
     const conversationActions=document.createElement('div');conversationActions.className='employee-conversation-actions';
-    const ask=document.createElement('button');ask.type='button';ask.className='action';ask.textContent='Wie läuft die Schicht?';
+    const ask=document.createElement('button');ask.type='button';ask.className='action';ask.textContent='Schichtbericht aktualisieren';
     ask.addEventListener('click',()=>{
-      conversationText.textContent=employeeShiftBriefing(machine).report;
+      updateBriefing();
     });
     conversationActions.append(ask);
-    const advice=document.createElement('button');advice.type='button';advice.className='action';advice.textContent='Was empfiehlst du?';
-    advice.addEventListener('click',()=>{conversationText.textContent=employeeShiftBriefing(machine).advice;});
+    const advice=document.createElement('button');advice.type='button';advice.className='action';advice.textContent='Zur betroffenen Maschine';
+    advice.addEventListener('click',()=>{showMachine(machine.bay);});
     conversationActions.append(advice);
     conversation.append(conversationTitle,conversationText,conversationActions);
 
@@ -4051,6 +4069,7 @@
       if(!slot)continue;
       b.style.left=slot.x+'%';b.style.top=slot.y+'%';
       b.style.width=slot.width+'%';b.style.height=slot.height+'%';
+      setHallModelScale(b,slot,layout.level,machine?.type);
       if(layout.level===2){
         b.style.setProperty('--six-art-width',(22.3/slot.width*100)+'%');
         b.style.setProperty('--six-art-height',((catalog[machine?.type]?.kind==='Fräsen'?21.5:22)/slot.height*100)+'%');
@@ -5221,7 +5240,11 @@
         this.millGroup.add(p);
         return {sprite:p,phase:Math.random()*Math.PI*2,radius:10+Math.random()*48,speed:1+Math.random()*2.5};
       });
-      this.robotShadow=this.add.ellipse(0,0,200,22,0x10191c,.42).setVisible(false);
+      this.photoGroup=this.add.container(0,0,[this.machineImage,this.coolantJet,this.coolantSplash,
+        ...this.coolantParticles.map(p=>p.sprite),this.spindle,...this.sparks.map(p=>p.sprite),
+        this.towerRed,this.towerAmber,this.towerGreen,this.millPhotoGlow,
+        this.millPhotoRed,this.millPhotoAmber,this.millPhotoGreen,...this.millPhotoSparks.map(p=>p.sprite)]);
+      this.robotShadow=this.add.ellipse(0,0,150,18,0x10191c,.42).setVisible(false);
       this.robotImage=this.add.image(200,502,'loading-robot').setDisplaySize(470,510).setFlipX(true).setVisible(false);
       this.workerShadow=this.add.ellipse(540,778,125,24,0x10191c,.4).setVisible(false);
       this.workerImage=this.add.image(540,778,'detail-worker-0').setOrigin(.5,1).setVisible(false).setInteractive({useHandCursor:true});
@@ -5240,9 +5263,9 @@
       if(!visible)return;
       if(this.workerImage.texture.key!==key)this.workerImage.setTexture(key);
       const source=this.workerImage.texture.getSourceImage();
-      const height=this.isMilling?330:295;
-      const width=Math.min(this.isMilling?240:205,height*(source.naturalWidth||source.width)/(source.naturalHeight||source.height));
-      const x=this.isMilling?782:533,y=this.isMilling?785:786;
+      const height=this.isMilling?320:300;
+      const width=height*(source.naturalWidth||source.width)/(source.naturalHeight||source.height);
+      const x=machine.type==='mill3'?805:machine.type==='mill5'?710:525,y=this.isMilling?710:770;
       this.workerImage.setPosition(x,y).setDisplaySize(width,height);
       this.workerShadow.setPosition(x,y-4).setSize(width*.72,22);
     }
@@ -5258,10 +5281,9 @@
         this.coolantSprayEndpoints=[];
         this.coolantZoneType=type;
       }
-      const robotLayout=type==='mill3'?{x:250,y:560,width:460,height:460}:milling?{x:335,y:550,width:370,height:320}:
-        {x:type==='standard'?200:215,y:502,width:470,height:510};
+      const robotLayout={x:milling?205:195,y:milling?545:605,width:361,height:330};
       this.robotImage.setPosition(robotLayout.x,robotLayout.y).setDisplaySize(robotLayout.width,robotLayout.height);
-      this.robotShadowEnabled=type==='mill3';
+      this.robotShadowEnabled=true;
       this.robotShadow.setPosition(robotLayout.x-robotLayout.width*.18,robotLayout.y+robotLayout.height*.42);
       this.millGroup.setVisible(false);
       this.machineImage.setVisible(true);
@@ -5283,6 +5305,12 @@
       }else{
         this.machineImage.setDisplaySize(1000,836).setPosition(500,400);
       }
+      const source=this.machineImage.texture.getSourceImage();
+      const desiredScale=Math.min(1000/(source.naturalWidth||source.width),760/(source.naturalHeight||source.height));
+      const ratio=desiredScale/this.machineImage.scaleY;
+      const offsetX=500*(1-ratio),offsetY=400*(1-ratio);
+      this.photoGroup.setScale(ratio).setPosition(offsetX,offsetY);
+      this.coolantMaskShape.setScale(ratio).setPosition(offsetX,offsetY);
     }
     update(_time,delta){
       const dt=Math.min(delta/1000,.2);this.elapsed+=dt;this.spindle.clear();

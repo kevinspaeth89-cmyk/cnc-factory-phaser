@@ -13,8 +13,14 @@
   const APPLICANT_COUNT = 3;
   const QUALITY_APPLICANT_COUNT = 2;
   const FIRST_NAMES = Object.freeze({
-    female: ['Mira', 'Elira', 'Vaska', 'Neris', 'Zora', 'Fenja', 'Sera', 'Liora', 'Yuna', 'Tyra'],
-    male: ['Tarek', 'Joren', 'Kael', 'Orin', 'Tavik', 'Kiro', 'Bran', 'Darek', 'Aven', 'Eron']
+    female: ['Mira','Elira','Vaska','Neris','Zora','Fenja','Sera','Liora','Yuna','Tyra',
+      'Nora','Leonie','Amira','Dalia','Alina','Juna','Marlene','Romy','Selin','Thea',
+      'Ayla','Liv','Esra','Rika','Noemi','Ines','Lena','Tessa','Fiona','Maja',
+      'Svea','Nele','Carla','Elin','Naima','Viola','Mina','Sina','Luisa','Yara'],
+    male: ['Tarek','Joren','Kael','Orin','Tavik','Kiro','Bran','Darek','Aven','Eron',
+      'Silas','Levin','Dorian','Milan','Jonas','Emil','Arvid','Malik','Theo','Jasper',
+      'Noah','Lennard','Felix','Oskar','Samir','Nils','Bennet','Adrian','Luan','Robin',
+      'Henrik','Mats','Deniz','Ruben','Anton','Elias','Kian','Finn','Ivo','Jannik']
   });
   const FIRST_NAME_GENDER = Object.freeze(Object.fromEntries(
     Object.entries(FIRST_NAMES).flatMap(([gender, names]) => names.map(name => [name.toLocaleLowerCase('de-DE'), gender]))
@@ -23,7 +29,25 @@
     female: [4, 5, 6, 7, 9, 10, 11, 12],
     male: [1, 2, 3, 8, 13, 14, 15, 16]
   });
-  const FAMILY_NAMES = ['Stahlwind', 'Spindelruh', 'Kupferhand', 'Funkenfels', 'Drehkamm', 'Eisenherz', 'Maßstern', 'Werkfink', 'Schneidorn', 'Spanlauf', 'Feilensang', 'Fräsborn', 'Bohrhain', 'Zirkelkind', 'Taktvoll', 'Kühlwasser', 'Zahnrad', 'Stahlfeder', 'Kantenschliff', 'Werkglanz'];
+  const FAMILY_NAMES = ['Stahlwind','Spindelruh','Kupferhand','Funkenfels','Drehkamm','Eisenherz','Maßstern','Werkfink','Schneidorn','Spanlauf','Feilensang','Fräsborn','Bohrhain','Zirkelkind','Taktvoll','Kühlwasser','Zahnrad','Stahlfeder','Kantenschliff','Werkglanz',
+    'Falkenberg','Hartmann','Steinbach','Mertens','Becker','Winter','Riedel','Lindner','Hagedorn','Seidel',
+    'Brandt','Bergmann','Sommer','Fuchs','Keller','Westphal','Neumann','Rosenthal','Lorenz','Ahrens',
+    'Reuter','Sander','Linden','Hansen','Kramer','Wendt','Schilling','Franke','Engel','Roth',
+    'Bender','Voss','Graf','Albrecht','Dietrich','Urban','Wolff','Kern','Falk','Baumann'];
+  function ensureVariedNames(employees){
+    const used=new Set();let changed=false;
+    for(const employee of employees||[]){
+      if(!employee?.name)continue;
+      const words=employee.name.trim().split(/\s+/),first=words[0].toLocaleLowerCase('de-DE');
+      if(!used.has(first)){used.add(first);continue;}
+      const pool=FIRST_NAMES[employee.gender||genderForName(employee.name)]||FIRST_NAMES.male;
+      const start=Math.abs(Number(employee.id)||0)%pool.length;
+      const replacement=Array.from({length:pool.length},(_,offset)=>pool[(start+offset)%pool.length])
+        .find(name=>!used.has(name.toLocaleLowerCase('de-DE')));
+      if(replacement){employee.name=[replacement,...words.slice(1)].join(' ');used.add(replacement.toLocaleLowerCase('de-DE'));changed=true;}
+    }
+    return changed;
+  }
   const PORTRAIT_COUNT = 16;
   const QUALITY = {
     turning: { label: 'Drehen', trait: 'Späneflüsterer', about: 'erkennt am Schnittgeräusch, wenn die Drehbearbeitung sauber läuft' },
@@ -1130,6 +1154,8 @@
       nextId += 1;
     }
     state.recruitment = { applicants, qualityApplicants, nextId };
+    ensureVariedNames([...(state.staffRoster?.shift1||[]),...(state.staffRoster?.shift2||[]),
+      ...(state.qualityStaff?.shift1||[]),...(state.qualityStaff?.shift2||[]),...applicants,...qualityApplicants]);
     return { ok: true, value: state.recruitment };
   }
 
@@ -1314,6 +1340,7 @@
     portraitIdsForGender,
     uniquePortraitFor,
     ensureUniquePortraits,
+    ensureVariedNames,
     ratingFromSkills,
     deriveQualityProfile,
     qualityWageExpectation,
