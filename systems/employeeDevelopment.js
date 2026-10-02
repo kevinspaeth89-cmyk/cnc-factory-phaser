@@ -2,10 +2,12 @@
   'use strict';
 
   const VERSION = 1;
-  const EMPLOYEE_VERSION = 1;
-  const FIRST_UNLOCK_XP = 7200; // 120 production hours
-  const SECOND_UNLOCK_XP = 18000; // 300 production hours
-  const SPECIAL_EVENT_XP = 3600; // 60 production hours
+  const EMPLOYEE_VERSION = 2;
+  const FIRST_UNLOCK_MINUTES = 7200; // 120 staffed production hours
+  const SECOND_UNLOCK_MINUTES = 18000; // 300 staffed production hours
+  const SPECIAL_EVENT_MINUTES = 3600; // 60 staffed production hours
+  const LEGACY_FIRST_UNLOCK_XP = 240;
+  const LEGACY_SECOND_UNLOCK_XP = 1920;
   const MAX_SPECIALIZATIONS = 2;
   const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
   const SPECS = Object.freeze({
@@ -24,17 +26,46 @@
     return { ok: true, value: state.employeeDevelopment };
   }
 
-  function ensureEmployee(employee) {
+  function progressionXp(progression) {
+    if (Number.isFinite(progression)) return Math.max(0, progression);
+    if (progression && typeof progression === 'object') {
+      const value = progression.xp ?? progression.experience;
+      if (Number.isFinite(Number(value))) return Math.max(0, Number(value));
+    }
+    return undefined;
+  }
+
+  function employeeXp(employee, progression) {
+    return progressionXp(progression) ?? Math.max(0, Number(employee?.xp) || 0);
+  }
+
+  function workMinutes(employee, progression, xp) {
+    if (progression && typeof progression === 'object' && Number.isFinite(Number(progression.productionMinutes))) {
+      return Math.max(0, Number(progression.productionMinutes));
+    }
+    if (Number.isFinite(Number(employee?.productionMinutes))) return Math.max(0, Number(employee.productionMinutes));
+    return xp; // Older saves without a staffed-time counter use their saved XP as a one-time estimate.
+  }
+
+  function ensureEmployee(employee, progression) {
     if (!employee || typeof employee !== 'object' || Array.isArray(employee)) return { ok: false, code: 'invalid_employee' };
     const old = employee.development && typeof employee.development === 'object' && !Array.isArray(employee.development)
       ? employee.development : {};
     const assigned = Array.isArray(employee.specializations) ? employee.specializations.length : 0;
+    const xp = employeeXp(employee, progression);
+    const oldVersion = Math.max(0, Math.floor(Number(old.version) || 0));
+    const legacyMilestones = oldVersion === 0
+      ? Math.max(Number(old.legacyMilestonesAwarded) || 0, xp >= LEGACY_SECOND_UNLOCK_XP ? 2 : xp >= LEGACY_FIRST_UNLOCK_XP ? 1 : 0)
+      : Math.max(0, Number(old.legacyMilestonesAwarded) || 0);
+    const legacyPending = oldVersion === 0 ? Math.max(0, legacyMilestones - assigned) : 0;
+    const pending = Math.max(Math.floor(Number(old.pendingSpecializationChoices) || 0), legacyPending);
     employee.development = {
       ...old,
       version: EMPLOYEE_VERSION,
+      legacyMilestonesAwarded: clamp(Math.floor(legacyMilestones), 0, 2),
       experienceMilestonesAwarded: clamp(Math.floor(Number(old.experienceMilestonesAwarded) || 0), 0, 2),
       eventPromotionsAwarded: clamp(Math.floor(Number(old.eventPromotionsAwarded) || 0), 0, 1),
-      pendingSpecializationChoices: clamp(Math.floor(Number(old.pendingSpecializationChoices) || 0), 0, Math.max(0, MAX_SPECIALIZATIONS - assigned)),
+      pendingSpecializationChoices: clamp(pending, 0, Math.max(0, MAX_SPECIALIZATIONS - assigned)),
       specialEventRewardClaimed: !!old.specialEventRewardClaimed
     };
     return { ok: true, value: employee.development };
@@ -53,21 +84,12 @@
       Math.abs(turning - milling) <= 1 && Math.min(turning, milling) >= 5 ? 'flexibel' : learning >= 8 ? 'neugierig' : learning <= 3 ? 'routineorientiert' : 'anpassungsfaehig'];
   }
 
-  function progressionXp(progression) {
-    if (Number.isFinite(progression)) return Math.max(0, progression);
-    if (progression && typeof progression === 'object') {
-      const value = progression.xp ?? progression.experience;
-      if (Number.isFinite(Number(value))) return Math.max(0, Number(value));
-    }
-    return undefined;
-  }
-
   function getProgress(employee, progression) {
     if (!employee || typeof employee !== 'object' || Array.isArray(employee)) return null;
-    const ensured = ensureEmployee(employee);
-    const development = ensured.value;
-    const xp = progressionXp(progression) ?? Math.max(0, Number(employee.xp) || 0);
-    const targetMilestones = xp >= SECOND_UNLOCK_XP ? 2 : xp >= FIRST_UNLOCK_XP ? 1 : 0;
+    const xp = employeeXp(employee, progression);
+    const staffedMinutes = workMinutes(employee, progression, xp);
+    const development = ensureEmployee(employee, progression).value;
+    const targetMilestones = staffedMinutes >= SECOND_UNLOCK_MINUTES ? 2 : staffedMinutes >= FIRST_UNLOCK_MINUTES ? 1 : 0;
     if (targetMilestones > development.experienceMilestonesAwarded) {
       const newlyEarned = targetMilestones - development.experienceMilestonesAwarded;
       const assigned = Array.isArray(employee.specializations) ? employee.specializations.length : 0;
@@ -75,16 +97,17 @@
       development.pendingSpecializationChoices += Math.min(newlyEarned, availableSlots);
       development.experienceMilestonesAwarded = targetMilestones;
     }
-    const nextMilestoneXp = development.experienceMilestonesAwarded === 0 ? FIRST_UNLOCK_XP
-      : development.experienceMilestonesAwarded === 1 ? SECOND_UNLOCK_XP : null;
+    const nextMilestoneMinutes = development.experienceMilestonesAwarded === 0 ? FIRST_UNLOCK_MINUTES
+      : development.experienceMilestonesAwarded === 1 ? SECOND_UNLOCK_MINUTES : null;
     return {
       xp,
-      productionHours: xp / 60,
-      careerLevel: 1 + development.experienceMilestonesAwarded + development.eventPromotionsAwarded,
+      productionMinutes: staffedMinutes,
+      productionHours: staffedMinutes / 60,
+      careerLevel: 1 + Math.max(development.legacyMilestonesAwarded, development.experienceMilestonesAwarded) + development.eventPromotionsAwarded,
       experienceMilestonesAwarded: development.experienceMilestonesAwarded,
       pendingChoices: development.pendingSpecializationChoices,
-      nextMilestoneXp,
-      specialEventAvailable: xp >= SPECIAL_EVENT_XP && !development.specialEventRewardClaimed
+      nextMilestoneMinutes,
+      specialEventAvailable: staffedMinutes >= SPECIAL_EVENT_MINUTES && !development.specialEventRewardClaimed
         && development.pendingSpecializationChoices === 0
         && (Array.isArray(employee.specializations) ? employee.specializations.length : 0) < MAX_SPECIALIZATIONS
     };
@@ -107,7 +130,7 @@
     if (eventType !== 'successful_self_repair') return { ok: false, code: 'unknown_event' };
     const progress = getProgress(employee, progression);
     const development = employee.development;
-    if (progress.xp < SPECIAL_EVENT_XP) return { ok: false, code: 'experience_locked' };
+    if (progress.productionMinutes < SPECIAL_EVENT_MINUTES) return { ok: false, code: 'experience_locked' };
     if (development.specialEventRewardClaimed) return { ok: false, code: 'event_already_awarded' };
     if (progress.pendingChoices > 0) return { ok: false, code: 'level_up_pending' };
     const assigned = Array.isArray(employee.specializations) ? employee.specializations.length : 0;
@@ -115,7 +138,7 @@
     development.specialEventRewardClaimed = true;
     development.eventPromotionsAwarded = 1;
     development.pendingSpecializationChoices += 1;
-    return { ok: true, event: eventType, careerLevel: 1 + development.experienceMilestonesAwarded + development.eventPromotionsAwarded, pendingChoices: development.pendingSpecializationChoices };
+    return { ok: true, event: eventType, careerLevel: 1 + Math.max(development.legacyMilestonesAwarded, development.experienceMilestonesAwarded) + development.eventPromotionsAwarded, pendingChoices: development.pendingSpecializationChoices };
   }
 
   function assignSpecialization(employee, specializationId, progression) {
@@ -155,7 +178,12 @@
     return { ...effects, applied };
   }
 
-  const api = { VERSION, FIRST_UNLOCK_XP, SECOND_UNLOCK_XP, SPECIAL_EVENT_XP, MAX_SPECIALIZATIONS, ensureState, ensureEmployee, getProgress, getAvailableSpecializations, awardSpecialEvent, assignSpecialization, getEffects };
+  const api = {
+    VERSION, EMPLOYEE_VERSION, FIRST_UNLOCK_MINUTES, SECOND_UNLOCK_MINUTES, SPECIAL_EVENT_MINUTES,
+    LEGACY_FIRST_UNLOCK_XP, LEGACY_SECOND_UNLOCK_XP, MAX_SPECIALIZATIONS,
+    ensureState, ensureEmployee, getProgress, getAvailableSpecializations, awardSpecialEvent,
+    assignSpecialization, getEffects
+  };
   if (root) {
     root.CNCModules = root.CNCModules || {};
     root.CNCModules.employeeDevelopment = api;
