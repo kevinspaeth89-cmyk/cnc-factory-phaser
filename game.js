@@ -53,7 +53,13 @@
   const materialSystem = globalThis.CNCModules && globalThis.CNCModules.materials;
   const recruitmentSystem = globalThis.CNCModules && globalThis.CNCModules.recruitment;
   const programmingQuality = globalThis.CNCModules && globalThis.CNCModules.programmingQuality;
-  if (!economySystem || !inventorySystem || !orderMarketSystem || !breakdownSystem || !expansionSystem || !materialSystem || !recruitmentSystem || !programmingQuality) throw new Error('CNC Factory game systems failed to load.');
+  const employeeDevelopment = globalThis.CNCModules && globalThis.CNCModules.employeeDevelopment;
+  const productionFlow = globalThis.CNCModules && globalThis.CNCModules.productionFlow;
+  const suppliers = globalThis.CNCModules && globalThis.CNCModules.suppliers;
+  const customerProjects = globalThis.CNCModules && globalThis.CNCModules.customerProjects;
+  const factorySituations = globalThis.CNCModules && globalThis.CNCModules.factorySituations;
+  const factory2Systems = [productionFlow,suppliers,customerProjects,factorySituations].every(Boolean);
+  if (!economySystem || !inventorySystem || !orderMarketSystem || !breakdownSystem || !expansionSystem || !materialSystem || !recruitmentSystem || !programmingQuality || !employeeDevelopment) throw new Error('CNC Factory game systems failed to load.');
   const catalog = {
     standard: {name:'Nexora NX-350',kind:'Drehen',price:18000,rate:1},
     rapid: {name:'Nexora NX-420',kind:'Drehen',price:27000,rate:1.25},
@@ -109,7 +115,8 @@
     credit:{principal:0,originalAmount:0,annualRate:CREDIT_ANNUAL_RATE,paymentsRemaining:0,accruedInterest:0,nextPaymentAt:null,missedPayments:0},
     recruitment:{applicants:[],nextId:1},
     orderOffice:{hired:false,autoPurchase:true,autoAccept:true,cashReserve:5000,maxMarketMarkupPct:0,minMaterialSurplus:1000,materialReserveKg:25,queueLimit:1,nextReviewAt:0},
-    shiftLeader:{shift1:{hired:false,autoMaintenance:true,autoTools:true,autoBreakdowns:true,autoQuality:true,spendingLimit:2500,nextDecisionAt:0},shift2:{hired:false,autoMaintenance:true,autoTools:true,autoBreakdowns:true,autoQuality:true,spendingLimit:2500,nextDecisionAt:0}},pendingRushAssignment:null
+    shiftLeader:{shift1:{hired:false,autoMaintenance:true,autoTools:true,autoBreakdowns:true,autoQuality:true,spendingLimit:2500,nextDecisionAt:0},shift2:{hired:false,autoMaintenance:true,autoTools:true,autoBreakdowns:true,autoQuality:true,spendingLimit:2500,nextDecisionAt:0}},pendingRushAssignment:null,
+    factory2:{version:1,orderSettings:{priority:'normal',batchMode:'auto',routePreset:'single'},preferredBays:{},orderResults:{},projectOrders:{},specialOrderIds:[]}
   });
   let state=defaults();
   function validMachine(m) {
@@ -363,6 +370,29 @@
       nextReviewAt:Number.isFinite(saved.nextReviewAt)?saved.nextReviewAt:state.gameMinutes
     };
   }
+  function ensureFactory2State(){
+    const saved=state.factory2&&typeof state.factory2==='object'&&!Array.isArray(state.factory2)?state.factory2:{};
+    const settings=saved.orderSettings&&typeof saved.orderSettings==='object'?saved.orderSettings:{};
+    state.factory2={
+      ...saved,version:1,
+      orderSettings:{
+        priority:['low','normal','high'].includes(settings.priority)?settings.priority:'normal',
+        batchMode:['auto','small','normal','large'].includes(settings.batchMode)?settings.batchMode:'auto',
+        routePreset:['single','mixed','outsource'].includes(settings.routePreset)?settings.routePreset:'single'
+      },
+      orderResults:saved.orderResults&&typeof saved.orderResults==='object'?saved.orderResults:{},
+      projectOrders:saved.projectOrders&&typeof saved.projectOrders==='object'?saved.projectOrders:{},
+      pendingSupplierQuotes:saved.pendingSupplierQuotes&&typeof saved.pendingSupplierQuotes==='object'?saved.pendingSupplierQuotes:{},
+      pendingSupplierRelease:saved.pendingSupplierRelease&&typeof saved.pendingSupplierRelease==='object'?saved.pendingSupplierRelease:{},
+      pendingSupplierDelivery:saved.pendingSupplierDelivery&&typeof saved.pendingSupplierDelivery==='object'?saved.pendingSupplierDelivery:{},
+      paidSupplierJobIds:Array.isArray(saved.paidSupplierJobIds)?saved.paidSupplierJobIds:[],
+      specialOrderIds:Array.isArray(saved.specialOrderIds)?saved.specialOrderIds.filter(id=>typeof id==='string'):[]
+    };
+    productionFlow.ensureState(state);
+    suppliers.ensureState(state,{seed:1});
+    customerProjects.ensureState(state,{seed:1});
+    factorySituations.ensureState(state,{seed:1});
+  }
   function nextMonthMinute(minutes){
     const date=new Date(START+Math.floor(Math.max(0,Number(minutes)||0))*60000);
     return (Date.UTC(date.getUTCFullYear(),date.getUTCMonth()+1,1)-START)/60000;
@@ -405,6 +435,9 @@
     ensureShiftLeaderState();
     ensureCreditState();
     recruitmentSystem.ensureState(state);
+    const developmentState=employeeDevelopment.ensureState(state);
+    if(!developmentState.ok)throw new Error('CNC Factory employee development state could not be migrated.');
+    if(factory2Systems)ensureFactory2State();
     economySystem.setTime(state,START+state.gameMinutes*60000);
   }
   ensureEconomyState();
@@ -435,9 +468,26 @@
     syncMaterialMirror();
     return true;
   }
+  function factory2SituationEffectsAt(atMinute=state.gameMinutes){
+    if(!factory2Systems)return {materialCostFactor:1,durationFactor:1,capacityFactor:1,demandFactor:1,warnings:[]};
+    const modifiers=factorySituations.getActiveModifiers(state,atMinute);
+    return factorySituations.applyModifiers({},modifiers).situationEffects;
+  }
+  function quoteMaterial(type,quantity,atMinute=state.gameMinutes){
+    const base=materialSystem.quote(type,quantity,atMinute);
+    return base===null?null:Math.round(base*factory2SituationEffectsAt(atMinute).materialCostFactor*100)/100;
+  }
+  function materialUnitPrice(type,atMinute=state.gameMinutes){
+    const base=materialSystem.pricePerKg(type,atMinute);
+    return base===null?null:base*factory2SituationEffectsAt(atMinute).materialCostFactor;
+  }
+  function tickOrderMarket(atMinute){
+    return orderMarketSystem.tick(state,atMinute,{demandFactor:factory2SituationEffectsAt(atMinute).demandFactor});
+  }
   const programKey=order=>programmingQuality.programKey(order);
   const programReady=order=>!!(programKey(order)&&state.ncPrograms?.[programKey(order)]);
-  const effectiveDuration=order=>Math.max(0,Number(order?.duration)||0)*(1-Math.min(.09,Math.max(0,Number(state.ncPrograms?.[programKey(order)]?.optimizationLevel)||0)*.03));
+  const specialOrderDurationFactor=order=>Array.isArray(order?.mechanics)?order.mechanics.reduce((factor,mechanic)=>factor*(Number.isFinite(mechanic?.durationFactor)?mechanic.durationFactor:1),1):1;
+  const effectiveDuration=order=>Math.max(0,Number(order?.duration)||0)*specialOrderDurationFactor(order)*factory2SituationEffectsAt().durationFactor*(1-Math.min(.09,Math.max(0,Number(state.ncPrograms?.[programKey(order)]?.optimizationLevel)||0)*.03));
   function programTaskFor(key){
     if(state.programmer?.active?.key===key)return state.programmer.active;
     return state.programmer?.queue?.find(task=>task.key===key)||null;
@@ -655,6 +705,9 @@
     const personalityModifier=employees.length
       ? employees.reduce((sum,employee)=>sum+recruitmentSystem.qualityRiskModifier(employee),0)/employees.length
       : 0;
+    const specializationModifier=employees.length
+      ? employees.reduce((sum,employee)=>sum+employeeDevelopment.getEffects(employee,{kind:catalog[machine.type]?.kind}).qualityRisk*100,0)/employees.length
+      : 0;
     const familiarityModifier=employees.length
       ? employees.reduce((sum,employee)=>sum+recruitmentSystem.familiarityQualityRiskModifier(employee,machine.type),0)/employees.length
       : 0;
@@ -665,7 +718,7 @@
       precision:qs?recruitmentSystem.qualityInspectionPrecision(qs):5,
       policy:policyId||qualityPolicyFor(qsShift||1).id
     });
-    return Math.max(2,Math.min(28,Math.round(baseRisk+personalityModifier+familiarityModifier+qsProcessModifier)));
+    return Math.max(2,Math.min(28,Math.round(baseRisk+personalityModifier+specializationModifier+familiarityModifier+qsProcessModifier)));
   }
   const selectedMachine=()=>state.machines.find(m=>m.bay===state.selectedBay);
   const machineAt=bay=>state.machines.find(m=>m.bay===bay);
@@ -799,9 +852,11 @@
     (state.qualityStaff?.['shift'+shift]||[]).reduce((sum,employee)=>sum+qualityHourlyWage(employee,shift),0);
   const productionFactorForShift=(m,shift)=>{
     const employee=assignedEmployee(m,shift);
+    const development=employeeDevelopment.getEffects(employee,{kind:catalog[m.type].kind});
     return catalog[m.type].rate*(1+(m.level-1)*.13)*Math.max(.65,m.maintenance/100*.75+.25)*
       (1+.05*skillLevel(employee))*recruitmentSystem.productionMultiplier(employee,catalog[m.type].kind)*
-      recruitmentSystem.familiarityProductionMultiplier(employee,m.type);
+      recruitmentSystem.familiarityProductionMultiplier(employee,m.type)*
+      (1+development.generalSpeed+development.turningSpeed+development.millingSpeed);
   };
   const productionFactor=m=>productionFactorForShift(m,shiftAt(state.gameMinutes)||1);
   const setupMinutesForOrder=order=>{
@@ -1025,7 +1080,9 @@
     const remainingProduction=hasProduced
       ?Math.max(0,(100-Math.max(0,Number(machine.progress)||0))*duration*6/(100*factor))
       :Math.max(0,(quantity-1)/quantity*duration*6/factor);
-    const resumedSetup=setupMinutesForOrder(interrupted);
+    const flowLot=interrupted.factory2OrderId&&state.productionFlow?.lots.find(lot=>lot.id===interrupted.flowLotId);
+    const restartEstimate=flowLot&&machine.activeOrderSource==='factory2'?productionFlow.estimateRestartSetup(state,flowLot.id):null;
+    const resumedSetup=restartEstimate?.ok?restartEstimate.estimatedRestartSetupMinutes:setupMinutesForOrder(interrupted);
     const finishAt=scheduledWorkCompletionAt(machine,rush.finishAt,resumedSetup+remainingProduction,false,interrupted.workMode||'regular');
     const deadlineAt=Number.isFinite(machine.deadlineAt)?machine.deadlineAt:state.gameMinutes+Math.max(0,Number(interrupted.deadlineHours)||0)*60;
     return {interrupted,rushFinishAt:rush.finishAt,finishAt,deadlineAt,bufferMinutes:deadlineAt-finishAt,
@@ -1935,12 +1992,13 @@
     return false;
   }
   function finishOrder(machine,order,quality=null,completedAt=state.gameMinutes){
+    if(machine.activeOrderSource==='factory2')return finishFactory2MachineStep(machine,order,quality,completedAt);
     const late=machine.deadlineAt!==null&&completedAt>machine.deadlineAt;
     const qualityDiscount=quality?.defectParts&&!quality?.undetected?0.9:1;
     const payout=Math.round(order.reward*(late ? .8 : 1)*qualityDiscount);
     if(!book('income',payout,`Auftrag ${order.id} abgeschlossen`,{orderId:order.id,bay:machine.bay,late,qualityDefectParts:quality?.defectParts||0},null,completedAt).ok)return false;
     if(machine.activeOrderSource==='market'){
-      orderMarketSystem.tick(state,completedAt);
+      tickOrderMarket(completedAt);
       orderMarketSystem.onCompleted(state,order,{late,payout,qualityDefectParts:quality?.defectParts||0});
     }
     if(quality?.defectParts){
@@ -1969,6 +2027,8 @@
       }
     }
     const interrupted=machine.suspendedOrder&&order?.isRushOrder?machine.suspendedOrder:null;
+    const flowRestart=interrupted?.source==='factory2'&&interrupted.order?.flowLotId
+      ?productionFlow.resume(state,interrupted.order.flowLotId,String(machine.bay),completedAt):null;
     machine.activeId=null;machine.activeOrder=null;machine.activeOrderSource=null;machine.progress=0;machine.produced=0;machine.deadlineAt=null;
     machine.setupDurationMinutes=0;machine.setupRemainingMinutes=0;machine.setupDelayMinutes=0;machine.setupPartProduced=false;
     machine.ncProgramPending=false;machine.qualityInspectedOrderId=null;machine.qualityInspectionOrderId=null;
@@ -1987,7 +2047,12 @@
       machine.qualityInspectionPolicy=machine.qualityInspectionOrderId?programmingQuality.inspectionPolicy(saved.qualityInspectionPolicy).id:null;
       machine.ncProgramPending=!programReady(restoredOrder)||!!saved.ncProgramPending;
       if(!machine.ncProgramPending){
-        resumedSetup=beginMachineSetup(machine,restoredOrder);
+        if(flowRestart?.ok){
+          resumedSetup={totalMinutes:flowRestart.restartSetupMinutes,delayMinutes:0};
+          machine.setupDurationMinutes=flowRestart.restartSetupMinutes;
+          machine.setupRemainingMinutes=flowRestart.restartSetupMinutes;
+          machine.setupDelayMinutes=0;
+        }else resumedSetup=beginMachineSetup(machine,restoredOrder);
         machine.progress=alreadyProduced?Math.max(0,Number(saved.progress)||0):0;
         machine.produced=Math.max(0,Number(saved.produced)||0);machine.setupPartProduced=alreadyProduced;
       }else scheduleActiveOrderProgramming(machine,restoredOrder);
@@ -2015,6 +2080,221 @@
     if(programReady(next.order))beginMachineSetup(machine,next.order);else scheduleActiveOrderProgramming(machine,next.order);
     reassessActiveProgrammingRoutes();
     save();renderOrders();return true;
+  }
+  const flowTypeForKind=kind=>kind==='Fräsen'?'milling':'turning';
+  const flowKindForType=type=>type==='milling'?'Fräsen':type==='turning'?'Drehen':null;
+  const flowStepLabel=step=>step?.type==='external'?`Fremdvergabe · ${({turning:'Drehen',milling:'Fräsen',quality:'QS',assembly:'Montage'})[step.operationType]||'Arbeitsgang'}`:
+    ({turning:'Drehen',milling:'Fräsen',quality:'QS',assembly:'Montage',external:'Fremdvergabe'})[step?.type]||'Arbeitsgang';
+  function factory2RouteFor(order,settings){
+    if(Array.isArray(order.routing)&&order.routing.length)return order.routing;
+    const first=flowTypeForKind(order.kind),second=first==='turning'?'milling':'turning';
+    const route=[{type:first,requiredMachineKind:order.kind}];
+    if(settings.routePreset==='mixed')route.push({type:second,requiredMachineKind:flowKindForType(second)});
+    if(settings.routePreset==='outsource')route.push({type:'external',operationType:second,requiredMachineKind:null});
+    if(settings.routePreset!=='single')route.push({type:'quality',requiredMachineKind:null});
+    return route.map((step,index)=>({...step,id:`${order.id}-step-${index+1}`,status:index?'blocked':'queued'}));
+  }
+  function readFactory2OrderSettings(){
+    const settings=state.factory2.orderSettings;
+    const priority=$('cf2-priority')?.value,batchMode=$('cf2-batch-mode')?.value,routePreset=$('cf2-route-preset')?.value;
+    if(['low','normal','high'].includes(priority))settings.priority=priority;
+    if(['auto','small','normal','large'].includes(batchMode))settings.batchMode=batchMode;
+    if(['single','mixed','outsource'].includes(routePreset))settings.routePreset=routePreset;
+    return settings;
+  }
+  function factory2ProjectForOrder(order){
+    const projects=state.customerProjects?.projects||[];
+    return projects.find(project=>project.status==='active'&&project.customer===order.customer&&project.currentPhaseId&&!project.availableDecision&&
+      !Object.entries(state.factory2.projectOrders).some(([orderId,projectId])=>projectId===project.id&&
+        state.productionFlow.lots.some(lot=>lot.orderId===orderId&&lot.status!=='completed'&&lot.status!=='cancelled')))||null;
+  }
+  function factory2RootOrder(lot){return state.productionFlow?.orders?.[lot?.orderId]||null;}
+  function factory2Result(orderId){return state.factory2.orderResults[orderId]||(state.factory2.orderResults[orderId]={paid:0,completedLots:0,qualityDefectParts:0,late:false});}
+  function finishFactory2Order(order,lot,quality,completedAt,completeResult){
+    const orderId=order.factory2OrderId||order.id,root=state.productionFlow.orders[orderId]||order;
+    const result=factory2Result(orderId);
+    if(result.paidLotIds?.includes(lot.id))return false;
+    const late=Number.isFinite(order.deadlineAt)&&completedAt>order.deadlineAt;
+    const qualityDiscount=quality?.defectParts&&!quality?.undetected?0.9:1;
+    const orderLots=state.productionFlow.lots.filter(item=>item.orderId===orderId)
+      .sort((left,right)=>left.sequence-right.sequence||String(left.id).localeCompare(String(right.id)));
+    const lotIndex=orderLots.findIndex(item=>item.id===lot.id);
+    const quantityBefore=orderLots.slice(0,Math.max(0,lotIndex)).reduce((sum,item)=>sum+item.qty,0);
+    const totalQty=Math.max(1,Number(root.qty)||0),totalRewardCents=Math.round((Number(root.reward)||0)*100);
+    const baseCents=Math.round(totalRewardCents*(quantityBefore+lot.qty)/totalQty)-Math.round(totalRewardCents*quantityBefore/totalQty);
+    const payoutCents=Math.round(baseCents*(late?0.8:1)*qualityDiscount),payout=payoutCents/100;
+    const booking=book('income',payout,`Auftrag ${orderId} · Los ${lot.sequence} abgeschlossen`,{orderId,bay:order.bay,lotId:lot.id,late,qualityDefectParts:quality?.defectParts||0},`factory2-income:${lot.id}`,completedAt);
+    if(!booking.ok)return false;
+    result.paidLotIds=Array.isArray(result.paidLotIds)?result.paidLotIds:[];result.paidLotIds.push(lot.id);
+    result.paid+=payout;result.completedLots+=1;result.qualityDefectParts+=quality?.defectParts||0;result.late=result.late||late;
+    if(quality?.defectParts){
+      const complaintId=`quality_complaint:${orderId}`;
+      const existing=state.pendingQualityComplaints.find(item=>item.id===complaintId);
+      if(existing)existing.defectParts+=quality.defectParts;
+      else state.pendingQualityComplaints.push({id:complaintId,dueAt:completedAt+12*60,order:{...root},customer:root.customer,bay:order.bay,defectParts:quality.defectParts,riskPct:quality.riskPct,undetected:!!quality.undetected});
+    }
+    if(!completeResult?.orderCompleted)return true;
+    tickOrderMarket(completedAt);
+    orderMarketSystem.onCompleted(state,root,{late:result.late,payout:result.paid,qualityDefectParts:result.qualityDefectParts});
+    const projectId=root.projectId||state.factory2.projectOrders[orderId];
+    if(projectId){
+      const project=customerProjects.getById(state,projectId);
+      if(project?.status==='active'&&project.currentPhaseId){
+        const defectRate=Math.min(1,result.qualityDefectParts/Math.max(1,Number(root.qty)||1));
+        const performance=Math.max(-1,Math.min(1,(result.late?-0.35:0.35)-defectRate*1.5));
+        const phaseCompletion=customerProjects.completePhase(state,projectId,project.currentPhaseId,
+          {performance,qualityDefectParts:result.qualityDefectParts,late:result.late,payout:result.paid},completedAt);
+        if(phaseCompletion.ok)renderFactory2Panel();
+      }
+    }
+    renderOrders();renderBusiness();
+    return true;
+  }
+  function clearFactory2Machine(machine){
+    machine.activeId=null;machine.activeOrder=null;machine.activeOrderSource=null;machine.progress=0;machine.produced=0;machine.deadlineAt=null;
+    machine.setupDurationMinutes=0;machine.setupRemainingMinutes=0;machine.setupDelayMinutes=0;machine.setupPartProduced=false;
+    machine.ncProgramPending=false;machine.qualityInspectedOrderId=null;machine.qualityInspectionOrderId=null;
+    machine.qualityInspectionRemainingMinutes=0;machine.qualityInspectionTotalMinutes=0;machine.qualityInspectionPolicy=null;
+  }
+  function finishFactory2MachineStep(machine,order,quality,completedAt){
+    const activeLot=state.productionFlow.lots.find(item=>item.id===order.flowLotId);
+    if(activeLot){activeLot.lastMachineBay=machine.bay;activeLot.progress=machine.progress;activeLot.qtyCompleted=Math.min(activeLot.qty,Math.max(0,Number(machine.produced)||0));}
+    const flowResult=productionFlow.completeStep(state,order.flowLotId,order.flowRouteStepId,completedAt);
+    if(!flowResult.ok)return false;
+    const lot=flowResult.lot;
+    clearFactory2Machine(machine);
+    if(lot?.status==='completed')finishFactory2Order(order,lot,quality||lot.qualityInspection?.result||null,completedAt,flowResult);
+    save();renderOrders();renderBusiness();
+    const nextStep=lot&&factory2RootOrder(lot)?.routing?.[lot.routePosition];
+    say(lot?.status==='completed'?`${order.part} · Los ${lot.sequence} (${lot.qty} Teile) vollständig abgeschlossen.`:
+      `Platz ${machine.bay}: ${flowStepLabel(order.flowRouteStep)} abgeschlossen${nextStep?` · weiter mit ${flowStepLabel(nextStep)}`:''}.`,'production');
+    return true;
+  }
+  function startFactory2QualityLots(atMinute){
+    const shift=shiftAt(atMinute),inspector=shift?qualityEmployee(shift):null;
+    if(!inspector)return false;
+    if(state.productionFlow.lots.some(lot=>lot.status==='running'&&factory2RootOrder(lot)?.routing?.[lot.routePosition]?.type==='quality'))return false;
+    const started=productionFlow.startNext(state,'QS','QS',atMinute);
+    if(!started.ok)return false;
+    const lot=state.productionFlow.lots.find(item=>item.id===started.lot.id);
+    if(!lot)return false;
+    const root=factory2RootOrder(lot),step=root?.routing?.[lot.routePosition],policy=qualityPolicyFor(shift);
+    const inspectionMinutes=programmingQuality.inspectionMinutes({order:{...root,qty:lot.qty},policy:policy.id});
+    lot.qualityInspection={status:'running',policy:policy.id,shift,inspectorId:inspector.id,
+      totalMinutes:inspectionMinutes,remainingMinutes:inspectionMinutes,
+      startedAtMinute:atMinute,routeStepId:step?.id||lot.routeStepId,result:null};
+    return true;
+  }
+  function factory2QualityResult(lot,atMinute,shift,inspector){
+    const root=factory2RootOrder(lot),machine=machineAt(lot.lastMachineBay)||state.machines[0];
+    if(!root||!machine)return {defectParts:0,riskPct:0,undetected:false,inspectorId:inspector?.id||null};
+    const order={...root,id:root.id,qty:lot.qty,reward:(Number(root.reward)||0)*lot.qty/Math.max(1,root.qty),deadlineAt:root.deadlineAt};
+    const work=lot.qualityInspection||{},policy=programmingQuality.inspectionPolicy(work.policy).id;
+    const riskPct=qualityRiskFor(machine,order,policy,shift),defects=programmingQuality.defectParts(order,riskPct,Math.random());
+    const detectionChance=qualityDetectionChance(machine,shift,policy),detected=defects>0&&Math.random()<detectionChance;
+    const quality={defectParts:defects,riskPct,undetected:defects>0&&!detected,inspectorId:inspector?.id||null,policy,completedAtMinute:atMinute};
+    if(inspector){
+      state.qualityAssurance.inspections+=1;
+      if(defects>0&&detected)state.qualityAssurance.caughtDefects+=defects;
+      else if(defects>0)state.qualityAssurance.escapedDefects+=defects;
+      const recent={orderId:root.id,part:root.part,inspector:inspector.name,
+        result:detected?`${defects} Fehlerteil${defects===1?'':'e'} entdeckt · Prüfung abgeschlossen`:'Geprüft und freigegeben',at:atMinute};
+      state.qualityAssurance.recentChecks.unshift(recent);state.qualityAssurance.recentChecks.length=Math.min(6,state.qualityAssurance.recentChecks.length);
+    }
+    return quality;
+  }
+  function processFactory2QualityLots(step,shift,worked){
+    if(!shift)return;
+    const capacityKey='shift'+shift;
+    const inspector=qualityEmployee(shift);
+    if(!inspector||worked.has(capacityKey))return;
+    const lot=state.productionFlow.lots.find(item=>item.status==='running'&&factory2RootOrder(item)?.routing?.[item.routePosition]?.type==='quality');
+    if(!lot)return;
+    const work=lot.qualityInspection||(lot.qualityInspection={status:'running',policy:qualityPolicyFor(shift).id,shift,inspectorId:inspector.id,
+      totalMinutes:programmingQuality.inspectionMinutes({order:{...factory2RootOrder(lot),qty:lot.qty},policy:qualityPolicyFor(shift).id}),
+      remainingMinutes:programmingQuality.inspectionMinutes({order:{...factory2RootOrder(lot),qty:lot.qty},policy:qualityPolicyFor(shift).id}),
+      startedAtMinute:state.gameMinutes,routeStepId:lot.routeStepId,result:null});
+    if(work.status!=='running'||!Number.isFinite(work.remainingMinutes))return;
+    work.shift=shift;work.inspectorId=inspector.id;work.remainingMinutes=Math.max(0,work.remainingMinutes-step);
+    state.qualityAssurance.inspectionMinutes+=step;
+    inspector.xp=Math.round((inspector.xp+step*recruitmentSystem.qualityLearningMultiplier(inspector))*1000)/1000;
+    worked.add(capacityKey);
+    if(work.remainingMinutes>1e-8)return;
+    work.remainingMinutes=0;work.status='completed';
+    work.result=factory2QualityResult(lot,state.gameMinutes+step,shift,inspector);
+    const completed=productionFlow.completeStep(state,lot.id,lot.routeStepId,state.gameMinutes+step);
+    if(!completed.ok){work.status='running';return;}
+    lot.status=completed.lot.status;lot.routePosition=completed.lot.routePosition;lot.routeStepId=completed.lot.routeStepId;
+    lot.routeStepType=completed.lot.routeStepType;lot.requiredMachineKind=completed.lot.requiredMachineKind;
+    if(completed.lot.status==='completed')finishFactory2Order(factory2RootOrder(lot),lot,work.result,state.gameMinutes+step,completed);
+    save();renderOrders();renderBusiness();
+  }
+  function startFactory2Lot(machine,atMinute){
+    if(job(machine)||machine.suspendedOrder||machine.orderQueue.length||machine.qualityReworkQueue.length||machine.maintenanceRemainingMinutes>0||machine.maintenance<8||machine.tool<1||!breakdownSystem.canContinueProduction(state,machine.bay))return false;
+    const kind=catalog[machine.type]?.kind;if(!kind)return false;
+    const started=productionFlow.startNext(state,String(machine.bay),kind,atMinute);
+    if(!started.ok)return false;
+    const lot=started.lot,root=factory2RootOrder(lot),step=root?.routing?.[lot.routePosition];
+    if(!root||!step){return false;}
+    const deadlineAt=Number.isFinite(root.deadlineAt)?root.deadlineAt:atMinute+Math.max(1,Number(root.deadlineHours)||1)*60;
+    const lotOrder={...root,id:root.id,qty:lot.qty,reward:(Number(root.reward)||0)*lot.qty/Math.max(1,root.qty),kind:step.requiredMachineKind||root.kind,
+      deadlineAt,bay:machine.bay,factory2:true,factory2OrderId:root.id,flowLotId:lot.id,flowRouteStepId:step.id,flowRouteType:step.type};
+    machine.activeId=root.id;machine.activeOrder=lotOrder;machine.activeOrderSource='factory2';machine.deadlineAt=deadlineAt;
+    machine.progress=0;machine.produced=0;machine.qualityInspectedOrderId=null;machine.qualityInspectionOrderId=null;
+    machine.qualityInspectionRemainingMinutes=0;machine.qualityInspectionTotalMinutes=0;machine.qualityInspectionPolicy=null;
+    machine.ncProgramPending=!programReady(lotOrder);
+    if(programReady(lotOrder))beginMachineSetup(machine,lotOrder);else scheduleActiveOrderProgramming(machine,lotOrder);
+    return true;
+  }
+  function startFactory2Lots(atMinute=state.gameMinutes){
+    if(!factory2Systems)return;
+    startFactory2QualityLots(atMinute);
+    for(const machine of state.machines.slice().sort((a,b)=>a.bay-b.bay))startFactory2Lot(machine,atMinute);
+  }
+  function releaseFactory2SupplierJob(job){
+    const lot=state.productionFlow.lots.find(item=>item.id===job.lotId),order=lot&&factory2RootOrder(lot),step=order?.routing?.[lot.routePosition];
+    if(!lot||!['waiting','queued','outsourced'].includes(lot.status)||step?.type!=='external'||step.id!==job.routeStepId)return false;
+    if(['waiting','queued'].includes(lot.status)){
+      const handed=productionFlow.outsourceLot(state,lot.id,job.id,job.outsourcedAtMinute);
+      if(!handed.ok){state.factory2.pendingSupplierRelease[job.id]=true;return false;}
+    }else if(lot.supplierJobId!==job.id)return false;
+    if(!state.factory2.paidSupplierJobIds.includes(job.id)){
+      const chargeKey=`factory2-supplier:${job.id}`;
+      const alreadyBooked=state.finance.transactions.some(entry=>entry.category==='other'&&entry.meta?.aggregateKey===chargeKey);
+      if(!alreadyBooked){
+        const paid=book('other',-job.cost,`Fremdvergabe ${job.orderId} · Los ${lot.sequence}`,{orderId:job.orderId,lotId:lot.id,supplierJobId:job.id,providerId:job.providerId,routeStepId:job.routeStepId},chargeKey,job.outsourcedAtMinute);
+        if(!paid.ok){state.factory2.pendingSupplierRelease[job.id]=true;return false;}
+      }
+      state.factory2.paidSupplierJobIds.push(job.id);
+    }
+    delete state.factory2.pendingSupplierRelease[job.id];delete state.factory2.pendingSupplierQuotes[lot.id];
+    return true;
+  }
+  function finishFactory2Delivery(job,atMinute){
+    if(!state.factory2.paidSupplierJobIds.includes(job.id))return false;
+    const lot=state.productionFlow.lots.find(item=>item.id===job.lotId),order=lot&&factory2RootOrder(lot),step=order?.routing?.[lot.routePosition];
+    if(!lot||lot.status!=='outsourced'||lot.supplierJobId!==job.id||step?.type!=='external'||step.id!==job.routeStepId)return false;
+    const result=job.status==='completed'?{ok:true,job}:suppliers.completeJob(state,job.id,{deliveredAtMinute:atMinute,quality:job.qualityRisk>.2?'rework':'accepted'});
+    if(!result.ok)return false;
+    const completed=productionFlow.completeOutsourcedStep(state,job.lotId,job.routeStepId,job.id,atMinute);
+    if(!completed.ok){state.factory2.pendingSupplierDelivery[job.id]=true;return false;}
+    delete state.factory2.pendingSupplierDelivery[job.id];
+    if(completed.lot.status==='completed')finishFactory2Order(factory2RootOrder(completed.lot),completed.lot,null,atMinute,completed);
+    if(result.job.timing==='late'||result.job.outcome.quality!=='accepted')orderMarketSystem.adjustReputation(state,state.productionFlow.orders[job.orderId]?.customer,-2);
+    return true;
+  }
+  function tickFactory2Systems(atMinute){
+    if(!factory2Systems)return;
+    productionFlow.tick(state,atMinute);suppliers.tick(state,atMinute);factorySituations.tick(state,atMinute);
+    const blockedProjectIds=new Set(Object.entries(state.factory2.projectOrders).flatMap(([orderId,projectId])=>
+      state.productionFlow.lots.some(lot=>lot.orderId===orderId&&!['completed','cancelled'].includes(lot.status))?[projectId]:[]));
+    const projectTick=customerProjects.tick(state,atMinute,{blockedProjectIds:[...blockedProjectIds]});
+    if(projectTick.ok&&projectTick.completed.length){save();renderFactory2Panel();}
+    for(const job of state.suppliers.jobs){
+      if(state.factory2.pendingSupplierRelease[job.id])releaseFactory2SupplierJob(job);
+      if(['due','overdue','completed'].includes(job.status))finishFactory2Delivery(job,atMinute);
+    }
+    startFactory2Lots(atMinute);
   }
   function processQualityRework(machine,step,shift){
     const task=machine.qualityReworkQueue[0];
@@ -2355,13 +2635,15 @@
     })));
     $('orders').replaceChildren(...offers.map(o=>{
       const card=document.createElement('article');
-      const running=state.machines.find(x=>x.activeId===o.id||x.orderQueue.some(entry=>entry.order.id===o.id));
+      const routeLots=(state.productionFlow?.lots||[]).filter(lot=>lot.orderId===o.id&&lot.status!=='completed'&&lot.status!=='cancelled');
+      const running=state.machines.find(x=>x.activeId===o.id||x.orderQueue.some(entry=>entry.order.id===o.id))||
+        (routeLots.length?{bay:routeLots.find(lot=>lot.status==='running')?.machineId||null,produced:routeLots.reduce((sum,lot)=>sum+lot.qtyCompleted,0),flow:true}:null);
       const compatibleMachines=state.machines.filter(machine=>compatible(machine,o));
       card.className='card'+(state.selected===o.id?' selected':'')+(running?' running':'')+(!compatibleMachines.length&&!running?' incompatible':'');
       const customerType=o.customerType?`${o.customerType} · `:'';
       const difficulty=Number.isFinite(o.difficulty)?` · Schwierigkeit ${o.difficulty}/5`:'';
       const materialType=materialSystem.typeForOrder(o),materialKg=materialSystem.requiredKg(o);
-      const materialPrice=materialType?materialSystem.pricePerKg(materialType,state.gameMinutes):null;
+      const materialPrice=materialType?materialUnitPrice(materialType,state.gameMinutes):null;
       const materialCost=Number.isFinite(materialPrice)&&Number.isFinite(materialKg)?materialPrice*materialKg:null;
       const materialContribution=Number.isFinite(materialCost)?o.reward-materialCost:null;
       const baseMachineRate=o.kind==='Fräsen'?catalog.mill3.rate:catalog.standard.rate;
@@ -2435,7 +2717,7 @@
         withdraw.addEventListener('click',event=>{event.stopPropagation();withdrawRushOrder(o.id);});
         card.append(withdraw);
       }
-      button.textContent=running?'Bereits eingeplant':!state.machines.length?'Zuerst Maschine kaufen':!compatibleMachines.length?`Benötigt ${o.kind}`:shortage>1e-9?`Fehlen ${Math.ceil(shortage)} kg ${o.material}`:!machineReady?allQueuesFull?'Planung voll (3/3)':'Maschinenservice nötig':'Auftrag annehmen';
+      button.textContent=running?(running.flow?'Bereits in der Produktionskette':'Bereits eingeplant'):!state.machines.length?'Zuerst Maschine kaufen':!compatibleMachines.length?`Benötigt ${o.kind}`:shortage>1e-9?`Fehlen ${Math.ceil(shortage)} kg ${o.material}`:!machineReady?allQueuesFull?'Planung voll (3/3)':'Maschinenservice nötig':'Auftrag annehmen';
       button.disabled=!state.machines.length||!!running||!compatibleMachines.length||shortage>1e-9||!machineReady;
       button.addEventListener('click',event=>{event.stopPropagation();openOrderMachineChooser(o.id);});
       card.append(button);
@@ -2444,6 +2726,110 @@
     }));
     updateOrderCountdowns();
     renderOrderMachineChooser();
+    renderFactory2Panel();
+  }
+  function createFactory2Row(titleText,detailText){
+    const row=document.createElement('article'),title=document.createElement('strong'),detail=document.createElement('p');
+    row.className='factory2-row';title.textContent=titleText;detail.textContent=detailText;row.append(title,detail);return row;
+  }
+  function generateFactory2SpecialOrder(){
+    if(state.orderMarket.available.length>=8){say('Die Auftragsbörse ist voll. Nimm erst einen Auftrag an.');return false;}
+    const customer=$('cf2-project-customer').value||'Veltraxis Mobility';
+    const profile=orderMarketSystem.getCustomerIdentity(customer);
+    const generated=factorySituations.generateSpecialOrder(state,{...profile,customer},{atMinute:state.gameMinutes});
+    if(!generated||!generated.id)return false;
+    const materialType=Object.hasOwn(materialSystem.catalog,generated.materialType)?generated.materialType:'aluminium6082';
+    const offer={...generated,materialType,material:materialSystem.catalog[materialType].label,kg:Math.ceil(generated.materialAmountKg),
+      createdAt:state.gameMinutes,expiresAt:state.gameMinutes+24*60,deadlineAt:state.gameMinutes+generated.deadlineHours*60};
+    state.orderMarket.available.push(offer);state.factory2.specialOrderIds.push(offer.id);
+    save();renderOrders();say(`Spezialauftrag ${offer.id} erstellt · ${offer.mechanics.map(item=>item.label).join(' · ')}.`);return true;
+  }
+  function createFactory2Project(){
+    const customer=$('cf2-project-customer').value||'Veltraxis Mobility',identity=orderMarketSystem.getCustomerIdentity(customer);
+    const project=customerProjects.create(state,{...identity,customer,reputation:orderMarketSystem.getReputation(state)[customer]},
+      {size:$('cf2-project-size').value||'medium',atMinute:state.gameMinutes});
+    if(!project?.id){say('Das Kundenprojekt konnte nicht gestartet werden.');return false;}
+    save();renderFactory2Panel();say(`${customer}: Projekt „${project.phases[0]?.name||'Prototyp'}“ gestartet. Der nächste passende Auftrag wird dieser Phase zugeordnet.`);return true;
+  }
+  function renderFactory2Panel(){
+    if(!factory2Systems)return;
+    const settings=state.factory2.orderSettings;
+    $('cf2-priority').value=settings.priority;$('cf2-batch-mode').value=settings.batchMode;$('cf2-route-preset').value=settings.routePreset;
+    const activeSnapshot=factorySituations.getSnapshot(state,state.gameMinutes);
+    $('cf2-situation-list').replaceChildren(...[...activeSnapshot.active,...activeSnapshot.scheduled].map(item=>
+      createFactory2Row(`${item.status==='active'?'Aktiv':'Vorschau'} · ${item.label}`,`${item.description} · ${item.status==='active'?'endet in '+formatEstimateMinutes(item.remainingMinutes):'Start in '+formatEstimateMinutes(item.startsInMinutes)}`)));
+    if(!activeSnapshot.active.length&&!activeSnapshot.scheduled.length)$('cf2-situation-list').replaceChildren(createFactory2Row('Keine Sonderlage aktiv','Markt- und Betriebslagen erscheinen gelegentlich und gelten nur für ihren angezeigten Zeitraum.'));
+
+    const liveLots=state.productionFlow.lots.filter(lot=>!['completed','cancelled'].includes(lot.status));
+    $('cf2-flow-list').replaceChildren(...(liveLots.length?liveLots.map(lot=>{
+      const order=factory2RootOrder(lot),step=order?.routing?.[lot.routePosition],row=document.createElement('article');
+      row.className='factory2-row';
+      const title=document.createElement('strong'),detail=document.createElement('p'),controls=document.createElement('div');
+      title.textContent=`${order?.part||lot.orderId} · Los ${lot.sequence} · ${lot.qty} Teile`;
+      detail.textContent=`${flowStepLabel(step)} · ${lot.status==='queued'?'Warteschlange':lot.status==='running'?'in Arbeit':lot.status==='outsourced'?'beim Zulieferer':lot.status}`;
+      controls.className='factory2-actions';
+      const priority=document.createElement('select');priority.setAttribute('aria-label',`Priorität ${order?.part||lot.orderId}`);
+      for(const [value,label] of [['low','Niedrig'],['normal','Normal'],['high','Hoch']]){const option=document.createElement('option');option.value=value;option.textContent=label;priority.append(option);}
+      priority.value=lot.priority;priority.disabled=!['queued','waiting'].includes(lot.status);
+      priority.addEventListener('change',()=>{productionFlow.setPriority(state,lot.orderId,priority.value);save();renderFactory2Panel();});
+      controls.append(priority);row.append(title,detail,controls);return row;
+    }):[createFactory2Row('Noch keine Produktionskette','Nimm ein Angebot an, um Route und Teillose zu planen.')]));
+
+    const supplierRows=[];
+    for(const lot of liveLots){
+      const order=factory2RootOrder(lot),step=order?.routing?.[lot.routePosition];
+      if(!order||step?.type!=='external')continue;
+      if(lot.status==='outsourced'){
+        const job=state.suppliers.jobs.find(item=>item.id===lot.supplierJobId);
+        supplierRows.push(createFactory2Row(`${order.part} · Los ${lot.sequence} beim Zulieferer`,job?`${job.status==='overdue'?'Verspätet':job.status==='due'?'Lieferung fällig':'In Bearbeitung'} · ${formatEstimateMinutes(Math.max(0,job.dueAtMinute-state.gameMinutes))} bis Termin · ${euro(job.cost)}`:'Lieferung wird geprüft.'));
+        continue;
+      }
+      if(!['queued','waiting'].includes(lot.status))continue;
+      const operation=step.operationType||step.externalOperationType||step.requiredMachineKind;
+      const providerResult=suppliers.listProviders(state,operation),providers=providerResult.ok?providerResult.providers:[];
+      const row=document.createElement('article'),title=document.createElement('strong'),detail=document.createElement('p'),actions=document.createElement('div'),providerSelect=document.createElement('select'),quoteButton=document.createElement('button');
+      row.className='factory2-row';title.textContent=`${order.part} · Los ${lot.sequence} · ${operation}`;
+      const savedQuoteId=state.factory2.pendingSupplierQuotes[lot.id],quote=savedQuoteId&&state.suppliers.quotes[savedQuoteId];
+      detail.textContent=quote?`Angebot: ${euro(quote.totalCost)} · ${formatEstimateMinutes(quote.leadTimeMinutes)} · Qualitätsrisiko ${Math.round(quote.qualityRisk*100)} % · Zuverlässigkeit ${Math.round(quote.reliabilityRange.min*100)}–${Math.round(quote.reliabilityRange.max*100)} %`:`${lot.qty} Teile · Wähle einen Anbieter, um Preis, Lieferzeit und Risiko zu prüfen.`;
+      providerSelect.setAttribute('aria-label',`Zulieferer für Los ${lot.sequence}`);
+      for(const provider of providers){const option=document.createElement('option');option.value=provider.id;option.textContent=`${provider.name} · ${provider.leadTimeMinutes/60} h Richtzeit`;providerSelect.append(option);}
+      providerSelect.value=quote?.providerId||providers[0]?.id||'';
+      providerSelect.disabled=!providers.length;
+      quoteButton.type='button';quoteButton.className='action';quoteButton.textContent=savedQuoteId?'Angebot aktualisieren':'Angebot prüfen';quoteButton.disabled=!providers.length;
+      quoteButton.addEventListener('click',()=>{
+        const quoteResult=suppliers.quote(state,providerSelect.value,order,{routeStep:step,routeStepId:step.id,lotId:lot.id,operationType:operation,qty:lot.qty,atMinute:state.gameMinutes});
+        if(!quoteResult.ok){say(`Angebot konnte nicht erstellt werden (${quoteResult.code}).`);return;}
+        state.factory2.pendingSupplierQuotes[lot.id]=quoteResult.quoteId;save();renderFactory2Panel();
+      });
+      actions.className='factory2-actions';actions.append(providerSelect,quoteButton);
+      if(quote){
+        const award=document.createElement('button');award.type='button';award.className='action';award.textContent=`Beauftragen · ${euro(quote.totalCost)}`;award.disabled=state.money<quote.totalCost;
+        award.addEventListener('click',()=>outsourceFactory2Lot(lot,quote.providerId,quote));actions.append(award);
+      }
+      row.append(title,detail,actions);supplierRows.push(row);
+    }
+    $('cf2-supplier-list').replaceChildren(...(supplierRows.length?supplierRows:[createFactory2Row('Keine Fremdvergabe offen','Routenschritte mit Fremdvergabe erscheinen hier mit Anbieterangebot und sichtbarem Risiko.')]));
+
+    const projects=state.customerProjects.projects;
+    $('cf2-project-list').replaceChildren(...(projects.length?projects.map(project=>{
+      const row=document.createElement('article'),title=document.createElement('strong'),detail=document.createElement('p');row.className='factory2-row';
+      title.textContent=`${project.customer} · ${project.size==='small'?'Klein':project.size==='large'?'Groß':'Mittel'} · ${project.status==='completed'?'abgeschlossen':project.status==='active'?'aktiv':'pausiert'}`;
+      detail.textContent=`${project.phases.map(phase=>`${phase.name}: ${phase.status==='completed'?'fertig':phase.status==='active'?'läuft':phase.status==='available'?'Entscheidung offen':'geplant'}`).join(' · ')} · Risiko ${Math.round((project.metrics?.risk||0)*100)} % · Erwarteter Projektertrag ${euro(project.metrics?.expectedProfit||0)}`;
+      row.append(title,detail);
+      const decision=customerProjects.getAvailableDecision(state,project.id);
+      if(decision){const prompt=document.createElement('p');prompt.textContent=decision.prompt;row.append(prompt);for(const option of decision.options){const button=document.createElement('button');button.type='button';button.className='action';button.textContent=`${option.label} · ${option.description}`;button.addEventListener('click',()=>{const chosen=customerProjects.chooseDecision(state,project.id,option.id,state.gameMinutes);if(chosen.ok){save();renderFactory2Panel();say(`${project.customer}: Entscheidung „${option.label}“ übernommen.`);}});row.append(button);}}
+      return row;
+    }):[createFactory2Row('Noch kein Kundenprojekt','Starte ein Projekt und verknüpfe den nächsten passenden Kundenauftrag mit seiner aktuellen Phase.')]));
+  }
+  function outsourceFactory2Lot(lot,providerId,quote){
+    const order=factory2RootOrder(lot),step=order?.routing?.[lot.routePosition];
+    if(!order||step?.type!=='external'||!['waiting','queued'].includes(lot.status)||state.money<quote.totalCost)return false;
+    const created=suppliers.outsource(state,providerId,order.id,step.id,lot.qty,state.gameMinutes,{quoteId:quote.quoteId,lotId:lot.id});
+    if(!created.ok){say(`Fremdvergabe nicht möglich (${created.code}).`);return false;}
+    if(!releaseFactory2SupplierJob(state.suppliers.jobs.find(item=>item.id===created.job.id))){save();renderFactory2Panel();say('Auftrag und Zahlung werden für die Fremdvergabe erneut abgeglichen.');return false;}
+    save();renderFactory2Panel();renderOrders();
+    say(`${quote.providerId}: Los ${lot.sequence} beauftragt · ${euro(quote.totalCost)} · Lieferung in ${formatEstimateMinutes(quote.leadTimeMinutes)}.`);
+    return true;
   }
   function machineOrderBlockReason(machine,order){
     if(!compatible(machine,order))return `Benötigt ${order.kind}`;
@@ -2557,8 +2943,8 @@
   }
   function renderMaterialPrice(){
     const type=state.selectedMaterialType,quantity=selectedMaterialQuantity();
-    const price=materialSystem.quote(type,quantity,state.gameMinutes);
-    const unitPrice=materialSystem.pricePerKg(type,state.gameMinutes);
+    const price=quoteMaterial(type,quantity,state.gameMinutes);
+    const unitPrice=materialUnitPrice(type,state.gameMinutes);
     const day=Math.max(0,Math.floor(state.gameMinutes/1440));
     const boardKey=day+':'+type;
     if(boardKey!==lastMarketBoardKey){
@@ -2568,10 +2954,10 @@
         const change=Math.round((materialSystem.marketMultiplier(key,state.gameMinutes)-1)*100);
         const status=change<=-8?'Günstig':change>=8?'Teuer':'Normal';
         row.type='button';row.className=`market-row ${status.toLowerCase()}${key===type?' selected':''}`;
-        row.setAttribute('aria-label',`${item.label}: ${euroExact(materialSystem.pricePerKg(key,state.gameMinutes))} pro kg, ${status}, ${change>=0?'+':''}${change} Prozent zum Grundpreis`);
+        row.setAttribute('aria-label',`${item.label}: ${euroExact(materialUnitPrice(key,state.gameMinutes))} pro kg, ${status}, ${change>=0?'+':''}${change} Prozent zum Grundpreis`);
         row.setAttribute('aria-pressed',String(key===type));
         name.className='market-name';name.textContent=item.label;
-        unit.textContent=euroExact(materialSystem.pricePerKg(key,state.gameMinutes))+'/kg';
+        unit.textContent=euroExact(materialUnitPrice(key,state.gameMinutes))+'/kg';
         rating.textContent=`${status} ${change>=0?'+':''}${change} %`;
         row.append(name,unit,rating);
         row.addEventListener('click',()=>{state.selectedMaterialType=key;save();renderMaterialPrice();});
@@ -2581,7 +2967,7 @@
       const base=materialSystem.catalog[type].pricePer100Kg/100;
       const history=[];
       for(let index=Math.max(0,day-6);index<=day;index++){
-        const unit=materialSystem.pricePerKg(type,index*1440);
+        const unit=materialUnitPrice(type,index*1440);
         const row=document.createElement('div'),label=document.createElement('span');
         const track=document.createElement('div'),fill=document.createElement('div'),value=document.createElement('span');
         row.className='history-row'+(index===day?' current':'');
@@ -2866,6 +3252,29 @@
     $('employee-card-personal').textContent=personalItems.length
       ?personalItems.map(item=>`${item.icon||''} ${item.label}`.trim()).join(' · ')
       :'Noch keine persönlichen Gegenstände am Arbeitsplatz.';
+
+    const assignedSpecializations=Array.isArray(employee.specializations)?employee.specializations:[];
+    const specLabels={turning:'Drehtechnik',milling:'Frästechnik',precision:'Präzisionsarbeit',learning:'Prozesslernen'};
+    const effects=employeeDevelopment.getEffects(employee,{kind:catalog[machine.type]?.kind});
+    const effectParts=[];
+    if(effects.turningSpeed)effectParts.push(`Drehen +${Math.round(effects.turningSpeed*100)} %`);
+    if(effects.millingSpeed)effectParts.push(`Fräsen +${Math.round(effects.millingSpeed*100)} %`);
+    if(effects.qualityRisk)effectParts.push(`QS-Risiko ${Math.round(effects.qualityRisk*100)} %`);
+    if(effects.learning)effectParts.push(`Lernen +${Math.round(effects.learning*100)} %`);
+    if(effects.generalSpeed)effectParts.push(`allgemeines Tempo +${Math.round(effects.generalSpeed*100)} %`);
+    $('employee-specializations').textContent=assignedSpecializations.length
+      ?`${assignedSpecializations.map(id=>specLabels[id]||id).join(' · ')}${effectParts.length?` · ${effectParts.join(' · ')}`:''}`
+      :`Noch keine Spezialisierung.${effectParts.length?` Mögliche Wirkung: ${effectParts.join(' · ')}.`:''}`;
+    const progression={xp:Math.max(0,Number(employee.xp)||0)};
+    const available=employeeDevelopment.getAvailableSpecializations(employee,progression);
+    const specializationSelect=$('employee-specialization');
+    specializationSelect.replaceChildren(...available.map(id=>{
+      const option=document.createElement('option');option.value=id;option.textContent=specLabels[id]||id;return option;
+    }));
+    $('employee-specialization-assign').disabled=!available.length;
+    $('employee-specialization-hint').textContent=assignedSpecializations.length>=2?'Maximal zwei Spezialisierungen erreicht.':progression.xp<employeeDevelopment.FIRST_UNLOCK_XP
+      ?`Erste Spezialisierung ab ${employeeDevelopment.FIRST_UNLOCK_XP} Erfahrungspunkten; die zweite ab ${employeeDevelopment.SECOND_UNLOCK_XP}.`
+      :available.length?'Persönlichkeit und Erfahrung bestimmen die verfügbaren Schwerpunkte.':'Für die zweite Spezialisierung ist mehr Erfahrung nötig.';
 
     let conversation=$('employee-card-conversation');
     if(!conversation){
@@ -4266,7 +4675,7 @@
     renderDetailWorkplace(m);
   }
   function startOrder(id,bay,options={}){
-    orderMarketSystem.tick(state,state.gameMinutes);
+    tickOrderMarket(state.gameMinutes);
     const o=orderMarketSystem.getAvailable(state).find(order=>order.id===id),m=state.machines.find(machine=>machine.bay===Number(bay));
     if(!o||!m||(!options.interrupt&&m.orderQueue.length>=MAX_QUEUED_ORDERS)||state.machines.some(x=>x.activeId===id||x.orderQueue.some(entry=>entry.order.id===id))){if(!options.automatic)say('Dieses Angebot ist nicht mehr verfügbar oder die Auftragsplanung ist voll.');return false;}
     if(options.interrupt&&(!job(m)||m.suspendedOrder)){if(!options.automatic)say('Der laufende Auftrag kann auf dieser Maschine nicht unterbrochen werden.');return false;}
@@ -4276,11 +4685,49 @@
       if(!options.automatic){say(`Es fehlen ${Math.ceil(requiredMaterial-availableMaterial)} kg ${o.material}.`);tab('warehouse');}return false;
     }
     if(m.maintenance<8||m.tool<1){if(!options.automatic){say('Vorher Werkzeug oder Wartung erneuern.');tab('machine');}return false;}
+    let factory2Settings=null,factory2Snapshot=null,factory2Project=null,factory2Preflight=null;
+    if(factory2Systems&&!options.interrupt){
+      factory2Settings=readFactory2OrderSettings();
+      const modifiers=factorySituations.getActiveModifiers(state,state.gameMinutes);
+      factory2Snapshot=factorySituations.applyModifiers(o,modifiers);
+      factory2Project=factory2ProjectForOrder(factory2Snapshot);
+      factory2Preflight={...factory2Snapshot,
+        deadlineAt:Number.isFinite(factory2Snapshot.deadlineAt)?factory2Snapshot.deadlineAt:state.gameMinutes+Math.max(1,Number(factory2Snapshot.deadlineHours)||1)*60,
+        priority:['low','normal','high'].includes(factory2Snapshot.priority)?factory2Snapshot.priority:factory2Settings.priority,
+        batchMode:['auto','small','normal','large'].includes(factory2Snapshot.batchMode)?factory2Snapshot.batchMode:factory2Settings.batchMode,
+        interruptionSensitivity:Number.isFinite(factory2Snapshot.interruptionSensitivity)?factory2Snapshot.interruptionSensitivity:0.35,
+        routing:factory2RouteFor(factory2Snapshot,factory2Settings),
+        projectId:factory2Snapshot.projectId||(factory2Project?.id||null),
+        setupMinutes:setupMinutesForOrder(factory2Snapshot)
+      };
+      const flowCapacity=Math.max(1,Math.floor(40*factory2SituationEffectsAt(state.gameMinutes).capacityFactor));
+      const validation=productionFlow.createPlan(factory2Preflight,{capacity:flowCapacity,setupMinutes:factory2Preflight.setupMinutes});
+      if(!validation.ok){if(!options.automatic)say(`Ungültiger Arbeitsplan (${validation.code}); Material und Angebot bleiben erhalten.`);return false;}
+    }
     const materialResult=consumeOrderMaterial(o);
     if(!materialResult.ok){if(!options.automatic)say(`Materialbestand konnte nicht reserviert werden (${materialResult.code}).`);return false;}
     const accepted=orderMarketSystem.accept(state,id);
     if(!accepted){restoreOrderMaterial(materialResult.consumed);if(!options.automatic)say('Das Angebot ist inzwischen abgelaufen.');return false;}
-    orderMarketSystem.tick(state,state.gameMinutes);
+    tickOrderMarket(state.gameMinutes);
+    if(factory2Systems&&!options.interrupt){
+      const flowOrder={...accepted,...factory2Preflight,id:accepted.id};
+      const added=productionFlow.addOrder(state,flowOrder,{capacity:Math.max(1,Math.floor(40*factory2SituationEffectsAt(state.gameMinutes).capacityFactor)),setupMinutes:flowOrder.setupMinutes});
+      if(!added.ok){
+        state.orderMarket.available.push(accepted);restoreOrderMaterial(materialResult.consumed);
+        if(!options.automatic)say(`Auftrag konnte nicht eingeplant werden (${added.code}).`);
+        return false;
+      }
+      if(flowOrder.projectId)state.factory2.projectOrders[flowOrder.id]=flowOrder.projectId;
+      state.factory2.orderResults[flowOrder.id]={paid:0,completedLots:0,qualityDefectParts:0,late:false};
+      if(!options.automatic){closeOrderMachineChooser();state.selected=null;state.selectedBay=m.bay;}
+      if(state.warehouseOrderSnapshot?.id===flowOrder.id)state.warehouseOrderSnapshot=null;
+      if(state.pendingRushAssignment?.orderId===flowOrder.id)state.pendingRushAssignment=null;
+      startFactory2Lots(state.gameMinutes);save();renderOrders();renderBusiness();render();
+      const situationWarning=flowOrder.situationEffects?.warnings?.length?` · ${flowOrder.situationEffects.warnings.join(' ')}`:'';
+      say(`${flowOrder.part} angenommen · ${flowOrder.qty} Teile in ${added.lots.length} Teillos${added.lots.length===1?'':'en'} · ${flowOrder.routing.map(flowStepLabel).join(' → ')}${situationWarning}.`);
+      if(!options.automatic){closeDrawer();showMachine(m.bay);}
+      return true;
+    }
     const interrupted=options.interrupt?{
       order:m.activeOrder,source:m.activeOrderSource,progress:m.progress,produced:m.produced,deadlineAt:m.deadlineAt,
       setupDurationMinutes:m.setupDurationMinutes,setupRemainingMinutes:m.setupRemainingMinutes,setupDelayMinutes:m.setupDelayMinutes,
@@ -4288,6 +4735,15 @@
       qualityInspectionOrderId:m.qualityInspectionOrderId,qualityInspectionRemainingMinutes:m.qualityInspectionRemainingMinutes,
       qualityInspectionTotalMinutes:m.qualityInspectionTotalMinutes,qualityInspectionPolicy:m.qualityInspectionPolicy
     }:null;
+    if(interrupted?.source==='factory2'&&interrupted.order?.flowLotId){
+      const flowInterruption=productionFlow.interrupt(state,interrupted.order.flowLotId,String(m.bay),state.gameMinutes);
+      if(!flowInterruption.ok){
+        state.orderMarket.available.push(accepted);restoreOrderMaterial(materialResult.consumed);
+        if(!options.automatic)say('Unterbrechung der Produktionskette fehlgeschlagen ('+flowInterruption.code+'). Material und Auftrag zurückgegeben.');
+        return false;
+      }
+      interrupted.flowRestartSetupMinutes=flowInterruption.estimatedRestartSetupMinutes;
+    }
     if(!options.automatic){closeOrderMachineChooser();state.selectedBay=m.bay;}
     if((job(m)&&!options.interrupt)||(!options.interrupt&&m.qualityReworkQueue.length)){
       m.orderQueue.push({order:accepted,material:materialResult.consumed,
@@ -4372,7 +4828,7 @@
       if(!programReady(order)&&!state.programmer.hired)continue;
       const required=materialSystem.requiredKg(order),type=materialSystem.typeForOrder(order);
       if(!Number.isFinite(required)||required<=0||!type)continue;
-      const base=materialSystem.catalog[type].pricePer100Kg/100,unit=materialSystem.pricePerKg(type,state.gameMinutes);
+      const base=materialSystem.catalog[type].pricePer100Kg/100,unit=materialUnitPrice(type,state.gameMinutes);
       if(unit===null||unit>base*(1+office.maxMarketMarkupPct/100)+1e-9||order.reward-required*unit<office.minMaterialSurplus)continue;
       const candidates=state.machines.filter(machine=>{
         const fault=breakdownSystem.getRecord(state,machine.bay);
@@ -4688,6 +5144,7 @@
       }
       if(!state.paused)tickProgrammer(step,shift);
       const qualityInspectionWorked=new Set();
+      if(factory2Systems)startFactory2Lots(state.gameMinutes);
       for(const m of state.machines){
         if(m.operatorProgramming){
           const task=m.operatorProgramming,programmingShift=machineShiftAt(m);
@@ -4773,8 +5230,18 @@
           m.tool=Math.max(0,m.tool-gain*.18*recruitmentSystem.toolWearMultiplier(employee));
         }
         if(employee){
-          employee.xp=Math.round((employee.xp+step*recruitmentSystem.learningMultiplier(employee))*1000)/1000;
+          const learningEffect=employeeDevelopment.getEffects(employee).learning;
+          employee.xp=Math.round((employee.xp+step*recruitmentSystem.learningMultiplier(employee)*(1+learningEffect))*1000)/1000;
           recordEmployeeMachineWork(employee,m,step,Math.max(0,m.produced-producedBefore));
+        }
+        if(m.activeOrderSource==='factory2'){
+          const lot=state.productionFlow.lots.find(item=>item.id===o.flowLotId);
+          if(lot){lot.lastMachineBay=m.bay;lot.progress=m.progress;lot.qtyCompleted=Math.min(lot.qty,Math.max(0,Number(m.produced)||0));
+            lot.setupPartProduced=!!m.setupPartProduced;lot.setupRemainingMinutes=Math.max(0,Number(m.setupRemainingMinutes)||0);}
+          const root=lot&&factory2RootOrder(lot);
+          if(m.progress>=100&&root?.routing?.some(routeStep=>routeStep.type==='quality')){
+            finishOrder(m,o,null,state.gameMinutes+step);continue;
+          }
         }
         if(m.progress>=100){
           if(m.qualityInspectedOrderId===o.id){
@@ -4799,7 +5266,9 @@
           continue;
         }
       }
+      if(factory2Systems&&!state.paused)processFactory2QualityLots(step,shift,qualityInspectionWorked);
       state.gameMinutes+=step;left-=step;
+      if(factory2Systems)tickFactory2Systems(state.gameMinutes);
       const nextShift=shiftAt(state.gameMinutes);
       if(shift===1&&nextShift===2)queueHallShiftHandoffs(shift,nextShift);
       for(const m of state.machines){
@@ -4818,7 +5287,7 @@
           say(`Platz ${m.bay}: vorbeugende Wartung abgeschlossen.`);
         }
       }
-      orderMarketSystem.tick(state,state.gameMinutes);
+      tickOrderMarket(state.gameMinutes);
       runOrderOffice();
       queueDueQualityComplaints();
       maybeQueueRushOrderEvent();
@@ -5067,6 +5536,18 @@
   $('close-drawer').addEventListener('click',closeDrawer);
   $('stage').append($('employee-card'));
   $('employee-card-close').addEventListener('click',closeEmployeeCard);
+  $('employee-specialization-assign').addEventListener('click',()=>{
+    const context=employeeCardContext,employee=context&&employeeById(context.employeeId);
+    if(!employee)return;
+    const result=employeeDevelopment.assignSpecialization(employee,$('employee-specialization').value,{xp:Math.max(0,Number(employee.xp)||0)});
+    if(!result.ok)return;
+    save();
+    const machine=machineAt(context.bay);
+    if(machine)openEmployeeCard(employee,machine,context.shift);
+  });
+  for(const id of ['cf2-priority','cf2-batch-mode','cf2-route-preset'])$(id).addEventListener('change',()=>{readFactory2OrderSettings();save();});
+  $('cf2-generate-special-order').addEventListener('click',generateFactory2SpecialOrder);
+  $('cf2-create-project').addEventListener('click',createFactory2Project);
   $('detail-workplace').addEventListener('click',()=>{
     const machine=machineAt(Number($('detail-workplace').dataset.bay));
     const shift=Number($('detail-workplace').dataset.shift);
@@ -5118,11 +5599,11 @@
   document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeEmployeeCard();closeDrawer();$('speed-menu').hidden=true;}});
   $('buy-material').addEventListener('click',()=>{
     const type=state.selectedMaterialType,quantity=selectedMaterialQuantity();
-    const price=materialSystem.quote(type,quantity,state.gameMinutes);
+    const price=quoteMaterial(type,quantity,state.gameMinutes);
     if(price===null||state.money<price||state.material+quantity>state.capacity)return;
     const added=inventorySystem.addMaterial(state,type,quantity);
     if(!added.ok)return;
-    if(!book('material',-price,`${quantity} kg ${materialSystem.catalog[type].label} gekauft`,{quantityKg:quantity,type,pricePerKg:materialSystem.pricePerKg(type,state.gameMinutes),pricePer100Kg:materialSystem.quote(type,100,state.gameMinutes)}).ok){
+    if(!book('material',-price,`${quantity} kg ${materialSystem.catalog[type].label} gekauft`,{quantityKg:quantity,type,pricePerKg:materialUnitPrice(type,state.gameMinutes),pricePer100Kg:quoteMaterial(type,100,state.gameMinutes)}).ok){
       inventorySystem.removeMaterial(state,type,quantity);syncMaterialMirror();return;
     }
     syncMaterialMirror();save();render();renderBusiness();renderOrders();renderWarehouseOrderContext();say(`${quantity} kg ${materialSystem.catalog[type].label} für ${euroExact(price)} eingelagert.`);

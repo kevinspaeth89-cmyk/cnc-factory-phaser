@@ -510,9 +510,10 @@
     }
   }
 
-  function advance(state, targetMinute) {
+  function advance(state, targetMinute, options = {}) {
     const market = state.orderMarket;
     const target = Math.max(market.now, finite(targetMinute, market.now));
+    const demandFactor = clamp(finite(options.demandFactor, 1), 0.8, 1.3);
     let guard = 0;
 
     while (guard < 50000) {
@@ -525,7 +526,8 @@
       activateDueFollowUps(state, market.now);
       if (market.nextRefreshAt <= market.now) {
         if (market.available.length < MAX_OFFERS) addGeneratedOffer(state, market.now);
-        market.nextRefreshAt = market.now + integer(market, REFRESH_MINUTES[0], REFRESH_MINUTES[1]);
+        const regularRefreshMinutes = integer(market, REFRESH_MINUTES[0], REFRESH_MINUTES[1]);
+        market.nextRefreshAt = market.now + Math.max(1, Math.round(regularRefreshMinutes / demandFactor));
       }
       fillMinimum(state, market.now);
     }
@@ -537,9 +539,9 @@
     return market;
   }
 
-  function tick(state, gameMinutes) {
+  function tick(state, gameMinutes, options = {}) {
     const market = ensureMarket(state);
-    advance(state, finite(gameMinutes, finite(state.gameMinutes, market.now)));
+    advance(state, finite(gameMinutes, finite(state.gameMinutes, market.now)), options);
     return market;
   }
 
