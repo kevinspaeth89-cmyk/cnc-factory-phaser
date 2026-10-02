@@ -2144,6 +2144,37 @@
     }
     return {cost:Math.round(cost*100)/100,details,valid:true};
   }
+  function routeTimePreview(order,plan){
+    const settings=state.factory2.offerPlans[order.id]||{};
+    const flow=productionFlow.createPlan({...order,...settings,splitLots:!!settings.batchSize,routing:plan.routing});
+    if(!flow.ok)return {minutes:null,details:[]};
+    const machiningSteps=Math.max(1,plan.routing.filter(step=>['turning','milling'].includes(step.type)||step.type==='external'&&['turning','milling'].includes(step.operationType)).length);
+    const finishes=flow.lots.map(()=>0),details=[];let valid=true;
+    const preview={gameMinutes:state.gameMinutes,reputation:state.reputation,suppliers:JSON.parse(JSON.stringify(state.suppliers))};
+    for(const step of plan.routing){
+      const machines=state.machines.filter(machine=>catalog[machine.type]?.kind===step.requiredMachineKind);
+      const lanes=(machines.length?machines:[null]).map(machine=>({machine,free:0}));let work=0;
+      for(let i=0;i<flow.lots.length;i++){
+        const lot=flow.lots[i],part={...order,qty:lot.qty,kind:step.requiredMachineKind||order.kind,duration:order.duration*lot.qty/Math.max(1,order.qty)/machiningSteps};
+        if(step.type==='external'){
+          const provider=plan.checks.find(check=>check.step.id===step.id)?.provider;
+          const quote=provider&&suppliers.quote(preview,provider.id,order,{routeStepId:step.id,operationType:step.operationType,qty:lot.qty,lotId:lot.id,atMinute:state.gameMinutes});
+          if(!quote?.ok){valid=false;continue;}
+          finishes[i]+=quote.leadTimeMinutes;work=Math.max(work,quote.leadTimeMinutes);continue;
+        }
+        let best=null;
+        for(const lane of lanes){
+          const minutes=step.type==='quality'?programmingQuality.inspectionMinutes({order:part,policy:qualityPolicyFor([1,2].find(shift=>qualityEmployee(shift))||1).id}):
+            programmingETA(part,lane.machine)+setupMinutesForOrder(part)+Math.max(0,(lot.qty-1)/Math.max(1,lot.qty))*effectiveDuration(part)*6/(lane.machine?catalog[lane.machine.type].rate:(part.kind==='Fräsen'?catalog.mill3.rate:catalog.standard.rate));
+          const end=Math.max(finishes[i],lane.free)+minutes;
+          if(!best||end<best.end)best={lane,minutes,end};
+        }
+        best.lane.free=best.end;finishes[i]=best.end;work+=best.minutes;
+      }
+      details.push(flowStepLabel(step)+': '+(step.type==='external'&&!plan.checks.find(check=>check.step.id===step.id)?.provider?'Anbieter fehlt':formatEstimateMinutes(work)));
+    }
+    return {minutes:valid?Math.max(...finishes):null,details};
+  }
   function renderOfferRoute(card,order,plan){
     const panel=document.createElement('section');panel.className='order-route';
     const heading=document.createElement('h4');heading.textContent=plan.checks.map(check=>check.label).join(' → ');panel.append(heading);
@@ -2174,7 +2205,10 @@
       const delivery=document.createElement('p');delivery.className='hint';delivery.textContent=settings.deliveryAgreement?.reason||'Lose erleichtern parallele Fertigung. Der Liefertermin bleibt bestehen.';panel.append(delivery);
       if(!order.isRushOrder&&!settings.deliveryAgreement){const request=document.createElement('button');request.type='button';request.textContent='Teil- und Folgelieferung anfragen';request.addEventListener('click',event=>{event.stopPropagation();settings.deliveryAgreement=orderPlanning.negotiateDelivery(order,orderMarketSystem.getReputation(state)[order.customer],Math.random);if(settings.deliveryAgreement.accepted)settings.batchSize=settings.deliveryAgreement.firstQty;save();renderOrders();});panel.append(request);}
     }
-    card.append(panel);return estimate;
+    const timing=routeTimePreview(order,plan),time=document.createElement('p');time.className='order-route-time';
+    time.textContent='Durchlaufzeit bei freien Stationen: '+(timing.minutes===null?'noch offen':('ca. '+formatEstimateMinutes(timing.minutes)))+' · '+timing.details.join(' → ');
+    const timingHint=document.createElement('small');timingHint.textContent='Richtwert für die gewählten Lose und Maschinen, inklusive Programmieren, Rüsten und QS. Parallel laufende Lose sind berücksichtigt. Warteschlangen, Schichtpausen, fehlende Bediener und Störungen verlängern die Zeit; fehlende Maschinen werden mit einer Grundmaschine geschätzt.';
+    panel.append(time,timingHint);card.append(panel);return estimate;
   }
   function factory2ProjectForOrder(order){
     const projects=state.customerProjects?.projects||[];
