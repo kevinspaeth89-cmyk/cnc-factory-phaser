@@ -55,28 +55,72 @@
     flow.nextLotNumber = Math.max(1, Math.floor(finite(flow.nextLotNumber,
       flow.lots.reduce((n, lot) => Math.max(n, parseLotNumber(lot.id) + 1), 1))));
 
-    // Repair queue indexes from the authoritative lot records. This also makes migration idempotent.
+    // Recover incomplete saved orders before rebuilding lots and queue indexes.
+    for (const [id, order] of Object.entries(flow.orders)) {
+      if (!isRecord(order) || order.id !== id) {
+        delete flow.orders[id];
+        continue;
+      }
+      let route = normalizeRoute(order);
+      if (!route) route = normalizeRoute({ ...order, routing: null });
+      if (!route) {
+        delete flow.orders[id];
+        continue;
+      }
+      order.routing = route;
+      order.qty = Math.max(1, Math.floor(finite(order.qty, 1)));
+      order.reward = Math.max(0, finite(order.reward, 0));
+      order.kind = typeof order.kind === 'string' && order.kind.trim()
+        ? order.kind : (route[0].requiredMachineKind || 'Drehen');
+      order.priority = PRIORITIES[order.priority] ? order.priority : 'normal';
+    }
+
+    // Repair lot payloads as well as queue indexes. In particular, older or
+    // partially-written saves may omit stepStatuses, which completion mutates.
     const queues = {};
+    const normalizedLots = [];
+    const validStatuses = new Set(['waiting', 'queued', 'running', 'completed', 'outsourced', 'cancelled']);
     for (const lot of flow.lots) {
-      lot.qty = Math.max(0, Math.floor(finite(lot.qty, 0)));
+      if (!isRecord(lot) || typeof lot.id !== 'string' || !lot.id.trim() ||
+          typeof lot.orderId !== 'string' || !flow.orders[lot.orderId]) continue;
+      const order = flow.orders[lot.orderId];
+      const route = order.routing;
+      if (!Array.isArray(route) || !route.length) continue;
+      const requestedPosition = Number.isInteger(lot.routePosition)
+        ? lot.routePosition : route.findIndex(step => step.id === lot.routeStepId);
+      lot.routePosition = Math.min(route.length - 1, Math.max(0, requestedPosition < 0 ? 0 : requestedPosition));
+      const currentStep = route[lot.routePosition];
+      lot.routeStepId = currentStep.id;
+      lot.routeStepType = currentStep.type;
+      lot.requiredMachineKind = currentStep.requiredMachineKind;
+      lot.qty = Math.max(1, Math.floor(finite(lot.qty, order.qty)));
       lot.qtyCompleted = Math.min(lot.qty, Math.max(0, Math.floor(finite(lot.qtyCompleted, 0))));
       lot.priority = PRIORITIES[lot.priority] ? lot.priority : 'normal';
       lot.sequence = Math.max(1, Math.floor(finite(lot.sequence, 1)));
-      lot.status = ['waiting', 'queued', 'running', 'completed', 'outsourced', 'cancelled'].includes(lot.status)
-        ? lot.status : (lot.status === 'blocked' ? 'waiting' : 'waiting');
-      const order = flow.orders[lot.orderId];
-      const currentStep = order && Array.isArray(order.routing) ? order.routing[lot.routePosition] : null;
-      if (currentStep && typeof lot.routeStepType !== 'string') lot.routeStepType = currentStep.type;
-      if (lot.status === 'queued') {
-        if (currentStep?.type === 'external') lot.status = 'waiting';
-        else (queues[queueKeyForLot(flow, lot)] ||= []).push(lot.id);
-      }
-      if (lot.status === 'running' && typeof lot.machineId === 'string') flow.machineAssignments[lot.machineId] = lot.id;
+      lot.status = validStatuses.has(lot.status) ? lot.status : 'waiting';
+      lot.machineId = typeof lot.machineId === 'string' && lot.machineId ? lot.machineId : null;
+      if (lot.status === 'running' && !lot.machineId) lot.status = 'waiting';
+      if (lot.status === 'queued' && currentStep.type === 'external') lot.status = 'waiting';
+      if (lot.status === 'completed') lot.qtyCompleted = lot.qty;
+      lot.setupMinutes = nonNegative(lot.setupMinutes);
+      lot.restartSetupMinutes = nonNegative(lot.restartSetupMinutes);
+      lot.interruptionSensitivity = Math.min(1, nonNegative(lot.interruptionSensitivity, 0.25));
+      const savedSteps = Array.isArray(lot.stepStatuses) ? lot.stepStatuses : [];
+      lot.stepStatuses = route.map((_, index) => {
+        if (index < lot.routePosition) return 'completed';
+        if (index > lot.routePosition) return lot.status === 'cancelled' ? 'cancelled' : 'blocked';
+        if (lot.status === 'running') return 'running';
+        if (lot.status === 'completed') return 'completed';
+        if (lot.status === 'cancelled') return 'cancelled';
+        const saved = savedSteps[index];
+        return ['queued', 'blocked', 'completed', 'cancelled'].includes(saved) ? saved : 'queued';
+      });
+      normalizedLots.push(lot);
+      if (lot.status === 'queued') (queues[queueKeyForLot(flow, lot)] ||= []).push(lot.id);
+      if (lot.status === 'running' && lot.machineId) flow.machineAssignments[lot.machineId] = lot.id;
     }
+    flow.lots = normalizedLots;
     flow.queues = queues;
-    for (const [id, order] of Object.entries(flow.orders)) {
-      if (!isRecord(order) || order.id !== id) delete flow.orders[id];
-    }
     for (const key of Object.keys(flow.machineAssignments)) {
       if (!flow.lots.some(lot => lot.id === flow.machineAssignments[key] && lot.status === 'running')) delete flow.machineAssignments[key];
     }
