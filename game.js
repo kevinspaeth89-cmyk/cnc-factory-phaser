@@ -2144,19 +2144,22 @@
     }
     return {cost:Math.round(cost*100)/100,details,valid:true};
   }
-  function routeTimePreview(order,plan){
+  function routeTimePreview(order,plan,liveLots=null){
     const settings=state.factory2.offerPlans[order.id]||{};
-    const flow=productionFlow.createPlan({...order,...settings,splitLots:!!settings.batchSize,routing:plan.routing});
+    const flow=liveLots?{ok:true,lots:liveLots}:productionFlow.createPlan({...order,...settings,splitLots:!!settings.batchSize,routing:plan.routing});
     if(!flow.ok)return {minutes:null,details:[]};
     const machiningSteps=Math.max(1,plan.routing.filter(step=>['turning','milling'].includes(step.type)||step.type==='external'&&['turning','milling'].includes(step.operationType)).length);
     const finishes=flow.lots.map(()=>0),details=[];let valid=true;
     const preview={gameMinutes:state.gameMinutes,reputation:state.reputation,suppliers:JSON.parse(JSON.stringify(state.suppliers))};
-    for(const step of plan.routing){
+    for(const [stepIndex,step] of plan.routing.entries()){
       const machines=state.machines.filter(machine=>catalog[machine.type]?.kind===step.requiredMachineKind);
       const lanes=(machines.length?machines:[null]).map(machine=>({machine,free:0}));let work=0;
       for(let i=0;i<flow.lots.length;i++){
-        const lot=flow.lots[i],part={...order,qty:lot.qty,kind:step.requiredMachineKind||order.kind,duration:order.duration*lot.qty/Math.max(1,order.qty)/machiningSteps};
+        const lot=flow.lots[i];if(liveLots&&(lot.status==='completed'||lot.status==='cancelled'||lot.routePosition>stepIndex))continue;
+        const part={...order,qty:lot.qty,kind:step.requiredMachineKind||order.kind,duration:order.duration*lot.qty/Math.max(1,order.qty)/machiningSteps};
         if(step.type==='external'){
+          const supplierJob=liveLots&&lot.routePosition===stepIndex&&lot.status==='outsourced'?state.suppliers.jobs.find(job=>job.id===lot.supplierJobId):null;
+          if(supplierJob){const remaining=Math.max(0,supplierJob.dueAtMinute-state.gameMinutes);finishes[i]+=remaining;work=Math.max(work,remaining);continue;}
           const provider=plan.checks.find(check=>check.step.id===step.id)?.provider;
           const quote=provider&&suppliers.quote(preview,provider.id,order,{routeStepId:step.id,operationType:step.operationType,qty:lot.qty,lotId:lot.id,atMinute:state.gameMinutes});
           if(!quote?.ok){valid=false;continue;}
@@ -2164,7 +2167,11 @@
         }
         let best=null;
         for(const lane of lanes){
-          const minutes=step.type==='quality'?programmingQuality.inspectionMinutes({order:part,policy:qualityPolicyFor([1,2].find(shift=>qualityEmployee(shift))||1).id}):
+          const active=liveLots&&lot.routePosition===stepIndex&&lot.status==='running';
+          const activeMachine=active&&state.machines.find(machine=>machine.activeOrder?.flowLotId===lot.id);
+          if(activeMachine&&lane.machine!==activeMachine)continue;
+          const minutes=active&&lot.qualityInspection?Math.max(0,lot.qualityInspection.remainingMinutes):activeMachine?programmingETA(activeMachine.activeOrder,activeMachine)+Math.max(0,activeMachine.setupRemainingMinutes)+Math.max(0,(100-Math.max(activeMachine.progress,activeMachine.setupPartProduced?0:100/Math.max(1,part.qty)))/100)*effectiveDuration(activeMachine.activeOrder)*6/Math.max(.01,productionFactor(activeMachine)):
+            step.type==='quality'?programmingQuality.inspectionMinutes({order:part,policy:qualityPolicyFor([1,2].find(shift=>qualityEmployee(shift))||1).id}):
             programmingETA(part,lane.machine)+setupMinutesForOrder(part)+Math.max(0,(lot.qty-1)/Math.max(1,lot.qty))*effectiveDuration(part)*6/(lane.machine?catalog[lane.machine.type].rate:(part.kind==='Fräsen'?catalog.mill3.rate:catalog.standard.rate));
           const end=Math.max(finishes[i],lane.free)+minutes;
           if(!best||end<best.end)best={lane,minutes,end};
@@ -2876,7 +2883,7 @@
       const order=state.productionFlow.orders[id],lots=state.productionFlow.lots.filter(lot=>lot.orderId===id),row=document.createElement('article');row.className='factory2-row';
       const title=document.createElement('strong'),detail=document.createElement('p');title.textContent=(order?.part||id)+' · '+order.qty+' Teile';
       detail.textContent=order.routing.map((step,index)=>flowStepLabel(step)+': '+lots.filter(lot=>lot.routePosition>index||lot.status==='completed').reduce((sum,lot)=>sum+lot.qty,0)+'/'+order.qty).join(' → ');
-      row.append(title,detail);if(order.deliveryAgreement?.accepted){const delivery=document.createElement('p');delivery.textContent=order.deliveryAgreement.firstQty+' Teile bis '+formatDeliveryAt(order.deadlineAt)+', Rest bis '+formatDeliveryAt(order.deadlineAt+order.deliveryAgreement.extensionMinutes);row.append(delivery);}
+      row.append(title,detail);const timing=routeTimePreview(order,{routing:order.routing,checks:[]},lots),time=document.createElement('p');time.className='order-route-time';time.textContent='Verbleibende Durchlaufzeit bei freien Stationen: '+(timing.minutes===null?'noch offen':('ca. '+formatEstimateMinutes(timing.minutes)))+' · '+timing.details.join(' → ');const timeHint=document.createElement('small');timeHint.textContent='Ab aktuellem Fortschritt; Losüberlappung und parallele Maschinen berücksichtigt. Ohne Warteschlangen, Schichtpausen und Störungen.';row.append(time,timeHint);if(order.deliveryAgreement?.accepted){const delivery=document.createElement('p');delivery.textContent=order.deliveryAgreement.firstQty+' Teile bis '+formatDeliveryAt(order.deadlineAt)+', Rest bis '+formatDeliveryAt(order.deadlineAt+order.deliveryAgreement.extensionMinutes);row.append(delivery);}
       if(lots.length>1){const details=document.createElement('details'),summary=document.createElement('summary');summary.textContent=lots.length+' Fertigungslose anzeigen';details.append(summary);for(const lot of lots){const line=document.createElement('p');line.textContent='Los '+lot.sequence+' · '+lot.qty+' Teile · '+(lot.status==='completed'?'abgeschlossen':flowStepLabel(order.routing[lot.routePosition]));details.append(line);}row.append(details);}return row;
     }):[createFactory2Row('Keine laufende Fertigung','Angenommene Aufträge erscheinen hier mit ihrem Fortschritt je Arbeitsgang.')]));
 
