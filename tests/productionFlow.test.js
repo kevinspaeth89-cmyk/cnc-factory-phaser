@@ -236,3 +236,34 @@ test('getSnapshot is read-only and browser global exposes the same module API', 
   assert.equal(typeof browser.CNCModules.productionFlow.createPlan, 'function');
   assert.equal(browser.CNCModules.productionFlow.createPlan(makeOrder()).ok, true);
 });
+
+test('ensureState repairs an incomplete saved running lot before completion', () => {
+  const state = {
+    productionFlow: {
+      version: 1,
+      lots: [{
+        id: 'DAMAGED-lot-1', orderId: 'DAMAGED', routeStepId: 'step-turn',
+        routeStepType: 'turning', requiredMachineKind: 'Drehen',
+        sequence: 1, qty: 5, qtyCompleted: 2, status: 'running',
+        machineId: '1', routePosition: 0
+      }],
+      queues: {}, events: [],
+      orders: {
+        DAMAGED: makeOrder({ id: 'DAMAGED', qty: 5, routing: [
+          { id: 'step-turn', type: 'turning', requiredMachineKind: 'Drehen' },
+          { id: 'step-qa', type: 'quality', requiredMachineKind: null }
+        ] })
+      },
+      machineAssignments: { '1': 'DAMAGED-lot-1' },
+      nextLotNumber: 2
+    }
+  };
+
+  productionFlow.ensureState(state);
+  const lot = state.productionFlow.lots[0];
+  assert.deepEqual(lot.stepStatuses, ['running', 'blocked']);
+  assert.equal(lot.qtyCompleted, 2);
+  assert.doesNotThrow(() => productionFlow.completeStep(state, lot.id, 'step-turn', 45));
+  assert.equal(state.productionFlow.lots[0].status, 'queued');
+  assert.equal(state.productionFlow.lots[0].routeStepId, 'step-qa');
+});
