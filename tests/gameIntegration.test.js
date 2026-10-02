@@ -788,8 +788,19 @@ factory2=boot({cnc_factory_save_v3:JSON.stringify(factory2Saved)},{random:()=>0.
 assert.equal(factory2.state().finance.transactions.filter(entry=>entry.category==='income'&&entry.meta?.orderId==='FLOW-120').length,flowLots.length);
 console.log('Factory 2 flow: 120 parts, split lots, mixed route, staffed QS time/reload and one-time payout OK');
 
+const freshHireUiState=JSON.parse(JSON.stringify(factory2State));
+freshHireUiState.staffRoster.shift1[0].xp=0;
+const freshHireUiApp=boot({cnc_factory_save_v3:JSON.stringify(freshHireUiState)});
+const freshEmployeeHead=freshHireUiApp.createElement('div');freshEmployeeHead.className='employee-card-head';freshEmployeeHead.append(freshHireUiApp.get('employee-card-close'));
+freshHireUiApp.get('employee-card').append(freshEmployeeHead);
+const freshPersonalSection=freshHireUiApp.createElement('div');freshPersonalSection.className='employee-card-section';freshPersonalSection.append(freshHireUiApp.get('employee-card-personal'));
+freshHireUiApp.get('employee-card').append(freshPersonalSection);
+freshHireUiApp.get('detail-workplace').dataset.bay='1';freshHireUiApp.get('detail-workplace').dataset.shift='1';
+freshHireUiApp.get('detail-workplace').click();
+assert.equal(freshHireUiApp.get('employee-specialization-assign').disabled,true,'a new hire cannot be specialized before earning a level-up');
+assert.equal(freshHireUiApp.get('employee-specialization').children.length,0,'no specialization choices appear before a level-up');
 const specializationUiState=JSON.parse(JSON.stringify(factory2State));
-specializationUiState.staffRoster.shift1[0].xp=240;
+specializationUiState.staffRoster.shift1[0].xp=7200;
 let specializationUiApp=boot({cnc_factory_save_v3:JSON.stringify(specializationUiState)});
 const employeeHead=specializationUiApp.createElement('div');employeeHead.className='employee-card-head';employeeHead.append(specializationUiApp.get('employee-card-close'));
 specializationUiApp.get('employee-card').append(employeeHead);
