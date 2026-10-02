@@ -15,12 +15,9 @@
   const MAX_EVENTS_PER_TICK = 10000;
   const SPECIALTIES = Object.freeze([
     { id: 'complex-route', label: 'Komplexe Route', description: 'Drehen und Fräsen mit zusätzlicher Qualitätsprüfung.', route: ['turning', 'milling', 'quality'], durationFactor: 1.18 },
-    { id: 'precision', label: 'Präzisionsprüfung', description: 'Enge Toleranzen erfordern eine sorgfältige Qualitätsprüfung.', qualityRisk: 0.12, durationFactor: 1.1 },
     { id: 'small-lots', label: 'Kleine Lose', description: 'Die Lieferung erfolgt in mehreren kleinen Losen.', batchMode: 'small', interruptionSensitivity: 0.78 },
-    { id: 'short-deadline', label: 'Kurze Frist', description: 'Der Kunde erwartet eine beschleunigte Lieferung.', deadlineFactor: 0.72, rush: true },
-    { id: 'missing-machine', label: 'Fehlende Maschine', description: 'Ein Arbeitsschritt benötigt eine Maschine, die nicht in der Standardroute liegt.', requiresExternalCapability: true },
-    { id: 'material-sensitive', label: 'Materialpreisrisiko', description: 'Der Auftrag reagiert besonders auf Änderungen des Materialpreises.', materialSensitivity: 0.8 },
-    { id: 'first-article', label: 'Erstmusterfreigabe', description: 'Vor der Serie ist ein zusätzliches Erstmuster freizugeben.', firstArticle: true, durationFactor: 1.08 }
+    { id: 'short-deadline', label: 'Kurze Frist', description: 'Die Lieferfrist wird gegenüber dem Kundenprofil verkürzt.', deadlineFactor: 0.72 },
+    { id: 'missing-machine', label: 'Fehlende Maschine', description: 'Ein Arbeitsschritt wird an einen passenden Zulieferer vergeben.', requiresExternalCapability: true }
   ]);
 
   const SITUATIONS = Object.freeze([
@@ -116,9 +113,9 @@
     else if (/orionis|premium|fluid|pharma|qualität|quality/.test(text)) key = 'premium';
     else if (/veltraxis|standard|automobil|mobilität/.test(text)) key = 'standard';
     const known = {
-      standard: { customer: 'Veltraxis Mobility', profileKey: 'standard', qty: [36, 72], reward: [150, 210], duration: [90, 150], deadline: [48, 84], difficulty: 2, preferred: ['complex-route', 'small-lots', 'material-sensitive', 'first-article'] },
-      premium: { customer: 'Orionis Fluidics', profileKey: 'premium', qty: [18, 42], reward: [220, 310], duration: [120, 195], deadline: [36, 68], difficulty: 4, preferred: ['precision', 'first-article', 'complex-route', 'short-deadline'] },
-      precision: { customer: 'Kaeldor Components', profileKey: 'series', qty: [24, 54], reward: [205, 295], duration: [135, 210], deadline: [48, 84], difficulty: 5, preferred: ['precision', 'complex-route', 'first-article', 'missing-machine'] },
+      standard: { customer: 'Veltraxis Mobility', profileKey: 'standard', qty: [36, 72], reward: [150, 210], duration: [90, 150], deadline: [48, 84], difficulty: 2, preferred: ['complex-route', 'small-lots', 'short-deadline', 'missing-machine'] },
+      premium: { customer: 'Orionis Fluidics', profileKey: 'premium', qty: [18, 42], reward: [220, 310], duration: [120, 195], deadline: [36, 68], difficulty: 4, preferred: ['complex-route', 'short-deadline', 'small-lots', 'missing-machine'] },
+      precision: { customer: 'Kaeldor Components', profileKey: 'series', qty: [24, 54], reward: [205, 295], duration: [135, 210], deadline: [48, 84], difficulty: 5, preferred: ['complex-route', 'missing-machine', 'short-deadline', 'small-lots'] },
       express: { customer: 'Asteron Robotics', profileKey: 'express', qty: [10, 28], reward: [260, 360], duration: [75, 125], deadline: [18, 36], difficulty: 3, preferred: ['short-deadline', 'small-lots', 'missing-machine', 'complex-route'] }
     }[key];
     return { ...known, ...profile, profileKey: known.profileKey, customer: typeof profile.customer === 'string' ? profile.customer : known.customer,
@@ -149,12 +146,28 @@
     });
     const qty = integer(data, profile.qty[0], profile.qty[1]);
     const duration = integer(data, profile.duration[0], profile.duration[1]);
-    const deadlineHours = integer(data, profile.deadline[0], profile.deadline[1]);
-    const operation = random(data) < 0.5 ? 'Drehen' : 'Fräsen';
-    const routeTypes = mechanics.find(item => item.route)?.route;
-    const routing = routeTypes
-      ? routeTypes.map((type, index) => ({ id: `${id}-step-${index + 1}`, type, requiredMachineKind: type === 'turning' ? 'Drehen' : type === 'milling' ? 'Fräsen' : null, status: index === 0 ? 'queued' : 'blocked' }))
-      : [{ id: `${id}-step-1`, type: operation === 'Drehen' ? 'turning' : 'milling', requiredMachineKind: operation, status: 'queued' }];
+    const baseDeadlineHours = integer(data, profile.deadline[0], profile.deadline[1]);
+    const deadlineFactor = mechanics.reduce((factor, item) => factor * (Number.isFinite(item.deadlineFactor) ? item.deadlineFactor : 1), 1);
+    const deadlineHours = Math.max(1, Math.floor(baseDeadlineHours * deadlineFactor));
+    const complexRoute = mechanics.some(item => item.id === 'complex-route');
+    const needsExternalStep = mechanics.some(item => item.id === 'missing-machine');
+    const operation = complexRoute ? 'Drehen' : (random(data) < 0.5 ? 'Drehen' : 'Fräsen');
+    const alternateOperation = operation === 'Drehen' ? 'milling' : 'turning';
+    const routing = complexRoute
+      ? [
+          { type: 'turning', requiredMachineKind: 'Drehen' },
+          needsExternalStep
+            ? { type: 'external', operationType: 'milling', requiredMachineKind: null }
+            : { type: 'milling', requiredMachineKind: 'Fräsen' },
+          { type: 'quality', requiredMachineKind: null }
+        ]
+      : [
+          { type: operation === 'Drehen' ? 'turning' : 'milling', requiredMachineKind: operation },
+          ...(needsExternalStep ? [{ type: 'external', operationType: alternateOperation, requiredMachineKind: null }] : [])
+        ];
+    for (let index = 0; index < routing.length; index += 1) {
+      routing[index] = { id: `${id}-step-${index + 1}`, ...routing[index], status: index === 0 ? 'queued' : 'blocked' };
+    }
     return {
       id,
       customer: profile.customer,

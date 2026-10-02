@@ -56,12 +56,57 @@ test('generated special orders always have a usable base or complex route', () =
     const state = stateWithSeed(seed);
     const order = factorySituations.generateSpecialOrder(state, { key: 'standard', customer: 'Veltraxis Mobility' });
     assert.ok(order.routing.length >= 1 && order.routing.length <= 4, `seed ${seed} route length`);
+    const firstLocalStep = order.routing.find(step => step.type !== 'external');
+    assert.ok(firstLocalStep, `seed ${seed} has a local step`);
+    assert.equal(firstLocalStep.requiredMachineKind, order.kind, `seed ${seed} kind matches its first local step`);
+    assert.ok(order.routing.filter(step => step.type === 'external').every(step =>
+      ['turning', 'milling', 'quality', 'assembly'].includes(step.operationType) && step.requiredMachineKind === null));
     if (order.mechanicIds.includes('complex-route')) {
-      assert.deepEqual(order.routing.map(step => step.type), ['turning', 'milling', 'quality']);
+      assert.equal(order.mechanics.find(item => item.id === 'complex-route').durationFactor, 1.18);
+      assert.deepEqual(order.routing.map(step => step.type), order.mechanicIds.includes('missing-machine')
+        ? ['turning', 'external', 'quality']
+        : ['turning', 'milling', 'quality']);
     } else {
-      assert.equal(order.routing.length, 1);
+      assert.equal(order.routing.length, order.mechanicIds.includes('missing-machine') ? 2 : 1);
       assert.equal(order.routing[0].type, order.kind === 'Drehen' ? 'turning' : 'milling');
       assert.equal(order.routing[0].requiredMachineKind, order.kind);
+    }
+  }
+});
+
+test('short-deadline applies its seeded deadline factor to the returned order', () => {
+  const state = stateWithSeed(4);
+  const order = factorySituations.generateSpecialOrder(state, { key: 'express', customer: 'Asteron Robotics' });
+  assert.ok(order.mechanicIds.includes('short-deadline'));
+  assert.equal(order.deadlineHours, 22);
+  assert.ok(order.deadlineHours < 36, 'the deadline is shorter than the express profile maximum');
+});
+
+test('missing-machine creates a supported external route step with a matching supplier operation', () => {
+  const state = stateWithSeed(1);
+  const order = factorySituations.generateSpecialOrder(state, { key: 'express', customer: 'Asteron Robotics' });
+  assert.ok(order.mechanicIds.includes('missing-machine'));
+  const external = order.routing.find(step => step.type === 'external');
+  assert.ok(external);
+  assert.ok(['turning', 'milling'].includes(external.operationType));
+  assert.equal(external.requiredMachineKind, null);
+  assert.ok(order.routing.length <= 4);
+});
+
+test('the generated catalog contains only mechanics with a concrete order effect', () => {
+  assert.deepEqual(factorySituations.catalogs.specialties.map(item => item.id).sort(), [
+    'complex-route', 'missing-machine', 'short-deadline', 'small-lots'
+  ]);
+  for (let seed = 1; seed <= 48; seed += 1) {
+    const order = factorySituations.generateSpecialOrder(stateWithSeed(seed), { key: 'standard', customer: 'Veltraxis Mobility' });
+    for (const mechanic of order.mechanics) {
+      if (mechanic.id === 'complex-route') assert.ok(order.routing.some(step => step.type === 'quality'));
+      if (mechanic.id === 'missing-machine') assert.ok(order.routing.some(step => step.type === 'external'));
+      if (mechanic.id === 'short-deadline') assert.ok(order.deadlineHours < 84);
+      if (mechanic.id === 'small-lots') {
+        assert.equal(order.batchMode, 'small');
+        assert.equal(order.interruptionSensitivity, 0.78);
+      }
     }
   }
 });
