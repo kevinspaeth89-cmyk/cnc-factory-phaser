@@ -3239,6 +3239,7 @@
     employeeCardContext=null;
     const card=$('employee-card');
     if(card)card.hidden=true;
+    const backdrop=$('employee-card-backdrop');if(backdrop)backdrop.hidden=true;
   }
   function visibleWorkplaceItems(employee){
     if(typeof recruitmentSystem.workplaceItems!=='function')return [];
@@ -3448,6 +3449,7 @@
       return line;
     }):[Object.assign(document.createElement('span'),{textContent:'Noch keine besonderen Ereignisse – die Geschichte beginnt gerade.'})]));
     card.hidden=false;
+    $('employee-card-backdrop').hidden=false;
   }
   function renderEmployeeRemarkHistory(){
     const panel=$('employee-remark-history'),lines=$('employee-remark-history-lines');
@@ -5677,7 +5679,10 @@
   $('open-warehouse-from-business').addEventListener('click',()=>tab('warehouse'));
   $('recruitment-back').addEventListener('click',()=>tab('business'));
   $('close-drawer').addEventListener('click',closeDrawer);
-  $('stage').append($('employee-card'));
+  const employeeBackdrop=document.createElement('div');employeeBackdrop.id='employee-card-backdrop';employeeBackdrop.hidden=true;employeeBackdrop.setAttribute('aria-hidden','true');
+  employeeBackdrop.addEventListener('click',event=>{event.stopPropagation();closeEmployeeCard();});
+  $('stage').append(employeeBackdrop,$('employee-card'));
+  $('employee-card').addEventListener('click',event=>event.stopPropagation());
   $('employee-card-close').addEventListener('click',closeEmployeeCard);
   $('employee-specialization-assign').addEventListener('click',()=>{
     const context=employeeCardContext,employee=context&&employeeById(context.employeeId);
