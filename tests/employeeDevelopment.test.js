@@ -87,6 +87,12 @@ test('legacy earned but unspent choices migrate from the old 240/1920 XP thresho
   assert.equal(JSON.stringify(employee), saved);
   const oneAssigned = { xp: 1920, productionMinutes: 1920, specializations: ['turning'], personality: ['flexibel'], skills: { turning: 5, milling: 5 } };
   assert.equal(development.getProgress(oneAssigned).pendingChoices, 1);
+  const firstAssigned = { xp: 240, productionMinutes: 240, specializations: ['turning'], personality: ['flexibel'], skills: { turning: 5, milling: 5 } };
+  assert.equal(development.getProgress(firstAssigned).pendingChoices, 0);
+  const firstFullyAssigned = { xp: 240, productionMinutes: 240, specializations: ['turning', 'milling'], personality: ['flexibel'], skills: { turning: 5, milling: 5 } };
+  assert.equal(development.getProgress(firstFullyAssigned).pendingChoices, 0);
+  const bothAssigned = { xp: 1920, productionMinutes: 1920, specializations: ['turning', 'milling'], personality: ['flexibel'], skills: { turning: 5, milling: 5 } };
+  assert.equal(development.getProgress(bothAssigned).pendingChoices, 0);
   const belowSecond = { xp: 1919, productionMinutes: 1919, specializations: ['turning'], personality: ['flexibel'], skills: { turning: 5, milling: 5 } };
   assert.equal(development.getProgress(belowSecond).pendingChoices, 0);
   const firstOnly = { xp: 240, productionMinutes: 240, personality: ['flexibel'], skills: { turning: 5, milling: 5 } };
