@@ -3285,14 +3285,14 @@
       progressionHint=progression.pendingChoices===1
         ?'Level-up erreicht: Wähle jetzt eine Spezialisierung.'
         :'Es warten '+progression.pendingChoices+' Level-up-Auswahlen. Jede Auswahl wurde durch einen eigenen Aufstieg verdient.';
-    }else if(progression.nextMilestoneXp!==null){
-      const thresholdHours=Math.ceil(progression.nextMilestoneXp/60);
-      const remainingHours=Math.max(0,Math.ceil((progression.nextMilestoneXp-progression.xp)/60));
+    }else if(progression.nextMilestoneMinutes!==null){
+      const thresholdHours=Math.ceil(progression.nextMilestoneMinutes/60);
+      const remainingHours=Math.max(0,Math.ceil((progression.nextMilestoneMinutes-progression.productionMinutes)/60));
       progressionHint='Nächster Erfahrungsaufstieg bei '+thresholdHours+' Produktionsstunden · noch '+remainingHours+' h.';
       if(progression.specialEventAvailable){
         progressionHint+=' Eine erfolgreiche Selbstreparatur kann ebenfalls einmalig ein Level-up bringen.';
-      }else if(!employee.development.specialEventRewardClaimed&&progression.xp<employeeDevelopment.SPECIAL_EVENT_XP){
-        progressionHint+=' Eine besondere Leistung kann ab '+Math.ceil(employeeDevelopment.SPECIAL_EVENT_XP/60)+' h ebenfalls ein Level-up auslösen.';
+      }else if(!employee.development.specialEventRewardClaimed&&progression.productionMinutes<employeeDevelopment.SPECIAL_EVENT_MINUTES){
+        progressionHint+=' Eine besondere Leistung kann ab '+Math.ceil(employeeDevelopment.SPECIAL_EVENT_MINUTES/60)+' h ebenfalls ein Level-up auslösen.';
       }
     }else{
       progressionHint='Alle Spezialisierungen und Level-ups dieses Mitarbeiters wurden verdient.';
@@ -5254,6 +5254,7 @@
         }
         if(employee){
           const learningEffect=employeeDevelopment.getEffects(employee).learning;
+          employee.productionMinutes=Math.round((Math.max(0,Number(employee.productionMinutes)||0)+step)*1000)/1000;
           employee.xp=Math.round((employee.xp+step*recruitmentSystem.learningMultiplier(employee)*(1+learningEffect))*1000)/1000;
           recordEmployeeMachineWork(employee,m,step,Math.max(0,m.produced-producedBefore));
         }
