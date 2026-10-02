@@ -93,7 +93,7 @@ test('queue sorting applies priority and stable FIFO order, without disturbing r
   productionFlow.setPriority(state, 'B', 'high');
   productionFlow.setPriority(state, 'C', 'high');
   const queue = productionFlow.getSnapshot(state).queues.Drehen;
-  assert.deepEqual(queue, ['B-lot-3', 'B-lot-4', 'C-lot-5', 'C-lot-6', 'A-lot-2']);
+  assert.deepEqual(queue, ['B-lot-2', 'C-lot-3']);
   assert.equal(state.productionFlow.lots.find(lot => lot.id === running.id).status, 'running');
   assert.equal(state.productionFlow.lots.find(lot => lot.id === running.id).priority, 'normal');
 });

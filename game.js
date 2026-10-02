@@ -56,10 +56,11 @@
   const programmingQuality = globalThis.CNCModules && globalThis.CNCModules.programmingQuality;
   const employeeDevelopment = globalThis.CNCModules && globalThis.CNCModules.employeeDevelopment;
   const productionFlow = globalThis.CNCModules && globalThis.CNCModules.productionFlow;
+  const orderPlanning = globalThis.CNCModules && globalThis.CNCModules.orderPlanning;
   const suppliers = globalThis.CNCModules && globalThis.CNCModules.suppliers;
   const customerProjects = globalThis.CNCModules && globalThis.CNCModules.customerProjects;
   const factorySituations = globalThis.CNCModules && globalThis.CNCModules.factorySituations;
-  const factory2Systems = [productionFlow,suppliers,customerProjects,factorySituations].every(Boolean);
+  const factory2Systems = [productionFlow,orderPlanning,suppliers,customerProjects,factorySituations].every(Boolean);
   if (!economySystem || !inventorySystem || !orderMarketSystem || !breakdownSystem || !expansionSystem || !materialSystem || !recruitmentSystem || !programmingQuality || !employeeDevelopment) throw new Error('CNC Factory game systems failed to load.');
   const catalog = {
     standard: {name:'Nexora NX-350',kind:'Drehen',price:18000,rate:1},
@@ -394,6 +395,7 @@
         batchMode:['auto','small','normal','large'].includes(settings.batchMode)?settings.batchMode:'auto',
         routePreset:['single','mixed','outsource'].includes(settings.routePreset)?settings.routePreset:'single'
       },
+      offerChoices:saved.offerChoices&&typeof saved.offerChoices==='object'?saved.offerChoices:{},
       orderResults:saved.orderResults&&typeof saved.orderResults==='object'?saved.orderResults:{},
       projectOrders:saved.projectOrders&&typeof saved.projectOrders==='object'?saved.projectOrders:{},
       pendingSupplierQuotes:saved.pendingSupplierQuotes&&typeof saved.pendingSupplierQuotes==='object'?saved.pendingSupplierQuotes:{},
@@ -403,6 +405,7 @@
       specialOrderIds:Array.isArray(saved.specialOrderIds)?saved.specialOrderIds.filter(id=>typeof id==='string'):[]
     };
     productionFlow.ensureState(state);
+    if(!Number.isFinite(state.reputation))state.reputation=50;
     suppliers.ensureState(state,{seed:1});
     customerProjects.ensureState(state,{seed:1});
     factorySituations.ensureState(state,{seed:1});
@@ -2104,22 +2107,53 @@
   const flowKindForType=type=>type==='milling'?'Fräsen':type==='turning'?'Drehen':null;
   const flowStepLabel=step=>step?.type==='external'?`Fremdvergabe · ${({turning:'Drehen',milling:'Fräsen',quality:'QS',assembly:'Montage'})[step.operationType]||'Arbeitsgang'}`:
     ({turning:'Drehen',milling:'Fräsen',quality:'QS',assembly:'Montage',external:'Fremdvergabe'})[step?.type]||'Arbeitsgang';
-  function factory2RouteFor(order,settings){
-    if(Array.isArray(order.routing)&&order.routing.length)return order.routing;
-    const first=flowTypeForKind(order.kind),second=first==='turning'?'milling':'turning';
-    const route=[{type:first,requiredMachineKind:order.kind}];
-    if(settings.routePreset==='mixed')route.push({type:second,requiredMachineKind:flowKindForType(second)});
-    if(settings.routePreset==='outsource')route.push({type:'external',operationType:second,requiredMachineKind:null});
-    if(settings.routePreset!=='single')route.push({type:'quality',requiredMachineKind:null});
-    return route.map((step,index)=>({...step,id:`${order.id}-step-${index+1}`,status:index?'blocked':'queued'}));
+  function orderCapabilities(){
+    const scores=Object.values(orderMarketSystem.getReputation(state)).filter(Number.isFinite);
+    state.reputation=scores.length?scores.reduce((sum,value)=>sum+value,0)/scores.length:50;
+    const providers=suppliers.listProviders(state).providers||[];
+    return {stations:state.machines.map(machine=>({bay:machine.bay,kind:catalog[machine.type]?.kind,
+      staffed:[1,2].some(shift=>!!assignedEmployee(machine,shift))||!!machine.loadingRobot})),
+      qualityStaff:[1,2].some(shift=>!!qualityEmployee(shift)),providers};
   }
-  function readFactory2OrderSettings(){
-    const settings=state.factory2.orderSettings;
-    const priority=$('cf2-priority')?.value,batchMode=$('cf2-batch-mode')?.value,routePreset=$('cf2-route-preset')?.value;
-    if(['low','normal','high'].includes(priority))settings.priority=priority;
-    if(['auto','small','normal','large'].includes(batchMode))settings.batchMode=batchMode;
-    if(['single','mixed','outsource'].includes(routePreset))settings.routePreset=routePreset;
-    return settings;
+  function offerPlan(order){
+    return orderPlanning.plan(order,orderCapabilities(),state.factory2.offerChoices[order.id]||{});
+  }
+  function outsourcingEstimate(order,plan){
+    const flow=productionFlow.createPlan({...order,routing:plan.routing},{capacity:Math.max(1,Math.floor(40*factory2SituationEffectsAt(state.gameMinutes).capacityFactor))});
+    if(!flow.ok)return {cost:0,details:[],valid:false};
+    let cost=0;const details=[];
+    const preview={gameMinutes:state.gameMinutes,reputation:state.reputation,suppliers:JSON.parse(JSON.stringify(state.suppliers))};
+    for(const check of plan.checks.filter(item=>item.external&&item.provider)){
+      let stepCost=0,maxTime=0,risk=0;
+      for(const lot of flow.lots){
+        const quote=suppliers.quote(preview,check.provider.id,order,{routeStepId:check.step.id,operationType:check.operation,qty:lot.qty,lotId:lot.id,atMinute:state.gameMinutes});
+        if(!quote.ok)return {cost:0,details:[],valid:false};
+        stepCost+=quote.totalCost;maxTime=Math.max(maxTime,quote.leadTimeMinutes);risk=Math.max(risk,quote.qualityRisk);
+      }
+      cost+=stepCost;details.push(check.label+': '+euro(stepCost)+' · ca. '+formatEstimateMinutes(maxTime)+' · Qualitätsrisiko '+Math.round(risk*100)+' %');
+    }
+    return {cost:Math.round(cost*100)/100,details,valid:true};
+  }
+  function renderOfferRoute(card,order,plan){
+    const panel=document.createElement('section');panel.className='order-route';
+    const heading=document.createElement('h4');heading.textContent=plan.checks.map(check=>check.label).join(' → ');panel.append(heading);
+    for(const check of plan.checks){
+      const row=document.createElement('div'),status=document.createElement('span'),select=document.createElement('select');row.className='order-step';
+      status.className='order-step-status'+(!check.ready?' missing':'');
+      status.textContent=check.label+' · '+(check.external?(check.provider?'Fremdvergabe an '+check.provider.name:'Zulieferer wählen'):check.installed?(check.staffed?(check.operation==='quality'?'QS-Fachkraft vorhanden':'Maschine und Bediener vorhanden'):'Maschine vorhanden · Bediener fehlt'):(check.operation==='quality'?'QS-Fachkraft fehlt':'Maschine fehlt'));
+      select.setAttribute('aria-label',check.label+' für '+order.part);select.dataset.routeStepId=check.step.id;
+      const internal=document.createElement('option');internal.value='';internal.textContent=check.step.type==='external'?'Zulieferer wählen':check.installed&&check.staffed?'Im Betrieb fertigen':'Im Betrieb · '+check.reason;select.append(internal);
+      for(const provider of check.providers){const option=document.createElement('option');option.value=provider.id;option.textContent='Fremdvergabe · '+provider.name;select.append(option);}
+      select.value=check.provider?.id||'';
+      select.addEventListener('click',event=>event.stopPropagation());
+      select.addEventListener('change',()=>{const choices=state.factory2.offerChoices[order.id]||(state.factory2.offerChoices[order.id]={});choices[check.step.id]=select.value;save();renderOrders();});
+      row.append(status,select);panel.append(row);
+    }
+    const estimate=outsourcingEstimate(order,plan);
+    if(estimate.details.length){const costs=document.createElement('p');costs.className='order-route-cost';costs.textContent=estimate.details.join(' · ')+' · Richtpreis gesamt '+euro(estimate.cost)+'. Beauftragung automatisch beim Erreichen des Schritts; Tagesangebot und verfügbares Guthaben gelten.';panel.append(costs);}
+    if(plan.routing.length>1){const hint=document.createElement('p');hint.className='hint';hint.textContent='Teillose gehen nach jedem Arbeitsgang direkt an die nächste Station. Die übrige Menge kann gleichzeitig weiterbearbeitet werden.';panel.append(hint);}
+    if(order.projectInvitation){const invitation=document.createElement('p');invitation.className='order-project-invitation';invitation.textContent=order.customer+' bietet ein Kundenprojekt an. Dieser Auftrag ist der erste Prototyp; du startest das Projekt mit der Annahme.';panel.append(invitation);}
+    card.append(panel);return estimate;
   }
   function factory2ProjectForOrder(order){
     const projects=state.customerProjects?.projects||[];
@@ -2250,13 +2284,14 @@
   }
   function startFactory2Lot(machine,atMinute){
     if(job(machine)||machine.suspendedOrder||machine.orderQueue.length||machine.qualityReworkQueue.length||machine.maintenanceRemainingMinutes>0||machine.maintenance<8||machine.tool<1||!breakdownSystem.canContinueProduction(state,machine.bay))return false;
-    const kind=catalog[machine.type]?.kind;if(!kind)return false;
+    const kind=catalog[machine.type]?.kind;if(!kind||![1,2].some(shift=>!!assignedEmployee(machine,shift))&&!machine.loadingRobot)return false;
     const started=productionFlow.startNext(state,String(machine.bay),kind,atMinute);
     if(!started.ok)return false;
     const lot=started.lot,root=factory2RootOrder(lot),step=root?.routing?.[lot.routePosition];
     if(!root||!step){return false;}
     const deadlineAt=Number.isFinite(root.deadlineAt)?root.deadlineAt:atMinute+Math.max(1,Number(root.deadlineHours)||1)*60;
-    const lotOrder={...root,id:root.id,qty:lot.qty,reward:(Number(root.reward)||0)*lot.qty/Math.max(1,root.qty),kind:step.requiredMachineKind||root.kind,
+    const machiningSteps=Math.max(1,root.routing.filter(item=>['turning','milling'].includes(item.type)||item.type==='external'&&['turning','milling'].includes(item.operationType)).length);
+    const lotOrder={...root,duration:root.duration*lot.qty/Math.max(1,root.qty)/machiningSteps,id:root.id,qty:lot.qty,reward:(Number(root.reward)||0)*lot.qty/Math.max(1,root.qty),kind:step.requiredMachineKind||root.kind,
       deadlineAt,bay:machine.bay,factory2:true,factory2OrderId:root.id,flowLotId:lot.id,flowRouteStepId:step.id,flowRouteType:step.type};
     machine.activeId=root.id;machine.activeOrder=lotOrder;machine.activeOrderSource='factory2';machine.deadlineAt=deadlineAt;
     machine.progress=0;machine.produced=0;machine.qualityInspectedOrderId=null;machine.qualityInspectionOrderId=null;
@@ -2302,6 +2337,19 @@
     if(result.job.timing==='late'||result.job.outcome.quality!=='accepted')orderMarketSystem.adjustReputation(state,state.productionFlow.orders[job.orderId]?.customer,-2);
     return true;
   }
+  function dispatchPlannedOutsourcing(atMinute){
+    for(const lot of state.productionFlow.lots){
+      const order=factory2RootOrder(lot),step=order?.routing?.[lot.routePosition];
+      if(step?.type!=='external'||!step.providerId||!['waiting','queued'].includes(lot.status))continue;
+      const savedId=state.factory2.pendingSupplierQuotes[lot.id],saved=savedId&&state.suppliers.quotes[savedId];
+      const quote=saved&&saved.providerId===step.providerId&&saved.expiresAtMinute>atMinute?{ok:true,...saved}:suppliers.quote(state,step.providerId,order,{routeStepId:step.id,operationType:step.operationType,qty:lot.qty,lotId:lot.id,atMinute});
+      if(!quote.ok)continue;
+      state.factory2.pendingSupplierQuotes[lot.id]=quote.quoteId;
+      if(state.money<quote.totalCost)continue;
+      const created=suppliers.outsource(state,step.providerId,order.id,step.id,lot.qty,atMinute,{quoteId:quote.quoteId,lotId:lot.id});
+      if(created.ok)releaseFactory2SupplierJob(state.suppliers.jobs.find(item=>item.id===created.job.id));
+    }
+  }
   function tickFactory2Systems(atMinute){
     if(!factory2Systems)return;
     productionFlow.tick(state,atMinute);suppliers.tick(state,atMinute);factorySituations.tick(state,atMinute);
@@ -2313,7 +2361,7 @@
       if(state.factory2.pendingSupplierRelease[job.id])releaseFactory2SupplierJob(job);
       if(['due','overdue','completed'].includes(job.status))finishFactory2Delivery(job,atMinute);
     }
-    startFactory2Lots(atMinute);
+    dispatchPlannedOutsourcing(atMinute);startFactory2Lots(atMinute);
   }
   function processQualityRework(machine,step,shift){
     const task=machine.qualityReworkQueue[0];
@@ -2541,7 +2589,9 @@
   function ordersRenderKey(){
     const offers=orderMarketSystem.getAvailable(state);
     const marketDay=Math.floor(state.gameMinutes/1440);
-    return [offers.map(o=>o.id).join(','),JSON.stringify(state.inventory.rawMaterial),marketDay,Object.keys(state.ncPrograms||{}).sort().join(',')].join('::');
+    return [offers.map(o=>o.id).join(','),JSON.stringify(state.inventory.rawMaterial),marketDay,Object.keys(state.ncPrograms||{}).sort().join(','),
+      state.productionFlow?.lots.map(lot=>[lot.id,lot.status,lot.routePosition].join(':')).join(','),
+      JSON.stringify(state.qualityStaff),state.machines.map(machine=>[machine.bay,machine.type,machine.operator1,machine.operator2].join(':')).join(','),Math.floor(state.money)].join('::');
   }
   let pendingOrderAssignmentId=null;
   function renderMachineLoadCard(machine){
@@ -2657,8 +2707,10 @@
       const routeLots=(state.productionFlow?.lots||[]).filter(lot=>lot.orderId===o.id&&lot.status!=='completed'&&lot.status!=='cancelled');
       const running=state.machines.find(x=>x.activeId===o.id||x.orderQueue.some(entry=>entry.order.id===o.id))||
         (routeLots.length?{bay:routeLots.find(lot=>lot.status==='running')?.machineId||null,produced:routeLots.reduce((sum,lot)=>sum+lot.qtyCompleted,0),flow:true}:null);
-      const compatibleMachines=state.machines.filter(machine=>compatible(machine,o));
-      card.className='card'+(state.selected===o.id?' selected':'')+(running?' running':'')+(!compatibleMachines.length&&!running?' incompatible':'');
+      const planning=offerPlan(o),firstStep=planning.routing[0];
+      const compatibleMachines=state.machines.filter(machine=>catalog[machine.type]?.kind===firstStep.requiredMachineKind);
+      const externalStart=firstStep.type==='external';
+      card.className='card'+(state.selected===o.id?' selected':'')+(running?' running':'')+(!planning.ready&&!running?' incompatible':'');
       const customerType=o.customerType?`${o.customerType} · `:'';
       const difficulty=Number.isFinite(o.difficulty)?` · Schwierigkeit ${o.difficulty}/5`:'';
       const materialType=materialSystem.typeForOrder(o),materialKg=materialSystem.requiredKg(o);
@@ -2667,10 +2719,11 @@
       const materialContribution=Number.isFinite(materialCost)?o.reward-materialCost:null;
       const baseMachineRate=o.kind==='Fräsen'?catalog.mill3.rate:catalog.standard.rate;
       const estimateMinutes=programmingETA(o)+setupMinutesForOrder(o)+Math.max(0,(o.qty-1)/Math.max(1,o.qty)*effectiveDuration(o)*6/baseMachineRate);
-      const contributionPerHour=Number.isFinite(materialContribution)&&estimateMinutes>0?materialContribution/(estimateMinutes/60):null;
+      const simpleInternal=planning.routing.length===1&&!externalStart;
+      const contributionPerHour=simpleInternal&&Number.isFinite(materialContribution)&&estimateMinutes>0?materialContribution/(estimateMinutes/60):null;
       const risks=compatibleMachines.map(machine=>qualityRiskFor(machine,o)).sort((a,b)=>a-b);
       const qualityHint=` · ${programmingQuality.toleranceClass(o)}${risks.length?` · Qualitätsrisiko ${risks[0]}${risks.length>1&&risks[0]!==risks[risks.length-1]?`–${risks[risks.length-1]}`:''} %`:''}`;
-      card.innerHTML=`<div class="top"><span>${o.customer}</span><span>${o.kind} · #${o.id}</span></div><h3>${o.part}</h3><p>${customerType}${o.material} · ${o.qty} Teile${difficulty}${qualityHint}</p><div class="values"><span>${o.kg} kg · Liefertermin ${formatDeliveryAt(o.deadlineAt)}${o.reputationBonusPct?` · ${o.reputationBonusPct<0?'Kundenabschlag':'Kundenbonus'} ${o.reputationBonusPct>0?'+':''}${o.reputationBonusPct} %`:''}</span><b>${euro(o.reward)}</b></div><div class="order-economics${materialContribution!==null&&materialContribution<0?' loss':''}"><div class="order-economics-grid"><span>Material zum Tageskurs<strong>${materialCost===null?'—':euro(materialCost)}</strong></span><span>Nach Material<strong>${materialContribution===null?'—':euro(materialContribution)}</strong></span></div><p>${contributionPerHour===null?'':`Etwa ${euro(contributionPerHour)} je Maschinenstunde · ${formatMinutes(estimateMinutes)} Rüst- und Maschinenzeit`}</p><small>Grundmaschine, ohne Lohn, Strom und Verschleiß</small></div>`;
+      card.innerHTML=`<div class="top"><span>${o.customer}</span><span>${o.kind} · #${o.id}</span></div><h3>${o.part}</h3><p>${customerType}${o.material} · ${o.qty} Teile${difficulty}${qualityHint}</p><div class="values"><span>${o.kg} kg · Liefertermin ${formatDeliveryAt(o.deadlineAt)}${o.reputationBonusPct?` · ${o.reputationBonusPct<0?'Kundenabschlag':'Kundenbonus'} ${o.reputationBonusPct>0?'+':''}${o.reputationBonusPct} %`:''}</span><b>${euro(o.reward)}</b></div><div class="order-economics${materialContribution!==null&&materialContribution<0?' loss':''}"><div class="order-economics-grid"><span>Material zum Tageskurs<strong>${materialCost===null?'—':euro(materialCost)}</strong></span><span>Nach Material<strong>${materialContribution===null?'—':euro(materialContribution)}</strong></span></div><p>${contributionPerHour===null?'':`Etwa ${euro(contributionPerHour)} je Maschinenstunde · ${formatMinutes(estimateMinutes)} Rüst- und Maschinenzeit`}</p><small>${simpleInternal?'Grundmaschine, ohne Lohn, Strom und Verschleiß':'Kosten und Laufzeit hängen von den gewählten Stationen ab; Fremdvergabe kommt zum Material hinzu.'}</small></div>`;
       const orderBrand=customerBrandIdentity(o.customer),orderTop=card.querySelector('.top');
       orderTop.firstElementChild.replaceWith(createCustomerBrandLine(o.customer,true));
       orderTop.classList.add('customer-order-top','customer-order-'+orderBrand.brandClass);
@@ -2686,7 +2739,7 @@
         badge.textContent=`${customerHistory.relationship.toUpperCase()} · ${customerHistory.completed} bisherige Auftrag${customerHistory.completed===1?'':'e'}${customerHistory.lastPart?' · zuletzt '+customerHistory.lastPart:''}${customerHistory.complaints?' · '+customerHistory.complaints+' Reklamation'+(customerHistory.complaints===1?'':'en'):''}`;
         card.querySelector('.top').after(badge);
       }
-      const loadPreviews=compatibleMachines.filter(machine=>!machineOrderBlockReason(machine,o)).map(machine=>({machine,load:plannedMachineLoad(machine,o)}))
+      const loadPreviews=(simpleInternal?compatibleMachines:[]).filter(machine=>!machineOrderBlockReason(machine,o)).map(machine=>({machine,load:plannedMachineLoad(machine,o)}))
         .filter(entry=>entry.load.shifts.length&&entry.load.candidateCheck);
       loadPreviews.sort((a,b)=>b.load.candidateCheck.bufferMinutes-a.load.candidateCheck.bufferMinutes);
       if(loadPreviews.length){
@@ -2702,7 +2755,7 @@
         badge.textContent=`EILAUFTRAG · +${o.rushBonusPct||20} % · Liefertermin ${formatDeliveryAt(o.deadlineAt)}`;
         card.querySelector('.top').after(badge);
       }
-      if(!programReady(o)){
+      if(planning.routing.some(step=>step.type==='turning'||step.type==='milling')&&!programReady(o)){
         const badge=document.createElement('strong');badge.className='nc-program-badge';
         const task=programTaskFor(programKey(o));
         badge.textContent=task
@@ -2717,7 +2770,8 @@
       const button=document.createElement('button');
       button.type='button';
       const shortage=Math.max(0,materialSystem.requiredKg(o)-materialSystem.available(state,o));
-      const machineReady=compatibleMachines.some(machine=>!machineOrderBlockReason(machine,o));
+      const estimate=renderOfferRoute(card,o,planning);
+      const machineReady=externalStart||compatibleMachines.some(machine=>!machineOrderBlockReason(machine,{...o,kind:firstStep.requiredMachineKind}));
       const allQueuesFull=compatibleMachines.length>0&&compatibleMachines.every(machine=>machine.orderQueue.length>=MAX_QUEUED_ORDERS);
       if(shortage>1e-9){
         const marketButton=document.createElement('button');
@@ -2736,8 +2790,9 @@
         withdraw.addEventListener('click',event=>{event.stopPropagation();withdrawRushOrder(o.id);});
         card.append(withdraw);
       }
-      button.textContent=running?(running.flow?'Bereits in der Produktionskette':'Bereits eingeplant'):!state.machines.length?'Zuerst Maschine kaufen':!compatibleMachines.length?`Benötigt ${o.kind}`:shortage>1e-9?`Fehlen ${Math.ceil(shortage)} kg ${o.material}`:!machineReady?allQueuesFull?'Planung voll (3/3)':'Maschinenservice nötig':'Auftrag annehmen';
-      button.disabled=!state.machines.length||!!running||!compatibleMachines.length||shortage>1e-9||!machineReady;
+      const missing=planning.checks.filter(check=>!check.ready).map(check=>check.reason).join(' · ');
+      button.textContent=running?'Bereits eingeplant':missing|| (shortage>1e-9?'Fehlen '+Math.ceil(shortage)+' kg '+o.material:!estimate.valid?'Fremdvergabe prüfen':state.money<estimate.cost?'Guthaben für Fremdvergabe fehlt':!machineReady?'Maschinenservice oder Planung prüfen':'Auftrag annehmen');
+      button.disabled=!!running||!planning.ready||shortage>1e-9||!estimate.valid||state.money<estimate.cost||!machineReady;
       button.addEventListener('click',event=>{event.stopPropagation();openOrderMachineChooser(o.id);});
       card.append(button);
       card.addEventListener('click',()=>{state.selected=o.id;save();renderOrders();});
@@ -2751,29 +2806,9 @@
     const row=document.createElement('article'),title=document.createElement('strong'),detail=document.createElement('p');
     row.className='factory2-row';title.textContent=titleText;detail.textContent=detailText;row.append(title,detail);return row;
   }
-  function generateFactory2SpecialOrder(){
-    if(state.orderMarket.available.length>=8){say('Die Auftragsbörse ist voll. Nimm erst einen Auftrag an.');return false;}
-    const customer=$('cf2-project-customer').value||'Veltraxis Mobility';
-    const profile=orderMarketSystem.getCustomerIdentity(customer);
-    const generated=factorySituations.generateSpecialOrder(state,{...profile,customer},{atMinute:state.gameMinutes});
-    if(!generated||!generated.id)return false;
-    const materialType=Object.hasOwn(materialSystem.catalog,generated.materialType)?generated.materialType:'aluminium6082';
-    const offer={...generated,materialType,material:materialSystem.catalog[materialType].label,kg:Math.ceil(generated.materialAmountKg),
-      createdAt:state.gameMinutes,expiresAt:state.gameMinutes+24*60,deadlineAt:state.gameMinutes+generated.deadlineHours*60};
-    state.orderMarket.available.push(offer);state.factory2.specialOrderIds.push(offer.id);
-    save();renderOrders();say(`Spezialauftrag ${offer.id} erstellt · ${offer.mechanics.map(item=>item.label).join(' · ')}.`);return true;
-  }
-  function createFactory2Project(){
-    const customer=$('cf2-project-customer').value||'Veltraxis Mobility',identity=orderMarketSystem.getCustomerIdentity(customer);
-    const project=customerProjects.create(state,{...identity,customer,reputation:orderMarketSystem.getReputation(state)[customer]},
-      {size:$('cf2-project-size').value||'medium',atMinute:state.gameMinutes});
-    if(!project?.id){say('Das Kundenprojekt konnte nicht gestartet werden.');return false;}
-    save();renderFactory2Panel();say(`${customer}: Projekt „${project.phases[0]?.name||'Prototyp'}“ gestartet. Der nächste passende Auftrag wird dieser Phase zugeordnet.`);return true;
-  }
   function renderFactory2Panel(){
     if(!factory2Systems)return;
-    const settings=state.factory2.orderSettings;
-    $('cf2-priority').value=settings.priority;$('cf2-batch-mode').value=settings.batchMode;$('cf2-route-preset').value=settings.routePreset;
+
     const activeSnapshot=factorySituations.getSnapshot(state,state.gameMinutes);
     $('cf2-situation-list').replaceChildren(...[...activeSnapshot.active,...activeSnapshot.scheduled].map(item=>
       createFactory2Row(`${item.status==='active'?'Aktiv':'Vorschau'} · ${item.label}`,`${item.description} · ${item.status==='active'?'endet in '+formatEstimateMinutes(item.remainingMinutes):'Start in '+formatEstimateMinutes(item.startsInMinutes)}`)));
@@ -2784,7 +2819,8 @@
       const order=factory2RootOrder(lot),step=order?.routing?.[lot.routePosition],row=document.createElement('article');
       row.className='factory2-row';
       const title=document.createElement('strong'),detail=document.createElement('p'),controls=document.createElement('div');
-      title.textContent=`${order?.part||lot.orderId} · Los ${lot.sequence} · ${lot.qty} Teile`;
+      const chained=order?.routing?.length>1;
+      title.textContent=(order?.part||lot.orderId)+(chained?' · Los '+lot.sequence:'')+' · '+lot.qty+' Teile';
       detail.textContent=`${flowStepLabel(step)} · ${lot.status==='queued'?'Warteschlange':lot.status==='running'?'in Arbeit':lot.status==='outsourced'?'beim Zulieferer':lot.status}`;
       controls.className='factory2-actions';
       const priority=document.createElement('select');priority.setAttribute('aria-label',`Priorität ${order?.part||lot.orderId}`);
@@ -2792,7 +2828,7 @@
       priority.value=lot.priority;priority.disabled=!['queued','waiting'].includes(lot.status);
       priority.addEventListener('change',()=>{productionFlow.setPriority(state,lot.orderId,priority.value);save();renderFactory2Panel();});
       controls.append(priority);row.append(title,detail,controls);return row;
-    }):[createFactory2Row('Noch keine Produktionskette','Nimm ein Angebot an, um Route und Teillose zu planen.')]));
+    }):[createFactory2Row('Keine laufende Fertigung','Angenommene Aufträge erscheinen hier mit ihrem aktuellen Arbeitsgang.')]));
 
     const supplierRows=[];
     for(const lot of liveLots){
@@ -2838,7 +2874,7 @@
       const decision=customerProjects.getAvailableDecision(state,project.id);
       if(decision){const prompt=document.createElement('p');prompt.textContent=decision.prompt;row.append(prompt);for(const option of decision.options){const button=document.createElement('button');button.type='button';button.className='action';button.textContent=`${option.label} · ${option.description}`;button.addEventListener('click',()=>{const chosen=customerProjects.chooseDecision(state,project.id,option.id,state.gameMinutes);if(chosen.ok){save();renderFactory2Panel();say(`${project.customer}: Entscheidung „${option.label}“ übernommen.`);}});row.append(button);}}
       return row;
-    }):[createFactory2Row('Noch kein Kundenprojekt','Starte ein Projekt und verknüpfe den nächsten passenden Kundenauftrag mit seiner aktuellen Phase.')]));
+    }):[createFactory2Row('Noch kein Kundenprojekt','Mit einer erfolgreichen Zusammenarbeit kommen Kunden gelegentlich mit einem Projektangebot auf dich zu.')]));
   }
   function outsourceFactory2Lot(lot,providerId,quote){
     const order=factory2RootOrder(lot),step=order?.routing?.[lot.routePosition];
@@ -2914,10 +2950,18 @@
     if(!pendingOrderAssignmentId){panel.hidden=true;return;}
     const order=orderMarketSystem.getAvailable(state).find(item=>item.id===pendingOrderAssignmentId);
     if(!order){pendingOrderAssignmentId=null;panel.hidden=true;return;}
-    $('assignment-title').textContent='Welche Maschine soll den Auftrag übernehmen?';
+    const planning=offerPlan(order),first=planning.routing[0];
+    if(first.type==='external'){
+      $('assignment-title').textContent='Auftrag mit Fremdvergabe annehmen';
+      $('assignment-detail').textContent=order.part+' · '+planning.checks.map(check=>check.label).join(' → ')+' · Material wird jetzt reserviert. Der erste Zulieferer wird direkt beauftragt.';
+      const button=document.createElement('button');button.type='button';button.className='action';button.textContent='Auftrag verbindlich annehmen';button.disabled=!planning.ready;
+      button.addEventListener('click',()=>startOrder(order.id,null));$('assignment-options').replaceChildren(button);panel.hidden=false;return;
+    }
+    const firstOrder={...order,kind:first.requiredMachineKind};
+    $('assignment-title').textContent='Welche Maschine beginnt den Auftrag?';
     $('assignment-detail').textContent=order.part+' · '+order.kind+' · '+order.material+' · Wähle eine Maschine anhand von Fertigstellung und Fristpuffer. Weitere Planungswerte kannst du bei jedem Platz aufklappen.';
     $('assignment-options').replaceChildren(...state.machines.map(machine=>{
-      const card=document.createElement('div'),button=document.createElement('button'),reason=machineOrderBlockReason(machine,order);
+      const card=document.createElement('div'),button=document.createElement('button'),reason=machineOrderBlockReason(machine,firstOrder);
       const name=document.createElement('span'),summary=document.createElement('strong'),details=document.createElement('details'),detailsTitle=document.createElement('summary');
       const loadLine=document.createElement('span'),currentLoad=document.createElement('span'),queueLoad=document.createElement('span'),projectedLoad=document.createElement('strong');
       card.className='assignment-card';
@@ -2932,7 +2976,7 @@
       details.className='assignment-details';detailsTitle.textContent='Laufender Auftrag, Warteschlange & Auslastung';
       details.append(detailsTitle,loadLine);card.append(button,details);
       updateAssignmentLoadLine(loadLine,machine,order);
-      button.disabled=!!reason;
+      button.disabled=!!reason||!planning.ready;
       button.addEventListener('click',()=>startOrder(order.id,machine.bay));
       return card;
     }));
@@ -3110,7 +3154,9 @@
       return;
     }
     if(available+1e-9<required){say('Es fehlen noch '+Math.ceil(required-available)+' kg '+order.material+'.');renderWarehouseOrderContext();return;}
-    if(!state.machines.some(m=>compatible(m,order)&&!machineOrderBlockReason(m,order))){
+    const planning=offerPlan(order);
+    if(!planning.ready){say('Prüfe die fehlenden Fähigkeiten oder wähle Fremdvergabe auf der Auftragskarte.');tab('orders');return;}
+    if(planning.routing[0]?.type!=='external'&&!state.machines.some(m=>compatible(m,{...order,kind:planning.routing[0]?.requiredMachineKind})&&!machineOrderBlockReason(m,{...order,kind:planning.routing[0]?.requiredMachineKind}))){
       say('Keine passende Maschine ist gerade aufnahmebereit.');return;
     }
     tab('orders');
@@ -4696,17 +4742,21 @@
   function startOrder(id,bay,options={}){
     tickOrderMarket(state.gameMinutes);
     const o=orderMarketSystem.getAvailable(state).find(order=>order.id===id),m=state.machines.find(machine=>machine.bay===Number(bay));
-    if(!o||!m||(!options.interrupt&&m.orderQueue.length>=MAX_QUEUED_ORDERS)||state.machines.some(x=>x.activeId===id||x.orderQueue.some(entry=>entry.order.id===id))){if(!options.automatic)say('Dieses Angebot ist nicht mehr verfügbar oder die Auftragsplanung ist voll.');return false;}
+    const planning=o&&factory2Systems?offerPlan(o):null,externalStart=!!planning&&planning.routing[0]?.type==='external'&&!options.interrupt;
+    if(!o||(!m&&!externalStart)||(!options.interrupt&&m&&m.orderQueue.length>=MAX_QUEUED_ORDERS)||state.machines.some(x=>x.activeId===id||x.orderQueue.some(entry=>entry.order.id===id))){if(!options.automatic)say('Dieses Angebot ist nicht mehr verfügbar oder die Auftragsplanung ist voll.');return false;}
     if(options.interrupt&&(!job(m)||m.suspendedOrder)){if(!options.automatic)say('Der laufende Auftrag kann auf dieser Maschine nicht unterbrochen werden.');return false;}
-    if(!compatible(m,o)){if(!options.automatic)say(`${o.part} benötigt ${o.kind}. ${catalog[m.type].name} ist für ${catalog[m.type].kind} ausgelegt.`);return false;}
+    if(!externalStart&&!compatible(m,{...o,kind:planning?.routing[0]?.requiredMachineKind||o.kind})){if(!options.automatic)say(`${o.part} benötigt ${o.kind}. ${catalog[m.type].name} ist für ${catalog[m.type].kind} ausgelegt.`);return false;}
     const requiredMaterial=materialSystem.requiredKg(o),availableMaterial=materialSystem.available(state,o);
     if(availableMaterial+1e-9<requiredMaterial){
       if(!options.automatic){say(`Es fehlen ${Math.ceil(requiredMaterial-availableMaterial)} kg ${o.material}.`);tab('warehouse');}return false;
     }
-    if(m.maintenance<8||m.tool<1){if(!options.automatic){say('Vorher Werkzeug oder Wartung erneuern.');tab('machine');}return false;}
+    if(!externalStart&&(m.maintenance<8||m.tool<1)){if(!options.automatic){say('Vorher Werkzeug oder Wartung erneuern.');tab('machine');}return false;}
     let factory2Settings=null,factory2Snapshot=null,factory2Project=null,factory2Preflight=null;
     if(factory2Systems&&!options.interrupt){
-      factory2Settings=readFactory2OrderSettings();
+      if(!planning.ready){if(!options.automatic)say('Arbeitsplan unvollständig: '+planning.checks.filter(check=>!check.ready).map(check=>check.reason).join(' · '));return false;}
+      const estimate=outsourcingEstimate(o,planning);
+      if(!estimate.valid||state.money<estimate.cost){if(!options.automatic)say('Guthaben oder Zuliefererangebot für die Fremdvergabe fehlt.');return false;}
+      factory2Settings={priority:'normal',batchMode:'auto'};
       const modifiers=factorySituations.getActiveModifiers(state,state.gameMinutes);
       factory2Snapshot=factorySituations.applyModifiers(o,modifiers);
       factory2Project=factory2ProjectForOrder(factory2Snapshot);
@@ -4715,7 +4765,7 @@
         priority:['low','normal','high'].includes(factory2Snapshot.priority)?factory2Snapshot.priority:factory2Settings.priority,
         batchMode:['auto','small','normal','large'].includes(factory2Snapshot.batchMode)?factory2Snapshot.batchMode:factory2Settings.batchMode,
         interruptionSensitivity:Number.isFinite(factory2Snapshot.interruptionSensitivity)?factory2Snapshot.interruptionSensitivity:0.35,
-        routing:factory2RouteFor(factory2Snapshot,factory2Settings),
+        routing:planning.routing,
         projectId:factory2Snapshot.projectId||(factory2Project?.id||null),
         setupMinutes:setupMinutesForOrder(factory2Snapshot)
       };
@@ -4736,15 +4786,20 @@
         if(!options.automatic)say(`Auftrag konnte nicht eingeplant werden (${added.code}).`);
         return false;
       }
+      if(!flowOrder.projectId&&flowOrder.projectInvitation){
+        const project=customerProjects.create(state,{customer:flowOrder.customer,reputation:orderMarketSystem.getReputation(state)[flowOrder.customer]},{size:flowOrder.projectInvitation.size,atMinute:state.gameMinutes});
+        if(project?.id){flowOrder.projectId=project.id;state.productionFlow.orders[flowOrder.id].projectId=project.id;}
+      }
       if(flowOrder.projectId)state.factory2.projectOrders[flowOrder.id]=flowOrder.projectId;
+      delete state.factory2.offerChoices[flowOrder.id];
       state.factory2.orderResults[flowOrder.id]={paid:0,completedLots:0,qualityDefectParts:0,late:false};
-      if(!options.automatic){closeOrderMachineChooser();state.selected=null;state.selectedBay=m.bay;}
+      if(!options.automatic){closeOrderMachineChooser();state.selected=null;state.selectedBay=m?.bay||state.selectedBay;}
       if(state.warehouseOrderSnapshot?.id===flowOrder.id)state.warehouseOrderSnapshot=null;
       if(state.pendingRushAssignment?.orderId===flowOrder.id)state.pendingRushAssignment=null;
-      startFactory2Lots(state.gameMinutes);save();renderOrders();renderBusiness();render();
+      dispatchPlannedOutsourcing(state.gameMinutes);startFactory2Lots(state.gameMinutes);save();renderOrders();renderBusiness();render();
       const situationWarning=flowOrder.situationEffects?.warnings?.length?` · ${flowOrder.situationEffects.warnings.join(' ')}`:'';
-      say(`${flowOrder.part} angenommen · ${flowOrder.qty} Teile in ${added.lots.length} Teillos${added.lots.length===1?'':'en'} · ${flowOrder.routing.map(flowStepLabel).join(' → ')}${situationWarning}.`);
-      if(!options.automatic){closeDrawer();showMachine(m.bay);}
+      say(flowOrder.part+' angenommen · '+flowOrder.qty+' Teile'+(flowOrder.routing.length>1?' in '+added.lots.length+' Teillosen':'')+' · '+flowOrder.routing.map(flowStepLabel).join(' → ')+situationWarning+'.');
+      if(!options.automatic){closeDrawer();if(m)showMachine(m.bay);else showHall();}
       return true;
     }
     const interrupted=options.interrupt?{
@@ -5566,9 +5621,7 @@
     const machine=machineAt(context.bay);
     if(machine)openEmployeeCard(employee,machine,context.shift);
   });
-  for(const id of ['cf2-priority','cf2-batch-mode','cf2-route-preset'])$(id).addEventListener('change',()=>{readFactory2OrderSettings();save();});
-  $('cf2-generate-special-order').addEventListener('click',generateFactory2SpecialOrder);
-  $('cf2-create-project').addEventListener('click',createFactory2Project);
+
   $('detail-workplace').addEventListener('click',()=>{
     const machine=machineAt(Number($('detail-workplace').dataset.bay));
     const shift=Number($('detail-workplace').dataset.shift);

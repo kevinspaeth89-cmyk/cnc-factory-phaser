@@ -195,7 +195,9 @@
     if (!isRecord(options)) options = {};
     const route = normalizeRoute(order);
     if (!route) return { ok: false, code: Array.isArray(order.routing) && order.routing.length > 4 ? 'ROUTE_TOO_LONG' : 'INVALID_ROUTE' };
-    const batch = resolveBatch(order, options);
+    const batch = route.length === 1
+      ? { requested: 'auto', effective: 'single', target: order.qty }
+      : resolveBatch(order, options);
     const count = Math.ceil(order.qty / batch.target);
     const base = Math.floor(order.qty / count);
     const remainder = order.qty - base * count;
