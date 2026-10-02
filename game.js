@@ -2513,6 +2513,7 @@
     renderBusiness();
     if(name==='warehouse')renderWarehouseOrderContext();
   }
+  const hallInputBlocked=()=>!!currentPanel||!!employeeCardContext||state.eventQueue.length>0||!!pendingOrderAssignmentId;
   function closeDrawer(){
     currentPanel=null;
     $('drawer').hidden=true;
@@ -3292,6 +3293,7 @@
           const bay=machine.bay;
           wrap.addEventListener('click',event=>{
             event.preventDefault();event.stopPropagation();
+            if(hallInputBlocked())return;
             const currentMachine=machineAt(bay),currentEmployee=currentMachine&&assignedEmployee(currentMachine,shift);
             if(currentEmployee)openEmployeeCard(currentEmployee,currentMachine,shift);
           });
@@ -5700,6 +5702,7 @@
     label.textContent=`+ Platz ${bay}`;button.append(label);$('hall-map').append(button);
   }
   for(let bay=1;bay<=8;bay++)$('bay-'+bay).addEventListener('click',event=>{
+    if(hallInputBlocked())return;
     if(bay>expansionSystem.getUnlockedBays(state))return;
     const hit=event.target?.closest?.('.bay-worker-hit');
     if(hit){
@@ -5901,6 +5904,7 @@
       this.workerShadow=this.add.ellipse(540,778,125,24,0x10191c,.4).setVisible(false);
       this.workerImage=this.add.image(540,778,'detail-worker-0').setOrigin(.5,1).setVisible(false).setInteractive({useHandCursor:true});
       this.workerImage.on('pointerdown',()=>{
+        if(hallInputBlocked())return;
         const machine=selectedMachine(),operator=detailOperatorFor(machine);
         if(operator?.present)openEmployeeCard(operator.employee,machine,operator.shift);
       });
