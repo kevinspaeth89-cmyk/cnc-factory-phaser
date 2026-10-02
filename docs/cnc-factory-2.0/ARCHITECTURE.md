@@ -166,12 +166,14 @@ Ein Spezialauftrag kombiniert typischerweise zwei oder drei erkennbare Mechanike
 
 Mitarbeitermodul: `CNCModules.employeeDevelopment`
 
-- `ensureState(state)`
-- `getAvailableSpecializations(employee, progression)`
-- `assignSpecialization(employee, specializationId, progression)`
+- `ensureState(state)` und `ensureEmployee(employee)` für idempotente Save-Migration
+- `getProgress(employee, progression?)` für Karrierelevel, Produktionsstunden, nächste XP-Schwelle und ausstehende Level-up-Auswahlen
+- `getAvailableSpecializations(employee, progression?)`
+- `assignSpecialization(employee, specializationId, progression?)` verbraucht genau eine verdiente Auswahl
+- `awardSpecialEvent(employee, eventType, progression?)` für einmalige, qualifizierte Ereignis-Level-ups
 - `getEffects(employee, context?)`
 
-Mitarbeiter erhalten maximal zwei Spezialisierungen; die erste wird früher, die zweite deutlich später freigeschaltet. Persönlichkeit beeinflusst die Auswahl. Boni sind merklich, aber keine Spezialisierung macht jemanden außerhalb des Gebiets unbrauchbar.
+Mitarbeiter starten ohne offene Spezialisierungsauswahl. Die erste XP-Schwelle liegt bei 120 Produktionsstunden, die zweite bei 300 Stunden. Eine erfolgreiche Selbstreparatur kann nach mindestens 60 Produktionsstunden einmalig ein zusätzliches Level-up verdienen; offene Auswahlen werden dabei nicht gestapelt. Maximal zwei Spezialisierungen. Persönlichkeit begrenzt die Auswahl.
 
 Der Integrationsanteil besitzt als einziger Paket 5 Änderungen an `game.js`, `index.html` und `styles.css` (falls vorhanden). Als klar begrenzte Integrationsausnahme besitzt Paket 5 außerdem die optionale Nachfragefaktor-Erweiterung in `systems/orderMarket.js` und deren Test in `tests/orderMarket.test.js`: `orderMarket.tick(state, gameMinutes, { demandFactor })`. Der Standardfaktor ist `1` und erhält das bisherige Verhalten; ein Faktor innerhalb `0.8–1.3` skaliert nur das nächste Angebotsintervall durch Division der normalen Intervalllänge durch den Faktor. Paket 5 darf keine weiteren Kernmodule aus den Paketen 1–4 ändern. Es lädt alle Module, migriert Spielstände, verbindet Produktionsabschlüsse, Geldbuchungen, Ruf, UI-Zustände und Eventanzeige und schützt bestehende Abläufe.
 
