@@ -10,13 +10,20 @@ assert.ok(html.indexOf('id="storage-upgrade"')<html.indexOf('id="material-market
 assert.equal(ids.includes('material-type'),false);
 assert.ok(ids.includes('recruitment-panel'));
 assert.ok(ids.includes('applicant-list'));
+assert.ok(['employee-specializations','employee-specialization-hint','employee-specialization','employee-specialization-assign'].every(id=>ids.includes(id)));
+assert.ok(html.indexOf('systems/employeeDevelopment.js')<html.indexOf('game.js?v='));
+assert.ok(['cf2-priority','cf2-batch-mode','cf2-route-preset','cf2-generate-special-order','cf2-create-project','cf2-project-list','cf2-flow-list'].every(id=>ids.includes(id)));
+assert.ok(['systems/productionFlow.js','systems/suppliers.js','systems/customerProjects.js','systems/factorySituations.js'].every(path=>html.indexOf(path)<html.indexOf('game.js?v=')));
 assert.equal(ids.includes('hire-1'),false);
 assert.equal(ids.includes('hire-2'),false);
 function boot(storage,options={}){
+  const math=Object.create(Math);math.random=typeof options.random==='function'?options.random:Math.random;
+  const breakdownApi=require(dir+'/systems/breakdowns.js');
+  const breakdowns=typeof options.random==='function'?{...breakdownApi,init:(state,initOptions={})=>breakdownApi.init(state,{...initOptions,random:options.random})}:breakdownApi;
   const elements=new Map();
   class El {
     constructor(id=''){
-      this.id=id;this.children=[];this.style={};this.attrs={};this.dataset={};this.events={};this.hidden=false;
+      this.id=id;this.children=[];this.style={setProperty:(key,value)=>this.style[key]=value,removeProperty:key=>delete this.style[key]};this.attrs={};this.dataset={};this.events={};this.hidden=false;
       const classes=new Set();
       this.classList={
         add:(...names)=>names.forEach(name=>classes.add(name)),
@@ -28,20 +35,53 @@ function boot(storage,options={}){
           return present;
         }
       };
-      this.textContent='';
+      this.textContent='';this._innerHTML='';
+    }
+    get textContent(){return this.children.length?this.children.map(child=>child.textContent||'').join(''):this._textContent||''}
+    set textContent(value){this._textContent=String(value??'');if(this.children?.length)this.children=[]}
+    get innerHTML(){return this._innerHTML}
+    set innerHTML(value){
+      this._innerHTML=String(value);this.children=[];
+      const top=this._innerHTML.match(/<div class="top">([\s\S]*?)<\/div>/i);
+      if(top){
+        const row=new El();row.tagName='div';row.className='top';this.append(row);
+        for(const match of top[1].matchAll(/<span>([\s\S]*?)<\/span>/gi)){const span=new El();span.tagName='span';span.textContent=match[1];row.append(span)}
+      }
+      const heading=this._innerHTML.match(/<h3>([\s\S]*?)<\/h3>/i);
+      if(heading){const h3=new El();h3.tagName='h3';h3.textContent=heading[1];this.append(h3)}
     }
     addEventListener(type,fn){this.events[type]=fn}
-    append(...children){this.children.push(...children);for(const child of children)if(child.id)elements.set(child.id,child)}
+    append(...children){this.children.push(...children);for(const child of children){child.parentElement=this;if(child.id)elements.set(child.id,child)}}
     insertBefore(child,before){const index=before?this.children.indexOf(before):-1;if(index<0)this.children.push(child);else this.children.splice(index,0,child);child.parentElement=this;if(child.id)elements.set(child.id,child);return child}
     prepend(...children){this.children.unshift(...children)}
     replaceChildren(...children){this.children=children}
+    remove(){if(!this.parentElement)return;const siblings=this.parentElement.children,index=siblings.indexOf(this);if(index>=0)siblings.splice(index,1)}
+    replaceWith(...nodes){if(!this.parentElement)return;const siblings=this.parentElement.children,index=siblings.indexOf(this);if(index>=0){siblings.splice(index,1,...nodes);for(const node of nodes)node.parentElement=this.parentElement}}
+    before(...nodes){if(!this.parentElement)return;const siblings=this.parentElement.children,index=siblings.indexOf(this);if(index>=0){siblings.splice(index,0,...nodes);for(const node of nodes)node.parentElement=this.parentElement}}
+    after(...nodes){if(!this.parentElement)return;const siblings=this.parentElement.children,index=siblings.indexOf(this);if(index>=0){siblings.splice(index+1,0,...nodes);for(const node of nodes)node.parentElement=this.parentElement}}
+    get firstChild(){return this.children[0]||null}
     get firstElementChild(){return this.children.find(child=>child&&typeof child==='object')||null}
     querySelector(q){
-      const matches=node=>q==='span'?node.tagName==='span':q.startsWith('.')?node.className===q.slice(1):false;
+      const matches=node=>{
+        if(/^[a-z][a-z0-9-]*$/i.test(q))return node.tagName===q.toLowerCase();
+        if(q.startsWith('.'))return String(node.className||'').split(/\s+/).includes(q.slice(1));
+        const attr=q.match(/^\[data-([a-z-]+)(?:="([^"]*)")?\]$/i);
+        if(attr){
+          const key=attr[1].replace(/-([a-z])/g,(_,letter)=>letter.toUpperCase());
+          return Object.hasOwn(node.dataset||{},key)&&(attr[2]===undefined||String(node.dataset[key])===attr[2]);
+        }
+        const exactOption=q.match(/^option\[value="([^"]+)"\]$/i);
+        return !!exactOption&&node.tagName==='option'&&node.value===exactOption[1];
+      };
       const visit=node=>{for(const child of node.children||[]){if(matches(child))return child;const nested=visit(child);if(nested)return nested}return null};
-      return visit(this);
+      const match=visit(this);
+      if(match)return match;
+      const exactOption=q.match(/^option\[value="([^"]+)"\]$/i);
+      if(exactOption){const option=new El();option.tagName='option';option.value=exactOption[1];this.append(option);return option}
+      return null;
     }
     querySelectorAll(q){const matches=[];const visit=node=>{for(const child of node.children||[]){if(q==='[data-office-key]'&&child.dataset?.officeKey)matches.push(child);visit(child)}};visit(this);return matches}
+    closest(selector){for(let node=this;node;node=node.parentElement)if(selector.startsWith('.')&&node.className===selector.slice(1))return node;return null}
     getAttribute(name){return this.attrs[name]||null}
     setAttribute(name,value){this.attrs[name]=value}
     scrollIntoView(){}
@@ -49,18 +89,19 @@ function boot(storage,options={}){
   }
   const get=id=>{if(!elements.has(id))elements.set(id,new El(id));return elements.get(id)};
   for(const id of ids)get(id);get('machine-shop').parentElement=get('business-panel');get('material-quantity').value='25';get('loan-amount').value='10000';get('loan-repayment-amount').value='all';get('finance-period').value='day';
+  const repairControls=new El();repairControls.append(get('repair-now'),get('continue-risky'));const repairLabel=new El();repairLabel.tagName='span';get('repair-now').append(repairLabel);
   get('detail-view').hidden=true;get('hall-preview').hidden=true;
   get('hall-map').clientWidth=400;get('hall-map').clientHeight=400;
   get('hall-preview').offsetWidth=190;get('hall-preview').offsetHeight=118;
   for(let bay=1;bay<=4;bay++){const span=new El();span.tagName='span';get('bay-'+bay).append(span)}
-  const document={getElementById:id=>id==='order-office-panel'&&!elements.has(id)?null:get(id),createElement:()=>new El(),querySelectorAll:()=>[],addEventListener(){}};
+  const document={head:get('document-head'),getElementById:id=>(id==='order-office-panel'||id==='event-window')&&!elements.has(id)?null:get(id),createElement:tagName=>{const element=new El();element.tagName=String(tagName).toLowerCase();return element},createTextNode:text=>{const node=new El();node.textContent=String(text);return node},querySelector:q=>q==='main'?get('stage'):null,querySelectorAll:()=>[],addEventListener(){}};
   let nextFrame=()=>{},saveInterval=()=>{};
   const windowEvents={};
-  const context={document,console,Date,Math,JSON,performance:{now:()=>0},requestAnimationFrame:fn=>nextFrame=fn,setTimeout:(fn,ms)=>{if(options.phaser&&ms===0)fn();return 1},clearTimeout(){},setInterval:fn=>saveInterval=fn,window:{matchMedia:()=>({matches:true}),confirm:()=>true,addEventListener:(type,fn)=>windowEvents[type]=fn},localStorage:{getItem:k=>storage[k]||null,setItem:(k,v)=>storage[k]=v,removeItem:k=>delete storage[k]},CNCModules:{economy:require(dir+'/systems/economy.js').economy,inventory:require(dir+'/systems/economy.js').inventory,orderMarket:require(dir+'/systems/orderMarket.js'),breakdowns:require(dir+'/systems/breakdowns.js'),factoryExpansion:require(dir+'/factory-expansion.js'),materials:require(dir+'/systems/materials.js'),recruitment:require(dir+'/systems/recruitment.js'),programmingQuality:require(dir+'/systems/programmingQuality.js')}};
+  const context={document,console,Date,Math:math,JSON,performance:{now:()=>0},requestAnimationFrame:fn=>nextFrame=fn,setTimeout:(fn,ms)=>{if(options.phaser&&ms===0)fn();return 1},clearTimeout(){},setInterval:fn=>saveInterval=fn,window:{matchMedia:()=>({matches:true}),confirm:()=>true,addEventListener:(type,fn)=>windowEvents[type]=fn},localStorage:{getItem:k=>storage[k]||null,setItem:(k,v)=>storage[k]=v,removeItem:k=>delete storage[k]},CNCModules:{economy:require(dir+'/systems/economy.js').economy,inventory:require(dir+'/systems/economy.js').inventory,orderMarket:require(dir+'/systems/orderMarket.js'),breakdowns,factoryExpansion:require(dir+'/factory-expansion.js'),materials:require(dir+'/systems/materials.js'),recruitment:require(dir+'/systems/recruitment.js'),programmingQuality:require(dir+'/systems/programmingQuality.js'),employeeDevelopment:require(dir+'/systems/employeeDevelopment.js'),productionFlow:require(dir+'/systems/productionFlow.js'),suppliers:require(dir+'/systems/suppliers.js'),customerProjects:require(dir+'/systems/customerProjects.js'),factorySituations:require(dir+'/systems/factorySituations.js')}};
   if(options.phaser)context.Phaser={Scene:class{},Game:class{},AUTO:0,Scale:{FIT:0,CENTER_BOTH:0}};
   context.globalThis=context;context.window.cncFactory=null;
   vm.runInNewContext(fs.readFileSync(dir+'/game.js','utf8'),context,{filename:'game.js'});
-  return {get,frame:t=>nextFrame(t),flush:()=>saveInterval(),resize:()=>windowEvents.resize?.(),state:()=>JSON.parse(storage.cnc_factory_save_v3)};
+  return {get,createElement:tagName=>document.createElement(tagName),frame:t=>nextFrame(t),flush:()=>saveInterval(),resize:()=>windowEvents.resize?.(),state:()=>JSON.parse(storage.cnc_factory_save_v3),live:()=>context.window.cncFactory.getState()};
 }
 let storage={cnc_factory_save_v3:JSON.stringify({money:14000,material:120,capacity:300,staff:{shift1:1,shift2:0},machines:[{bay:2,type:'standard',level:1,maintenance:50,tool:82,operator1:true,operator2:false,activeId:'A12',progress:25,produced:12,deadlineAt:420}],selectedBay:2,gameMinutes:0,speed:1,paused:false,breakdowns:{machines:{2:{status:'warning',fault:'sensor_error',severity:1,since:0,riskyContinue:false,scheduledRepair:false,operatingHours:1,warningAgeMinutes:0,repairRemainingMinutes:0,plannedRepair:false}}}})};
 let app=boot(storage),st=app.state();assert.equal(st.breakdowns.machines['2'].status,'warning');assert.equal(app.get('repair-now').disabled,false);
@@ -76,8 +117,8 @@ assert.equal(app.get('hall-preview-tool-fill').style.width,'82%');
 assert.equal(app.get('hall-preview-maintenance-fill').style.width,'50%');
 assert.equal(app.get('hall-preview-progress-bar').attrs['aria-valuenow'],'25');
 assert.match(app.get('hall-preview-operators').textContent,/S1 ✓ · S2 –/);
-app.get('repair-now').click();st=app.state();assert.equal(st.breakdowns.machines['2'].status,'repairing');assert.equal(st.money,13390);assert.equal(st.finance.transactions.filter(x=>x.category==='repairs').length,1);
-app=boot(storage);st=app.state();assert.equal(st.money,13390);assert.equal(st.breakdowns.machines['2'].status,'repairing');assert.equal(st.finance.transactions.filter(x=>x.category==='repairs').length,1);assert.equal(st.machines[0].activeId,'A12');
+app.get('repair-now').click();st=app.state();assert.equal(st.breakdowns.machines['2'].status,'repairing');assert.equal(st.money,13664);const repairTransactions=st.finance.transactions.filter(x=>x.category==='repairs');assert.equal(repairTransactions.length,1);assert.equal(repairTransactions[0].amount,-336);
+app=boot(storage);st=app.state();assert.equal(st.money,13664);assert.equal(st.breakdowns.machines['2'].status,'repairing');const reloadedRepairs=st.finance.transactions.filter(x=>x.category==='repairs');assert.equal(reloadedRepairs.length,1);assert.equal(reloadedRepairs[0].amount,-336);assert.equal(st.machines[0].activeId,'A12');
 app.frame(1000);st=app.state();assert.equal(st.breakdowns.machines['2'].status,'repairing');assert.equal(st.finance.transactions.filter(x=>x.category==='repairs').length,1);
 const wornSave={money:25000,material:120,capacity:300,staff:{shift1:1,shift2:0},
   machines:[{bay:1,type:'standard',level:1,maintenance:36,tool:.5,operator1:true,operator2:false,activeId:'A12',progress:45,produced:22,deadlineAt:420}],
@@ -87,7 +128,7 @@ let worn=boot(wornStorage);
 assert.match(worn.get('machine-meta').textContent,/Werkzeug verschlissen/);
 assert.equal(worn.get('tool-label').textContent,'<1 %');
 assert.equal(worn.get('change-tool').disabled,false);
-assert.equal(worn.get('maintenance').disabled,true);
+assert.equal(worn.get('maintenance').disabled,false);
 worn.get('change-tool').click();
 let repaired=worn.state();
 assert.equal(repaired.money,24350);
@@ -107,11 +148,13 @@ assert.equal(due.get('maintenance').disabled,false);
 assert.equal(due.get('change-tool').disabled,true);
 due.get('maintenance').click();
 assert.equal(due.state().money,23800);
-assert.equal(due.state().machines[0].maintenance,100);
+assert.equal(due.state().machines[0].maintenance,7.5);
+assert.equal(due.state().machines[0].maintenanceRemainingMinutes,60);
 assert.equal(due.state().machines[0].activeId,'A12');
 assert.equal(due.state().machines[0].progress,45);
 due=boot(dueStorage);
 assert.equal(due.state().finance.transactions.filter(x=>x.category==='maintenance').length,1);
+assert.equal(due.state().machines[0].maintenanceRemainingMinutes,60);
 assert.equal(due.state().machines[0].activeId,'A12');
 const empty=boot({});assert.equal(empty.state().machines.length,0);assert.equal(empty.state().material,0);assert.deepEqual(Object.keys(empty.state().breakdowns.machines),[]);
 assert.equal(empty.state().selectedMaterialType,'c45');
@@ -124,7 +167,9 @@ assert.equal(empty.get('drawer-title').textContent,'Materiallager');
 assert.equal(empty.get('warehouse-door').attrs['aria-expanded'],'true');
 empty.get('buy-material').click();assert.equal(empty.state().money,13550);assert.equal(empty.state().inventory.rawMaterial.c45,25);
 assert.equal(empty.state().finance.transactions.filter(x=>x.category==='material').length,1);
-assert.match(empty.get('storage-stock').textContent,/C45 Stahl: 25 kg/);
+const c45StockRow=empty.get('storage-stock').children.find(row=>row.children?.[0]?.textContent==='C45 Stahl');
+assert.ok(c45StockRow);
+assert.equal(c45StockRow.children[1].textContent,'25 kg');
 empty.get('warehouse-door').click();assert.equal(empty.get('drawer').hidden,true);
 empty.get('warehouse-door').click();empty.get('business-tab').click();
 assert.equal(empty.get('warehouse-panel').hidden,true);
@@ -139,18 +184,20 @@ const emptyReload=boot({cnc_factory_save_v3:JSON.stringify(empty.state())});asse
 emptyReload.get('storage-upgrade').click();
 assert.equal(emptyReload.state().inventory.capacities.raw,500);
 assert.equal(emptyReload.state().money,9550);
-const officeOrder={id:'OFFICE-TEST',kind:'Drehen',customer:'Test',part:'Disponentenauftrag',material:'C45 Stahl',kg:30,qty:10,reward:4000,duration:8,deadlineHours:4,createdAt:0,expiresAt:1000};
+const officeOrder={id:'OFFICE-TEST',kind:'Drehen',customer:'Test',part:'Disponentenauftrag',material:'C45 Stahl',kg:30,qty:10,reward:4000,duration:8,deadlineHours:48,createdAt:0,expiresAt:1000};
 const officeBase=JSON.parse(JSON.stringify(empty.state()));
-officeBase.money=20000;officeBase.material=0;officeBase.capacity=300;officeBase.gameMinutes=120;officeBase.paused=false;officeBase.speed=1;
+officeBase.money=20000;officeBase.material=0;officeBase.capacity=300;officeBase.staff={shift1:1,shift2:0};officeBase.gameMinutes=480;officeBase.paused=false;officeBase.speed=1;
 officeBase.inventory.rawMaterial.c45=0;officeBase.factoryExpansion={level:2,unlockedBays:6};
-officeBase.machines=[{bay:1,type:'standard',level:1,maintenance:90,tool:82,operator1:false,operator2:false,activeId:null,activeOrder:null,activeOrderSource:null,progress:0,produced:0,deadlineAt:null,orderQueue:[]}];
+officeBase.machines=[{bay:1,type:'standard',level:1,maintenance:90,tool:82,operator1:true,operator2:false,activeId:null,activeOrder:null,activeOrderSource:null,progress:0,produced:0,deadlineAt:null,orderQueue:[]}];
 officeBase.orderMarket.available=[officeOrder,...officeBase.orderMarket.available.map(order=>({...order,kind:'Fräsen'}))];
-officeBase.orderMarket.now=120;officeBase.orderMarket.nextRefreshAt=10000;officeBase.orderMarket.pendingFollowUps=[];
-officeBase.orderOffice={hired:true,autoPurchase:true,autoAccept:true,cashReserve:5000,maxMarketMarkupPct:0,minMaterialSurplus:1000,queueLimit:1,nextReviewAt:120};
+officeBase.orderMarket.now=480;officeBase.orderMarket.nextRefreshAt=10000;officeBase.orderMarket.pendingFollowUps=[];
+officeBase.ncPrograms['Drehen:disponentenauftrag']={part:officeOrder.part,kind:officeOrder.kind,completedAt:0,legacy:true};
+officeBase.orderOffice={hired:true,autoPurchase:true,autoAccept:true,cashReserve:5000,maxMarketMarkupPct:0,minMaterialSurplus:1000,queueLimit:1,nextReviewAt:480};
 let office=boot({cnc_factory_save_v3:JSON.stringify(officeBase)});office.frame(1000);
 let officeSaved=office.state();
-assert.equal(officeSaved.machines[0].activeId,'OFFICE-TEST');
-assert.equal(officeSaved.inventory.rawMaterial.c45,0);
+assert.ok(officeSaved.machines[0].activeId==='OFFICE-TEST'||officeSaved.machines[0].orderQueue.some(entry=>entry.order.id==='OFFICE-TEST')||
+  (officeSaved.productionFlow.orders['OFFICE-TEST']&&officeSaved.productionFlow.lots.some(lot=>lot.orderId==='OFFICE-TEST'&&['queued','running','waiting'].includes(lot.status))));
+assert.equal(officeSaved.inventory.rawMaterial.c45,25);
 assert.equal(officeSaved.finance.transactions.filter(entry=>entry.category==='material'&&entry.meta?.automatic).length,1);
 assert.equal(officeSaved.orderMarket.available.some(order=>order.id==='OFFICE-TEST'),false);
 const reserveLimited={...officeBase,money:5000};
@@ -169,7 +216,7 @@ assert.equal(officeUi.state().orderOffice.hired,true);
 assert.equal(officeUi.state().money,8000);
 assert.equal(officeUi.get('order-office-settings').hidden,false);
 let officeControls=officeUi.get('order-office-settings').querySelectorAll('[data-office-key]');
-assert.equal(officeControls.length,6);
+assert.deepEqual(officeControls.map(control=>control.dataset.officeKey).sort(),['autoAccept','autoPurchase','cashReserve','materialReserveKg','maxMarketMarkupPct','minMaterialSurplus','queueLimit'].sort());
 const acceptToggle=officeControls.find(control=>control.dataset.officeKey==='autoAccept');
 const reserveSelect=officeControls.find(control=>control.dataset.officeKey==='cashReserve');
 assert.equal(acceptToggle.checked,true);acceptToggle.checked=false;acceptToggle.events.change();
@@ -238,19 +285,22 @@ const warningStorage={cnc_factory_save_v3:JSON.stringify({
  breakdowns:{machines:{1:{status:'warning',fault:'tool_break',severity:1,since:0,riskyContinue:false,scheduledRepair:false,operatingHours:1,warningAgeMinutes:0,repairRemainingMinutes:0,plannedRepair:false}}}
 })};
 let warned=boot(warningStorage);warned.get('continue-risky').click();assert.equal(warned.state().breakdowns.machines['1'].riskyContinue,true);
-warned=boot(warningStorage);warned.get('schedule-repair').click();assert.equal(warned.state().breakdowns.machines['1'].scheduledRepair,true);
+const plannedRepairState=JSON.parse(warningStorage.cnc_factory_save_v3);plannedRepairState.machines[0].activeId=null;plannedRepairState.machines[0].activeOrder=null;
+const plannedRepairStorage={cnc_factory_save_v3:JSON.stringify(plannedRepairState)};
+warned=boot(plannedRepairStorage);warned.get('schedule-repair').click();assert.equal(warned.state().breakdowns.machines['1'].status,'repairing');assert.equal(warned.state().breakdowns.machines['1'].plannedRepair,true);
 assert.equal(warned.state().finance.transactions.filter(x=>x.category==='repairs').length,1);
-warned=boot(warningStorage);assert.equal(warned.state().breakdowns.machines['1'].scheduledRepair,true);
+warned=boot(plannedRepairStorage);assert.equal(warned.state().breakdowns.machines['1'].status,'repairing');assert.equal(warned.state().breakdowns.machines['1'].plannedRepair,true);
 assert.equal(warned.state().finance.transactions.filter(x=>x.category==='repairs').length,1);
 const typedState=empty.state();typedState.inventory.rawMaterial.aluminium6082=100;typedState.material=125;
 typedState.machines=[{bay:1,type:'standard',level:1,maintenance:90,tool:82,operator1:true,operator2:false,activeId:null,progress:0,produced:0,deadlineAt:null}];typedState.staff.shift1=1;typedState.selectedBay=1;
+typedState.ncPrograms['Drehen:stahlteil']={part:'Stahlteil',kind:'Drehen',completedAt:0,legacy:true};
 typedState.orderMarket.available.push({id:'MATERIAL-TEST',kind:'Drehen',customer:'Test',part:'Stahlteil',material:'C45 Stahl',kg:30,qty:10,reward:4000,duration:8,deadlineHours:4,createdAt:0,expiresAt:1000});
 const typedStorage={cnc_factory_save_v3:JSON.stringify(typedState)};
 let typed=boot(typedStorage);let card=typed.get('orders').children.find(x=>x.innerHTML?.includes('MATERIAL-TEST'));
 assert.equal(card.children.at(-1).disabled,true);
 typed.get('buy-material').click();card=typed.get('orders').children.find(x=>x.innerHTML?.includes('MATERIAL-TEST'));
 assert.equal(card.children.at(-1).disabled,false);
-card.children.at(-1).click();typed.get('assignment-options').children[0].click();const accepted=typed.state();
+card.children.at(-1).click();typed.get('assignment-options').children[0].children[0].click();const accepted=typed.state();
 assert.equal(accepted.machines[0].activeId,'MATERIAL-TEST');assert.equal(accepted.inventory.rawMaterial.c45,20);
 assert.equal(accepted.inventory.rawMaterial.aluminium6082,100);
 typed=boot(typedStorage);assert.equal(typed.state().machines[0].activeId,'MATERIAL-TEST');assert.equal(typed.state().inventory.rawMaterial.c45,20);
@@ -266,12 +316,14 @@ typed.frame(1000);
 typed.flush();
 assert.ok(typed.state().staffRoster.shift1[0].xp>0);
 const moveState=typed.state();
+Object.assign(moveState.machines[0],{activeId:null,activeOrder:null,activeOrderSource:null,progress:0,produced:0,operatorProgramming:null,deadlineAt:null});
 moveState.machines.push({bay:2,type:'standard',level:1,maintenance:90,tool:82,operator1:false,operator2:false,activeId:null,progress:0});
 const moveStorage={cnc_factory_save_v3:JSON.stringify(moveState)};
 let moved=boot(moveStorage);
 const workerId=moved.state().staffRoster.shift1[0].id;
 moved.get('operator-1').click();
 moved.get('bay-2').click();moved.get('operator-1').click();
+moved.get('operator-picker').children[1].children[0].children[2].click();
 assert.equal(moved.state().staffRoster.shift1[0].assignedBay,2);
 assert.equal(moved.state().staffRoster.shift1[0].id,workerId);
 assert.equal(moved.state().staffRoster.shift1[0].trained,1);
@@ -280,6 +332,7 @@ assert.equal(moved.state().staffRoster.shift1[0].assignedBay,null);
 moved=boot(moveStorage);assert.equal(moved.state().staffRoster.shift1[0].trained,1);
 const skilledState=typed.state(),noviceState=JSON.parse(JSON.stringify(skilledState));
 skilledState.machines[0].progress=0;noviceState.machines[0].progress=0;
+for(const machine of [skilledState.machines[0],noviceState.machines[0]])Object.assign(machine,{setupRemainingMinutes:0,setupDurationMinutes:0,setupDelayMinutes:0,setupPartProduced:true,ncProgramPending:false});
 skilledState.staffRoster.shift1[0].xp=0;noviceState.staffRoster.shift1[0].xp=0;
 noviceState.staffRoster.shift1[0].trained=0;
 const skilled=boot({cnc_factory_save_v3:JSON.stringify(skilledState)});
@@ -292,96 +345,56 @@ const queueStorage={cnc_factory_save_v3:JSON.stringify(queueState)};
 let queued=boot(queueStorage);
 let queueCard=queued.get('orders').children.find(x=>x.innerHTML?.includes('QUEUE-TEST'));
 queueCard.children.at(-1).click();
-assert.match(queued.get('assignment-options').children[0].textContent,/Vormerken 1\/3/);
-queued.get('assignment-options').children[0].click();
+queued.get('assignment-options').children[0].children[0].click();
 let queueSave=queued.state();
 assert.equal(queueSave.machines[0].activeId,'MATERIAL-TEST');
-assert.equal(queueSave.machines[0].orderQueue[0].order.id,'QUEUE-TEST');
+let queueLot=queueSave.productionFlow.lots.find(lot=>lot.orderId==='QUEUE-TEST');
+assert.equal(queueLot.status,'queued');
+assert.ok(queueSave.productionFlow.queues['Drehen'].includes(queueLot.id));
 assert.equal(queueSave.inventory.rawMaterial.c45,10);
 assert.equal(queueSave.orderMarket.available.some(x=>x.id==='QUEUE-TEST'),false);
 assert.equal(queueSave.finance.transactions.filter(x=>x.category==='income').length,0);
 assert.equal(queued.get('sell-machine').disabled,true);
 queued=boot(queueStorage);
-assert.equal(queued.get('queued-orders').children.length,1);
-queued.get('queued-orders').children[0].children[1].click();
-assert.equal(queued.state().machines[0].orderQueue.length,0);
-assert.equal(queued.state().inventory.rawMaterial.c45,20);
-assert.equal(queued.state().finance.transactions.filter(x=>x.category==='income').length,0);
+queueLot=queued.state().productionFlow.lots.find(lot=>lot.orderId==='QUEUE-TEST');
+assert.equal(queueLot.status,'queued','the station queue should survive a reload');
+assert.ok(queued.state().productionFlow.queues['Drehen'].includes(queueLot.id));
 const fullWarehouse=JSON.parse(JSON.stringify(queueSave));
 fullWarehouse.inventory.rawMaterial.c45=200;fullWarehouse.material=300;
 const fullQueue=boot({cnc_factory_save_v3:JSON.stringify(fullWarehouse)});
-assert.equal(fullQueue.get('queued-orders').children[0].children[1].disabled,true);
-assert.equal(fullQueue.state().machines[0].orderQueue[0].order.id,'QUEUE-TEST');
-queueSave.machines[0].progress=99.5;
-queueSave.machines[0].activeOrder.customer='Veltraxis Mobility';
-const completionStorage={cnc_factory_save_v3:JSON.stringify(queueSave)};
-let completing=boot(completionStorage);
-completing.frame(1000);
-assert.equal(completing.state().machines[0].activeId,'QUEUE-TEST');
-assert.equal(completing.state().machines[0].orderQueue.length,0);
-assert.equal(completing.state().finance.transactions.filter(x=>x.category==='income').length,1);
-assert.equal(completing.state().customerReputation['Veltraxis Mobility'],54);
-assert.ok(completing.get('customer-reputation').children.some(row=>row.children[0].textContent==='Veltraxis Mobility'&&row.children[1].textContent.includes('54/100')));
-completing=boot(completionStorage);
-assert.equal(completing.state().machines[0].activeId,'QUEUE-TEST');
-assert.equal(completing.state().finance.transactions.filter(x=>x.category==='income').length,1);
-assert.equal(completing.state().customerReputation['Veltraxis Mobility'],54);
+assert.equal(fullQueue.state().productionFlow.lots.find(lot=>lot.orderId==='QUEUE-TEST').status,'queued');
 console.log('Game integration: material purchase, jobs, repair decisions, expansion and reload OK');
 
-const legacyQueueState=JSON.parse(JSON.stringify(queueSave));
-const olderEntry=legacyQueueState.machines[0].orderQueue.shift();
+const legacyQueueState=JSON.parse(JSON.stringify(queueState));
+const olderEntry={order:{id:'LEGACY-QUEUE',kind:'Drehen',customer:'Test',part:'Altauftrag',material:'C45 Stahl',kg:10,qty:10,reward:3000,duration:20,deadlineHours:4},material:{c45:10},deadlineAt:240};
 legacyQueueState.machines[0].queuedOrder=olderEntry.order;
 legacyQueueState.machines[0].queuedMaterial=olderEntry.material;
 legacyQueueState.machines[0].queuedDeadlineAt=olderEntry.deadlineAt;
 const migrated=boot({cnc_factory_save_v3:JSON.stringify(legacyQueueState)});
-assert.equal(migrated.state().machines[0].orderQueue[0].order.id,'QUEUE-TEST');
+assert.equal(migrated.state().machines[0].orderQueue[0].order.id,'LEGACY-QUEUE');
 assert.equal(migrated.state().machines[0].orderQueue[0].deadlineAt,olderEntry.deadlineAt);
 assert.equal(migrated.state().machines[0].queuedOrder,undefined);
 const multiState=typed.state();
 multiState.inventory.rawMaterial.c45=80;multiState.material=80;
 for(let i=1;i<=4;i++)multiState.orderMarket.available.push({
   id:`BATCH-${i}`,kind:'Drehen',customer:'Test',part:`Serie ${i}`,material:'C45 Stahl',
-  kg:10,qty:10,reward:3000,duration:20,deadlineHours:4,createdAt:0,expiresAt:1000
+  kg:10,qty:10,reward:3000,duration:20,deadlineHours:4,priority:i===2?'high':'normal',createdAt:0,expiresAt:1000
 });
 const multiStorage={cnc_factory_save_v3:JSON.stringify(multiState)};
 let multiple=boot(multiStorage);
 const multiInitialStock=multiple.state().material;
-for(let i=1;i<=3;i++){
+for(let i=1;i<=4;i++){
   const card=multiple.get('orders').children.find(x=>x.innerHTML?.includes(`BATCH-${i}`));
   assert.equal(card.children.at(-1).disabled,false);
   card.children.at(-1).click();
-  multiple.get('assignment-options').children[0].click();
-  assert.equal(multiple.state().machines[0].orderQueue.length,i);
+  multiple.get('assignment-options').children[0].children[0].click();
 }
-assert.equal(multiple.state().material,multiInitialStock-30);
-let fourth=multiple.get('orders').children.find(x=>x.innerHTML?.includes('BATCH-4'));
-assert.equal(fourth.children.at(-1).disabled,true);
-fourth.children.at(-1).click();
-assert.equal(multiple.state().machines[0].orderQueue.length,3);
+assert.equal(multiple.state().material,multiInitialStock-40);
+const queuedBatchOrderIds=save=>save.productionFlow.queues.Drehen.map(lotId=>save.productionFlow.lots.find(lot=>lot.id===lotId).orderId);
+assert.deepEqual(queuedBatchOrderIds(multiple.state()),['BATCH-2','BATCH-1','BATCH-3','BATCH-4'],'high priority goes first; equal-priority lots remain FIFO');
 multiple=boot(multiStorage);
-assert.deepEqual(multiple.state().machines[0].orderQueue.map(entry=>entry.order.id),['BATCH-1','BATCH-2','BATCH-3']);
-multiple.get('queued-orders').children[1].children[1].click();
-assert.deepEqual(multiple.state().machines[0].orderQueue.map(entry=>entry.order.id),['BATCH-1','BATCH-3']);
-assert.equal(multiple.state().material,multiInitialStock-20);
-fourth=multiple.get('orders').children.find(x=>x.innerHTML?.includes('BATCH-4'));
-fourth.children.at(-1).click();
-multiple.get('assignment-options').children[0].click();
-assert.deepEqual(multiple.state().machines[0].orderQueue.map(entry=>entry.order.id),['BATCH-1','BATCH-3','BATCH-4']);
-assert.equal(multiple.state().material,multiInitialStock-30);
-const plannedIds=['BATCH-1','BATCH-3','BATCH-4'];
-for(const id of plannedIds){
-  const before=multiple.state();
-  before.machines[0].progress=99.5;
-  before.machines[0].tool=90;before.machines[0].maintenance=90;
-  const stepStorage={cnc_factory_save_v3:JSON.stringify(before)};
-  multiple=boot(stepStorage);multiple.frame(1000);
-  assert.equal(multiple.state().machines[0].activeId,id);
-  assert.equal(multiple.state().machines[0].orderQueue.length,plannedIds.length-1-plannedIds.indexOf(id));
-}
-assert.equal(multiple.state().finance.transactions.filter(x=>x.category==='income').length,3);
-const finalStorage={cnc_factory_save_v3:JSON.stringify(multiple.state())};
-assert.equal(boot(finalStorage).state().finance.transactions.filter(x=>x.category==='income').length,3);
-console.log('Three reserved jobs: save migration, inventory, cancellation, FIFO and payouts OK');
+assert.deepEqual(queuedBatchOrderIds(multiple.state()),['BATCH-2','BATCH-1','BATCH-3','BATCH-4'],'priority/FIFO order should survive reload');
+console.log('Production flow queues: priority, FIFO, reload and material reservation OK');
 
 const robotState={money:25000,material:120,capacity:300,staff:{shift1:0,shift2:0},
   machines:[{bay:1,type:'standard',level:1,maintenance:90,tool:82,operator1:false,operator2:false,
@@ -494,11 +507,14 @@ recruiting.get('open-recruitment').click();
 assert.equal(recruiting.get('recruitment-panel').hidden,false);
 assert.equal(recruiting.get('business-panel').hidden,true);
 assert.equal(recruiting.get('drawer-title').textContent,'Bewerberbörse');
-assert.equal(recruiting.get('applicant-list').children.length,3);
-assert.match(recruiting.get('applicant-list').children[0].children[0].children[1].children[0].textContent,/[A-Z][a-z]+ [A-Z][a-z]+/);
-assert.equal(recruiting.get('applicant-list').children[0].children[2].children.length,4);
+const applicantCards=()=>recruiting.get('applicant-list').children.filter(node=>node.className?.includes('applicant-card'));
+const operatorCards=()=>applicantCards().filter(node=>!node.className.includes('quality-applicant-card'));
+assert.equal(applicantCards().length,recruiting.state().recruitment.applicants.length+recruiting.state().recruitment.qualityApplicants.length);
+const firstApplicantCard=operatorCards()[0];
+assert.match(firstApplicantCard.children[0].children[1].children[0].textContent,/[A-Z][a-z]+ [A-Z][a-z]+/);
+assert.equal(firstApplicantCard.children[2].children.length,4);
 const firstApplicant=recruiting.state().recruitment.applicants[0];
-const firstHireButton=recruiting.get('applicant-list').children[0].children[3].children[0];
+const firstHireButton=firstApplicantCard.children[3].children[0];
 firstHireButton.click();
 firstHireButton.click();
 let recruited=recruiting.state();
@@ -511,15 +527,17 @@ assert.equal(recruited.recruitment.applicants.length,3);
 assert.equal(recruited.recruitment.applicants.some(candidate=>candidate.id===firstApplicant.id),false);
 assert.equal(recruited.finance.transactions.filter(entry=>entry.meta?.setupFee).length,1);
 assert.equal(recruited.finance.transactions.filter(entry=>entry.meta?.setupFee)[0].amount,-150);
-assert.equal(recruiting.get('applicant-list').children[0].children[3].children[1].title,'Schicht 2: 26 € pro Stunde');
-assert.equal(recruiting.get('applicant-list').children[0].children[3].children[1].children[0].textContent,'S2 einstellen');
-assert.equal(recruiting.get('applicant-list').children[0].children[3].children[1].children[1].textContent,'€ 150 einmalig · 26 €/h');
+const secondShiftCandidate=recruited.recruitment.applicants[0];
+const secondShiftWage=require(dir+'/systems/recruitment.js').hourlyWage(secondShiftCandidate,2);
+assert.equal(operatorCards()[0].children[3].children[1].title,`${secondShiftCandidate.name} · Bediener Schicht 2: ${secondShiftWage} € pro Stunde`);
+assert.equal(operatorCards()[0].children[3].children[1].children[0].textContent,'S2 als Bediener');
+assert.ok(operatorCards()[0].children[3].children[1].children[1].textContent.endsWith(`· ${secondShiftWage} €/h`));
 recruiting.get('recruitment-back').click();
 assert.equal(recruiting.get('business-panel').hidden,false);
 assert.match(recruiting.get('staff-development').children[0].children[1].children[0].textContent,new RegExp(firstApplicant.name));
 const secondApplicant=recruited.recruitment.applicants[0];
 recruiting.get('open-recruitment').click();
-recruiting.get('applicant-list').children[0].children[3].children[1].click();
+operatorCards()[0].children[3].children[1].click();
 recruited=recruiting.state();
 assert.equal(recruited.money,13700);
 assert.equal(recruited.staff.shift2,1);
@@ -561,7 +579,7 @@ console.log('Recruitment: profiles, shift hiring, finance booking, training feed
 const loanStorage={};
 let loan=boot(loanStorage);
 loan.get('business-tab').click();
-assert.match(loan.get('credit-offer').textContent,/24 Monatsraten/);
+assert.match(loan.get('credit-offer').textContent,/24 Monate mit gleichbleibender Tilgung/);
 assert.equal(loan.get('take-loan').disabled,false);
 loan.get('loan-amount').value='25000';
 loan.get('loan-amount').events.change();
@@ -642,21 +660,24 @@ const hallOperatorBase={
   selectedBay:1,speed:1,paused:false
 };
 let hallOperator=boot({cnc_factory_save_v3:JSON.stringify({...hallOperatorBase,gameMinutes:0})});
-let hallWorker=hallOperator.get('bay-1').querySelector('.bay-operator');
-assert.ok(hallWorker);
-assert.equal(hallWorker.hidden,false);
-assert.equal(hallWorker.dataset.employeeId,'1');
-assert.equal(hallWorker.dataset.shift,'1');
-assert.equal(hallWorker.children[0].src,hallOperator.state().staffRoster.shift1[0].portrait);
-assert.match(hallWorker.children[1].textContent,/Mira Test/);
+let hallWorker=hallOperator.get('bay-1').querySelector('.bay-operator'),hallSprite=hallOperator.get('bay-1').querySelector('.bay-worker-sprite');
+let hallWorkerName=hallOperator.get('bay-1').querySelector('.bay-worker-name');
+assert.ok(hallWorker||hallSprite);
+assert.equal((hallWorker||hallSprite).hidden,false);
+assert.equal((hallWorker||hallSprite).dataset.employeeId,'1');
+assert.equal((hallWorker||hallSprite).dataset.shift,'1');
+assert.match(hallWorkerName.textContent,/Mira Test/);
+if(hallWorker)assert.equal(hallWorker.children[0].src,hallOperator.state().staffRoster.shift1[0].portrait);
 
 hallOperator=boot({cnc_factory_save_v3:JSON.stringify({...hallOperatorBase,gameMinutes:480})});
-hallWorker=hallOperator.get('bay-1').querySelector('.bay-operator');
-assert.ok(hallWorker);
-assert.equal(hallWorker.hidden,false);
-assert.equal(hallWorker.dataset.employeeId,'2');
-assert.equal(hallWorker.dataset.shift,'2');
-assert.equal(hallWorker.children[0].src,hallOperator.state().staffRoster.shift2[0].portrait);
+hallWorker=hallOperator.get('bay-1').querySelector('.bay-operator');hallSprite=hallOperator.get('bay-1').querySelector('.bay-worker-sprite');
+hallWorkerName=hallOperator.get('bay-1').querySelector('.bay-worker-name');
+assert.ok(hallWorker||hallSprite);
+assert.equal((hallWorker||hallSprite).hidden,false);
+assert.equal((hallWorker||hallSprite).dataset.employeeId,'2');
+assert.equal((hallWorker||hallSprite).dataset.shift,'2');
+assert.match(hallWorkerName.textContent,/Tarek Test/);
+if(hallWorker)assert.equal(hallWorker.children[0].src,hallOperator.state().staffRoster.shift2[0].portrait);
 
 const idleHallOperator=boot({cnc_factory_save_v3:JSON.stringify({
   ...hallOperatorBase,gameMinutes:0,
@@ -683,7 +704,7 @@ let namedSprite=namedWorker.get('bay-1').querySelector('.bay-worker-sprite');
 assert.ok(namedSprite);
 assert.equal(namedSprite.hidden,false);
 assert.equal(namedSprite.dataset.employeeId,'1');
-assert.match(namedSprite.src,/assets\/vaska-working\.webp\?v=1$/);
+assert.match(namedSprite.src,/assets\/vaska-working\.webp\?v=2$/);
 assert.equal(namedWorker.get('bay-1').querySelector('.bay-operator')?.hidden??true,true);
 
 namedWorker=boot({cnc_factory_save_v3:JSON.stringify({...namedWorkerSpriteBase,gameMinutes:480})});
@@ -691,5 +712,305 @@ namedSprite=namedWorker.get('bay-1').querySelector('.bay-worker-sprite');
 assert.ok(namedSprite);
 assert.equal(namedSprite.hidden,false);
 assert.equal(namedSprite.dataset.employeeId,'2');
-assert.match(namedSprite.src,/assets\/kael-working\.webp\?v=1$/);
+assert.match(namedSprite.src,/assets\/kael-working\.webp\?v=2$/);
 console.log('Named hall sprites: Vaska and Kael switch with the active shift');
+
+const factory2State=JSON.parse(JSON.stringify(empty.state()));
+factory2State.money=100000;factory2State.material=500;factory2State.gameMinutes=360;factory2State.speed=10;factory2State.paused=false;
+factory2State.inventory.rawMaterial.c45=500;
+factory2State.staff={shift1:2,shift2:2};
+factory2State.staffRoster={nextId:5,
+  shift1:[{id:1,profileVersion:2,name:'Dreher S1',gender:'female',skills:{turning:8,milling:6,precision:8,learning:6},xp:0,trained:0,assignedBay:1},{id:2,profileVersion:2,name:'Fräser S1',gender:'male',skills:{turning:6,milling:8,precision:8,learning:6},xp:0,trained:0,assignedBay:2}],
+  shift2:[{id:3,profileVersion:2,name:'Dreher S2',gender:'female',skills:{turning:8,milling:6,precision:8,learning:6},xp:0,trained:0,assignedBay:1},{id:4,profileVersion:2,name:'Fräser S2',gender:'male',skills:{turning:6,milling:8,precision:8,learning:6},xp:0,trained:0,assignedBay:2}]};
+factory2State.qualityStaff={shift1:[{id:5,profileVersion:2,name:'QS S1',profileType:'quality',qualityCertified:true,qualityTrainingRemainingMinutes:0,skills:{precision:9,learning:7},xp:0}],
+  shift2:[{id:6,profileVersion:2,name:'QS S2',profileType:'quality',qualityCertified:true,qualityTrainingRemainingMinutes:0,skills:{precision:9,learning:7},xp:0}]};
+factory2State.machines=[
+  {bay:1,type:'standard',level:1,maintenance:100,tool:100,operator1:true,operator2:true,activeId:null,activeOrder:null,activeOrderSource:null,progress:0,produced:0,deadlineAt:null,orderQueue:[]},
+  {bay:2,type:'mill3',level:1,maintenance:100,tool:100,operator1:true,operator2:true,activeId:null,activeOrder:null,activeOrderSource:null,progress:0,produced:0,deadlineAt:null,orderQueue:[]}
+];
+for(const [bay,type] of [[3,'standard'],[4,'standard'],[5,'mill3'],[6,'mill3']]){
+  const machine={...factory2State.machines[0],bay,type,activeId:null,activeOrder:null,activeOrderSource:null,progress:0,produced:0,deadlineAt:null,orderQueue:[]};
+  factory2State.machines.push(machine);
+  const turning=type==='standard';
+  const skills=turning?{turning:8,milling:6,precision:8,learning:6}:{turning:6,milling:8,precision:8,learning:6};
+  factory2State.staffRoster.shift1.push({id:bay+2,profileVersion:2,name:'Zusatzkraft S1 '+bay,gender:'female',skills:{...skills},xp:0,trained:0,assignedBay:bay});
+  factory2State.staffRoster.shift2.push({id:bay+6,profileVersion:2,name:'Zusatzkraft S2 '+bay,gender:'male',skills:{...skills},xp:0,trained:0,assignedBay:bay});
+}
+factory2State.staff={shift1:6,shift2:6};factory2State.staffRoster.nextId=13;
+factory2State.selectedBay=1;factory2State.factoryExpansion={level:2,unlockedBays:6};factory2State.nextRushOrderAt=1000000;factory2State.inventory.tools.standard=20;factory2State.inventory.tools.mill3=20;factory2State.factorySituations={version:1,randomState:1,nextSpecialOrderNumber:1,nextSituationNumber:1,nextSituationCheckAtMinute:1000000,lastTickAtMinute:360,scheduled:[],active:[],history:[]};
+const flowProject=require(dir+'/systems/customerProjects.js').create(factory2State,{customer:'Veltraxis Mobility',reputation:50},{size:'medium',atMinute:360});
+const factory2Order={id:'FLOW-120',kind:'Drehen',customer:'Veltraxis Mobility',part:'120er Wellenserie',partKey:'shaft',material:'C45 Stahl',kg:120,qty:120,reward:12000.07,duration:12,difficulty:1,deadlineHours:48,createdAt:360,expiresAt:3000};
+factory2State.orderMarket.available=[factory2Order];factory2State.orderMarket.now=360;factory2State.orderMarket.nextRefreshAt=3000;factory2State.orderMarket.pendingFollowUps=[];
+let factory2=boot({cnc_factory_save_v3:JSON.stringify(factory2State)},{random:()=>0.999999});
+factory2.get('cf2-priority').value='high';factory2.get('cf2-priority').events.change();
+factory2.get('cf2-batch-mode').value='small';factory2.get('cf2-batch-mode').events.change();
+factory2.get('cf2-route-preset').value='mixed';factory2.get('cf2-route-preset').events.change();
+let flowCard=factory2.get('orders').children.find(node=>node.innerHTML?.includes('FLOW-120'));
+assert.ok(flowCard,'120-part order should be visible in the offer list');
+flowCard.children.at(-1).click();
+factory2.get('assignment-options').children[0].children[0].click();
+let factory2Saved=factory2.state(),flowOrder=factory2Saved.productionFlow.orders['FLOW-120'];
+assert.equal(flowOrder.priority,'high');assert.equal(flowOrder.batchMode,'small');assert.equal(flowOrder.projectId,flowProject.id);
+assert.deepEqual(flowOrder.routing.map(step=>step.type),['turning','milling','quality']);
+let flowLots=factory2Saved.productionFlow.lots.filter(lot=>lot.orderId==='FLOW-120');
+assert.ok(flowLots.length>1);assert.equal(flowLots.reduce((sum,lot)=>sum+lot.qty,0),120);
+assert.ok(flowLots.some(lot=>lot.status==='running'),'first compatible machine should start a queued lot');
+assert.equal(factory2Saved.inventory.rawMaterial.c45,380);
+factory2=boot({cnc_factory_save_v3:JSON.stringify(factory2Saved)},{random:()=>0.999999});
+assert.equal(factory2.state().productionFlow.lots.filter(lot=>lot.orderId==='FLOW-120').length,flowLots.length);
+let flowClock=1000;
+for(;flowClock<=240000;flowClock+=1000){
+  factory2.frame(flowClock);factory2Saved=factory2.live();
+  flowLots=factory2Saved.productionFlow.lots.filter(lot=>lot.orderId==='FLOW-120');
+  if(flowLots.some(lot=>lot.routePosition>=2))break;
+}
+assert.ok(flowLots.some(lot=>lot.routePosition>=2),'at least one lot should reach or finish the QS route step');
+assert.equal(factory2Saved.customerProjects.projects.find(project=>project.id===flowProject.id).phaseResults.length,0,'project phase must wait for every lot');
+factory2Saved=factory2.state();
+
+for(let t=flowClock;t<=flowClock+120000;t+=250){
+  factory2.frame(t);factory2Saved=factory2.live();
+  flowLots=factory2Saved.productionFlow.lots.filter(lot=>lot.orderId==='FLOW-120');
+  if(flowLots.every(lot=>lot.status==='completed'))break;
+}
+assert.ok(flowLots.every(lot=>lot.status==='completed'),'all 120 parts should finish the mixed route');
+factory2.flush();factory2Saved=factory2.state();
+const completedFlowProject=factory2Saved.customerProjects.projects.find(project=>project.id===flowProject.id);
+assert.equal(completedFlowProject.phaseResults.length,1,'all lots should advance exactly one project phase');
+assert.equal(completedFlowProject.phaseResults[0].qualityDefectParts,factory2Saved.factory2.orderResults['FLOW-120'].qualityDefectParts,'project phase should record aggregate lot quality');
+assert.equal(completedFlowProject.phaseResults[0].late,factory2Saved.factory2.orderResults['FLOW-120'].late);
+assert.equal(factory2Saved.orderMarket.completedOrderIds.filter(id=>id==='FLOW-120').length,1);
+const incomeEntries=factory2Saved.finance.transactions.filter(entry=>entry.category==='income'&&entry.meta?.orderId==='FLOW-120');
+assert.equal(incomeEntries.length,flowLots.length,'each completed lot should be paid once');
+const incomeTotal=incomeEntries.reduce((sum,entry)=>sum+entry.amount,0);
+assert.equal(incomeTotal,12000.07,'deterministic per-lot cents should pay the accepted reward exactly once in aggregate');
+factory2=boot({cnc_factory_save_v3:JSON.stringify(factory2Saved)},{random:()=>0.999999});
+assert.equal(factory2.state().finance.transactions.filter(entry=>entry.category==='income'&&entry.meta?.orderId==='FLOW-120').length,flowLots.length);
+console.log('Factory 2 flow: 120 parts, split lots, mixed route, staffed QS time/reload and one-time payout OK');
+
+const specializationUiState=JSON.parse(JSON.stringify(factory2State));
+specializationUiState.staffRoster.shift1[0].xp=240;
+let specializationUiApp=boot({cnc_factory_save_v3:JSON.stringify(specializationUiState)});
+const employeeHead=specializationUiApp.createElement('div');employeeHead.className='employee-card-head';employeeHead.append(specializationUiApp.get('employee-card-close'));
+specializationUiApp.get('employee-card').append(employeeHead);
+const personalSection=specializationUiApp.createElement('div');personalSection.className='employee-card-section';personalSection.append(specializationUiApp.get('employee-card-personal'));
+specializationUiApp.get('employee-card').append(personalSection);
+specializationUiApp.get('detail-workplace').dataset.bay='1';specializationUiApp.get('detail-workplace').dataset.shift='1';
+specializationUiApp.get('detail-workplace').click();
+const specializationSelect=specializationUiApp.get('employee-specialization');
+assert.ok(specializationSelect.children.some(option=>option.value==='turning'),'eligible specialization appears in the employee card');
+specializationSelect.value='turning';
+specializationUiApp.get('employee-specialization-assign').click();
+assert.ok(specializationUiApp.live().staffRoster.shift1[0].specializations.includes('turning'),'the employee card applies and persists the selected specialization');
+console.log('Employee development UI: specialization selection and assignment persist');
+
+const specialOrderUiState=JSON.parse(JSON.stringify(factory2State));
+specialOrderUiState.gameMinutes=480;specialOrderUiState.orderMarket.available=[];specialOrderUiState.orderMarket.now=480;specialOrderUiState.orderMarket.nextRefreshAt=1000000;
+let specialOrderUiApp=boot({cnc_factory_save_v3:JSON.stringify(specialOrderUiState)},{random:()=>0.999999});
+specialOrderUiApp.get('cf2-project-customer').value='Veltraxis Mobility';
+specialOrderUiApp.get('cf2-generate-special-order').click();
+const generatedSpecial=specialOrderUiApp.live().orderMarket.available.at(-1);
+assert.equal(generatedSpecial.specialOrder,true);
+assert.ok(generatedSpecial.routing.length<=4);
+assert.equal(generatedSpecial.routing[0].type,generatedSpecial.kind==='Drehen'?'turning':'milling','the visible generator creates a route matching the order’s machine kind');
+console.log('Factory 2 special-order UI: generation creates a compatible, bounded route');
+
+const qualityTimerState=JSON.parse(JSON.stringify(factory2State));
+qualityTimerState.gameMinutes=480;qualityTimerState.speed=1;qualityTimerState.orderMarket.available=[];qualityTimerState.orderMarket.now=480;qualityTimerState.orderMarket.nextRefreshAt=1000000;
+const qualityTimerOrder={id:'QS-PERSIST',kind:'Drehen',customer:'QS Test',part:'QS-Zeitprüfung',partKey:'qs-timer',material:'C45 Stahl',kg:1,qty:1,reward:100,duration:20,difficulty:1,deadlineHours:48,deadlineAt:3360,
+  priority:'low',routing:[{id:'QS-PERSIST-step',type:'quality',requiredMachineKind:null}]};
+assert.equal(require(dir+'/systems/productionFlow.js').addOrder(qualityTimerState,qualityTimerOrder,{capacity:40}).ok,true);
+const qualityPriorityOrder={...qualityTimerOrder,id:'QS-HIGH-PRIORITY',part:'Dringende QS-Prüfung',priority:'high',routing:[{id:'QS-HIGH-PRIORITY-step',type:'quality',requiredMachineKind:null}]};
+assert.equal(require(dir+'/systems/productionFlow.js').addOrder(qualityTimerState,qualityPriorityOrder,{capacity:40}).ok,true);
+let qualityTimerApp=boot({cnc_factory_save_v3:JSON.stringify(qualityTimerState)},{random:()=>0.999999});
+qualityTimerApp.frame(250);
+let qualityTimerLot=qualityTimerApp.live().productionFlow.lots.find(lot=>lot.orderId==='QS-HIGH-PRIORITY');
+assert.equal(qualityTimerLot.status,'running');
+assert.ok(qualityTimerLot.qualityInspection.remainingMinutes>0);
+assert.equal(qualityTimerApp.live().productionFlow.lots.find(lot=>lot.orderId==='QS-PERSIST').status,'queued','only the highest-priority lot occupies the single inspector');
+const savedInspectionMinutes=qualityTimerLot.qualityInspection.remainingMinutes;
+qualityTimerApp.flush();
+const qualityTimerPersisted=qualityTimerApp.state().productionFlow.lots.find(lot=>lot.orderId==='QS-HIGH-PRIORITY');
+assert.equal(qualityTimerPersisted.qualityInspection.remainingMinutes,savedInspectionMinutes,'QS timer is persisted by the adapter');
+qualityTimerApp=boot({cnc_factory_save_v3:JSON.stringify(qualityTimerApp.state())},{random:()=>0.999999});
+qualityTimerLot=qualityTimerApp.live().productionFlow.lots.find(lot=>lot.orderId==='QS-HIGH-PRIORITY');
+assert.equal(qualityTimerLot.qualityInspection.remainingMinutes,savedInspectionMinutes,'in-progress QS timer survives reload');
+assert.equal(qualityTimerApp.live().productionFlow.lots.find(lot=>lot.orderId==='QS-PERSIST').status,'queued');
+console.log('Factory 2 QS: priority queue and staffed inspection persist across reload');
+
+const qualityOrderingState=JSON.parse(JSON.stringify(factory2State));
+qualityOrderingState.gameMinutes=480;qualityOrderingState.speed=1;qualityOrderingState.orderMarket.available=[];qualityOrderingState.orderMarket.now=480;qualityOrderingState.orderMarket.nextRefreshAt=1000000;
+const productionFlowApi=require(dir+'/systems/productionFlow.js');
+const lowFirstOrder={...qualityTimerOrder,id:'QS-LOW-FIRST',part:'Frühes niedriges Los',priority:'low',difficulty:1,routing:[{id:'QS-LOW-FIRST-step',type:'quality',requiredMachineKind:null}]};
+const normalSecondOrder={...qualityTimerOrder,id:'QS-NORMAL-SECOND',part:'Späteres normales Los',priority:'normal',difficulty:4,routing:[{id:'QS-NORMAL-SECOND-step',type:'quality',requiredMachineKind:null}]};
+assert.equal(productionFlowApi.addOrder(qualityOrderingState,lowFirstOrder,{capacity:40}).ok,true);
+assert.equal(productionFlowApi.addOrder(qualityOrderingState,normalSecondOrder,{capacity:40}).ok,true);
+let qualityOrderingApp=boot({cnc_factory_save_v3:JSON.stringify(qualityOrderingState)},{random:()=>0.999999});
+qualityOrderingApp.frame(250);
+const lowFirstLot=qualityOrderingApp.live().productionFlow.lots.find(lot=>lot.orderId==='QS-LOW-FIRST');
+const normalSecondLot=qualityOrderingApp.live().productionFlow.lots.find(lot=>lot.orderId==='QS-NORMAL-SECOND');
+assert.equal(normalSecondLot.status,'running','normal priority starts ahead of the earlier low-priority lot');
+assert.equal(lowFirstLot.status,'queued');
+assert.equal(normalSecondLot.qualityInspection.totalMinutes,21);
+assert.equal(lowFirstLot.qualityInspection,undefined,'the queue must not attach the normal lot timer to the queued low-priority lot');
+
+const rushFlowState=JSON.parse(JSON.stringify(factory2State));
+rushFlowState.gameMinutes=480;rushFlowState.speed=1;rushFlowState.paused=false;rushFlowState.eventQueue=[];
+rushFlowState.orderMarket.available=[];rushFlowState.orderMarket.now=480;rushFlowState.orderMarket.nextRefreshAt=1000000;rushFlowState.nextRushOrderAt=1000000;
+const interruptedOrder={id:'FLOW-INTERRUPT-E2E',kind:'Drehen',customer:'Unterbrechungstest',part:'Präzisionswelle',partKey:'interrupt-shaft',material:'C45 Stahl',kg:10,qty:10,reward:3000,duration:180,difficulty:2,deadlineHours:48,deadlineAt:3360,setupMinutes:40,interruptionSensitivity:1,
+  routing:[{id:'FLOW-INTERRUPT-turning',type:'turning',requiredMachineKind:'Drehen'}],batchMode:'large'};
+assert.equal(productionFlowApi.addOrder(rushFlowState,interruptedOrder,{capacity:40,setupMinutes:40,restartSetupFraction:0.5}).ok,true);
+const interruptedStart=productionFlowApi.startNext(rushFlowState,'1','Drehen',480);
+assert.equal(interruptedStart.ok,true);
+const interruptedLot=rushFlowState.productionFlow.lots.find(lot=>lot.id===interruptedStart.lot.id);
+interruptedLot.qtyCompleted=2;interruptedLot.progress=40;
+rushFlowState.factory2.orderResults[interruptedOrder.id]={paid:0,completedLots:0,qualityDefectParts:0,late:false};
+const interruptedMachine=rushFlowState.machines.find(machine=>machine.bay===1);
+interruptedMachine.activeId=interruptedOrder.id;
+interruptedMachine.activeOrder={...interruptedOrder,flowLotId:interruptedLot.id,flowRouteStepId:interruptedOrder.routing[0].id,qty:interruptedLot.qty,reward:1500};
+interruptedMachine.activeOrderSource='factory2';interruptedMachine.progress=40;interruptedMachine.produced=2;
+interruptedMachine.deadlineAt=3360;interruptedMachine.setupDurationMinutes=40;interruptedMachine.setupRemainingMinutes=0;
+interruptedMachine.setupPartProduced=true;interruptedMachine.ncProgramPending=false;
+const rushOffer={id:'RUSH-FLOW-INTERRUPT',kind:'Drehen',customer:'Eilkunde',customerProfile:'standard',part:'Eilwelle',partKey:'rush-shaft',material:'C45 Stahl',kg:1,qty:1,reward:1000,baseReward:800,rushBonus:200,rushBonusPct:25,duration:1,difficulty:1,deadlineHours:72,deadlineAt:480+4320,createdAt:480,expiresAt:480+4320+1440,offerLifetimeMinutes:5760,isRushOrder:true};
+const programApi=require(dir+'/systems/programmingQuality.js');const rushProgramKey=programApi.programKey(rushOffer),interruptedProgramKey=programApi.programKey(interruptedOrder);rushFlowState.ncPrograms[rushProgramKey]={part:rushOffer.part,kind:rushOffer.kind,completedAt:480};rushFlowState.ncPrograms[interruptedProgramKey]={part:interruptedOrder.part,kind:interruptedOrder.kind,completedAt:480};
+rushFlowState.eventQueue=[{event:'rush_order',id:'rush-flow-interrupt-event',order:rushOffer,createdAt:480}];rushFlowState.paused=true;
+let rushFlowApp=boot({cnc_factory_save_v3:JSON.stringify(rushFlowState)},{random:()=>0.999999});
+const interruptChoice=rushFlowApp.get('event-window').querySelector('.rush-interrupt-choice');
+assert.ok(interruptChoice,'rush event shows the insert-now choice for a running Factory 2 lot');
+assert.equal(interruptChoice.disabled,false,interruptChoice.textContent);
+interruptChoice.click();
+let insertedRushState=rushFlowApp.live();
+let interruptedSnapshot=insertedRushState.productionFlow.lots.find(lot=>lot.id===interruptedLot.id);
+assert.equal(interruptedSnapshot.status,'waiting');
+assert.equal(interruptedSnapshot.qtyCompleted,2);
+assert.equal(interruptedSnapshot.interrupted.restartSetupMinutes,20);
+assert.equal(insertedRushState.machines.find(machine=>machine.bay===1).suspendedOrder.source,'factory2');
+assert.equal(insertedRushState.machines.find(machine=>machine.bay===1).suspendedOrder.progress,40);
+assert.equal(insertedRushState.machines.find(machine=>machine.bay===1).activeId,rushOffer.id);
+rushFlowApp.flush();
+rushFlowApp=boot({cnc_factory_save_v3:JSON.stringify(rushFlowApp.state())},{random:()=>0.999999});
+assert.equal(rushFlowApp.live().productionFlow.lots.find(lot=>lot.id===interruptedLot.id).interrupted.restartSetupMinutes,20,'interruption and restart estimate survive reload');
+let resumedFlowMachine=null;
+for(let t=250;t<=60000;t+=250){
+  rushFlowApp.frame(t);
+  const live=rushFlowApp.live(),machine=live.machines.find(item=>item.bay===1);
+  const lot=live.productionFlow.lots.find(item=>item.id===interruptedLot.id);
+  if(machine.activeOrderSource==='factory2'&&machine.activeId===interruptedOrder.id&&lot.status==='running'){
+    resumedFlowMachine=machine;break;
+  }
+}
+assert.ok(resumedFlowMachine,'the Factory 2 order resumes after the rush job completes');
+assert.equal(resumedFlowMachine.progress,40,'resumed production keeps its previous progress');
+assert.equal(resumedFlowMachine.setupDurationMinutes,20,'restart setup uses the saved interruption estimate');
+assert.ok(resumedFlowMachine.setupRemainingMinutes>0&&resumedFlowMachine.setupRemainingMinutes<=20,'restart setup begins after the rush job and advances only by elapsed simulation time');
+rushFlowApp.flush();
+rushFlowApp=boot({cnc_factory_save_v3:JSON.stringify(rushFlowApp.state())},{random:()=>0.999999});
+const reloadedResumeMachine=rushFlowApp.live().machines.find(machine=>machine.bay===1);
+assert.equal(reloadedResumeMachine.activeId,interruptedOrder.id);
+assert.equal(reloadedResumeMachine.progress,40);
+assert.equal(reloadedResumeMachine.setupDurationMinutes,20);
+console.log('Factory 2 rush: interruption, progress, restart setup and reload survive through rush completion');
+
+const materialSituationState=JSON.parse(JSON.stringify(factory2State));
+materialSituationState.gameMinutes=480;materialSituationState.money=100000;materialSituationState.material=0;
+materialSituationState.inventory.rawMaterial={c45:0};materialSituationState.orderMarket.available=[];materialSituationState.orderMarket.now=480;
+materialSituationState.factorySituations.active=[{id:'SIT-MATERIAL-TEST',type:'material-price-spike',status:'active',startAtMinute:300,endAtMinute:900}];
+const baseMaterialQuote=require(dir+'/systems/materials.js').quote('c45',25,480);
+const materialSituationApp=boot({cnc_factory_save_v3:JSON.stringify(materialSituationState)},{random:()=>0.999999});
+materialSituationApp.get('buy-material').click();
+const situationMaterialCharge=materialSituationApp.state().finance.transactions.filter(entry=>entry.category==='material').at(-1);
+assert.equal(situationMaterialCharge.amount,-Math.round(baseMaterialQuote*1.18*100)/100,'active material-price situation changes the purchase charge');
+console.log('Factory 2 situations: material-price factor reaches the warehouse purchase');
+
+const toolingSituationState=JSON.parse(JSON.stringify(factory2State));
+const toolingOrder={id:'SIT-TOOLING-TEST',kind:'Drehen',customer:'Testkunde',part:'Werkzeugengpass-Test',partKey:'tooling-test',material:'C45 Stahl',kg:1,qty:200,reward:50000,duration:40,difficulty:1,deadlineHours:48,createdAt:360,expiresAt:3000};
+toolingSituationState.gameMinutes=480;toolingSituationState.orderMarket.available=[toolingOrder];toolingSituationState.orderMarket.now=480;toolingSituationState.orderMarket.nextRefreshAt=3000;
+toolingSituationState.factorySituations.active=[{id:'SIT-TOOLING-ACTIVE',type:'tooling-shortage',status:'active',startAtMinute:420,endAtMinute:570}];
+let toolingApp=boot({cnc_factory_save_v3:JSON.stringify(toolingSituationState)},{random:()=>0.999999});
+toolingApp.get('cf2-batch-mode').value='auto';toolingApp.get('cf2-batch-mode').events.change();
+toolingApp.get('cf2-route-preset').value='single';toolingApp.get('cf2-route-preset').events.change();
+const toolingCard=toolingApp.get('orders').children.find(node=>node.innerHTML?.includes('SIT-TOOLING-TEST'));
+assert.ok(toolingCard);toolingCard.children.at(-1).click();toolingApp.get('assignment-options').children[0].children[0].click();
+let toolingSaved=toolingApp.state(),toolingFlowOrder=toolingSaved.productionFlow.orders['SIT-TOOLING-TEST'];
+assert.equal(toolingFlowOrder.situationEffects.capacityFactor,0.88);assert.equal(toolingFlowOrder.situationEffects.durationFactor,1.12);
+assert.equal(toolingSaved.productionFlow.lots.filter(lot=>lot.orderId==='SIT-TOOLING-TEST').length,12,'capacity factor reduces automatic batch capacity');
+assert.equal(require(dir+'/systems/productionFlow.js').createPlan(toolingOrder,{capacity:40}).lots.length,10,'normal automatic capacity baseline');
+const situationApi=require(dir+'/systems/factorySituations.js');
+const durationDuringSituation=situationApi.applyModifiers({},situationApi.getActiveModifiers(toolingApp.live(),555)).situationEffects.durationFactor;
+const durationAfterSituation=situationApi.applyModifiers({},situationApi.getActiveModifiers(toolingApp.live(),571)).situationEffects.durationFactor;
+assert.equal(durationDuringSituation,1.12);assert.equal(durationAfterSituation,1,'duration modifier stops when the situation ends');
+console.log('Factory 2 situations: capacity and duration factors apply only during their event window');
+
+const smallProjectState=JSON.parse(JSON.stringify(factory2State));
+smallProjectState.gameMinutes=360;smallProjectState.orderMarket.available=[];smallProjectState.orderMarket.now=360;smallProjectState.nextRushOrderAt=1000000;
+smallProjectState.customerProjects={version:1,projects:[],decisions:[],nextProjectNumber:1,randomState:1,now:360};
+let smallProjectApp=boot({cnc_factory_save_v3:JSON.stringify(smallProjectState)},{random:()=>0.999999});
+smallProjectApp.get('cf2-project-size').value='small';smallProjectApp.get('cf2-create-project').click();
+const smallProjectId=smallProjectApp.state().customerProjects.projects[0].id;
+for(let t=250;t<=3750;t+=250)smallProjectApp.frame(t);
+const autoProject=smallProjectApp.live().customerProjects.projects.find(project=>project.id===smallProjectId);
+assert.equal(autoProject.phases[0].status,'completed');assert.equal(autoProject.currentPhaseId,'pilot','small project advances from the simulation tick');
+
+const heldProjectState=JSON.parse(JSON.stringify(smallProjectState));heldProjectState.machines=[];heldProjectState.selectedBay=null;
+let heldProjectApp=boot({cnc_factory_save_v3:JSON.stringify(heldProjectState)},{random:()=>0.999999});
+heldProjectApp.get('cf2-project-size').value='small';heldProjectApp.get('cf2-create-project').click();
+const heldProjectId=heldProjectApp.state().customerProjects.projects[0].id;
+const heldOrder={id:'SMALL-PROJECT-LIVE-ORDER',kind:'Drehen',customer:'Veltraxis Mobility',part:'Prototyp',partKey:'turn-prototype',material:'C45 Stahl',kg:1,qty:1,reward:100,duration:40,difficulty:1,deadlineHours:48,routing:[{id:'held-step',type:'turning',requiredMachineKind:'Drehen'}]};
+const heldState=heldProjectApp.state();assert.equal(require(dir+'/systems/productionFlow.js').addOrder(heldState,heldOrder).ok,true);
+heldState.factory2.projectOrders[heldOrder.id]=heldProjectId;
+heldProjectApp=boot({cnc_factory_save_v3:JSON.stringify(heldState)},{random:()=>0.999999});
+for(let t=250;t<=3750;t+=250)heldProjectApp.frame(t);
+assert.equal(heldProjectApp.live().customerProjects.projects.find(project=>project.id===heldProjectId).phaseResults.length,0,'linked small project waits for its live production order');
+
+const decisionState=JSON.parse(JSON.stringify(factory2State));
+decisionState.gameMinutes=360;decisionState.orderMarket.available=[{...toolingOrder,id:'PROJECT-DECISION-BLOCK',customer:'Veltraxis Mobility',qty:1,kg:1}];
+decisionState.orderMarket.now=360;decisionState.orderMarket.nextRefreshAt=3000;decisionState.customerProjects={version:1,projects:[],decisions:[],nextProjectNumber:1,randomState:7,now:360};
+const decisionProjectModule=require(dir+'/systems/customerProjects.js');
+const decisionProject=decisionProjectModule.create(decisionState,{customer:'Veltraxis Mobility',reputation:50},{size:'medium',atMinute:360});
+assert.equal(decisionProjectModule.completePhase(decisionState,decisionProject.id,'prototype',{performance:0},361).ok,true);
+assert.ok(decisionState.customerProjects.projects[0].availableDecision);
+const decisionApp=boot({cnc_factory_save_v3:JSON.stringify(decisionState)},{random:()=>0.999999});
+const decisionCard=decisionApp.get('orders').children.find(node=>node.innerHTML?.includes('PROJECT-DECISION-BLOCK'));
+assert.ok(decisionCard);decisionCard.children.at(-1).click();decisionApp.get('assignment-options').children[0].children[0].click();
+assert.equal(decisionApp.state().productionFlow.orders['PROJECT-DECISION-BLOCK'].projectId,null,'a follow-up order cannot skip an unresolved project decision');
+console.log('Factory 2 projects: small phase auto-advance and decision gating work through the adapter');
+const supplierState=JSON.parse(JSON.stringify(factory2State));
+const supplierOrder={id:'SUPPLIER-E2E',kind:'Drehen',customer:'Veltraxis Mobility',part:'Extern gefrästes Bauteil',partKey:'shaft',material:'C45 Stahl',kg:1,qty:1,reward:5000,duration:1,difficulty:1,deadlineHours:48,createdAt:360,expiresAt:3000,
+  routing:[{id:'SUPPLIER-E2E-external',type:'external',operationType:'milling',requiredMachineKind:null},{id:'SUPPLIER-E2E-milling',type:'milling',requiredMachineKind:'Fräsen'}]};
+supplierState.orderMarket.available=[supplierOrder];supplierState.orderMarket.now=360;supplierState.orderMarket.nextRefreshAt=3000;
+let supplierApp=boot({cnc_factory_save_v3:JSON.stringify(supplierState)});
+supplierApp.get('cf2-batch-mode').value='large';supplierApp.get('cf2-batch-mode').events.change();
+const supplierCard=supplierApp.get('orders').children.find(node=>node.innerHTML?.includes('SUPPLIER-E2E'));
+assert.ok(supplierCard,'external route offer should be visible');supplierCard.children.at(-1).click();
+supplierApp.get('assignment-options').children[0].children[0].click();
+let supplierSaved=supplierApp.state();
+const supplierLot=supplierSaved.productionFlow.lots.find(lot=>lot.orderId==='SUPPLIER-E2E');
+assert.equal(supplierLot.status,'waiting','an external first step should wait for a supplier quote');
+let supplierRow=supplierApp.get('cf2-supplier-list').children[0];
+supplierRow.children[2].children[1].click();
+supplierRow=supplierApp.get('cf2-supplier-list').children[0];
+supplierRow.children[2].children[2].click();
+supplierSaved=supplierApp.state();
+let supplierJob=supplierSaved.suppliers.jobs.find(job=>job.orderId==='SUPPLIER-E2E');
+assert.ok(supplierJob,'awarding the lot quote should create a supplier job');
+assert.equal(supplierSaved.productionFlow.lots.find(lot=>lot.id===supplierLot.id).status,'outsourced');
+const supplierChargeKey=`factory2-supplier:${supplierJob.id}`;
+let supplierCharges=supplierSaved.finance.transactions.filter(entry=>entry.category==='other'&&entry.meta?.aggregateKey===supplierChargeKey);
+assert.equal(supplierCharges.length,1,'dispatch should post one persistent supplier charge');
+supplierSaved.factory2.paidSupplierJobIds=supplierSaved.factory2.paidSupplierJobIds.filter(id=>id!==supplierJob.id);
+supplierSaved.factory2.pendingSupplierRelease[supplierJob.id]=true;
+supplierJob=supplierSaved.suppliers.jobs.find(job=>job.id===supplierJob.id);supplierJob.dueAtMinute=supplierSaved.gameMinutes+100;
+supplierApp=boot({cnc_factory_save_v3:JSON.stringify(supplierSaved)});supplierApp.frame(1000);supplierApp.flush();
+supplierSaved=supplierApp.state();
+supplierCharges=supplierSaved.finance.transactions.filter(entry=>entry.category==='other'&&entry.meta?.aggregateKey===supplierChargeKey);
+assert.equal(supplierCharges.length,1,'replayed release after reload must not charge the saved supplier job again');
+assert.ok(supplierSaved.factory2.paidSupplierJobIds.includes(supplierJob.id),'release retry should restore the persistent paid marker');
+supplierJob=supplierSaved.suppliers.jobs.find(job=>job.id===supplierJob.id);supplierJob.dueAtMinute=supplierSaved.gameMinutes;
+supplierApp=boot({cnc_factory_save_v3:JSON.stringify(supplierSaved)});supplierApp.frame(1000);supplierApp.flush();
+supplierSaved=supplierApp.state();
+const deliveredLot=supplierSaved.productionFlow.lots.find(lot=>lot.id===supplierLot.id);
+assert.equal(deliveredLot.routePosition,1,'supplier delivery should advance the lot to the next production step');
+assert.equal(deliveredLot.routeStepType,'milling');
+assert.equal(deliveredLot.status,'running','supplier delivery should release the lot to the next internal machine queue');
+assert.equal(supplierSaved.suppliers.jobs.find(job=>job.id===supplierJob.id).status,'completed');
+console.log('Factory 2 suppliers: waiting external lot quoted, charged once across reload, and released to next route step');

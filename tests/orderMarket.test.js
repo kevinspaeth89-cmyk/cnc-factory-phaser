@@ -41,6 +41,22 @@ test('slows the offer cycle while keeping several choices visible', () => {
   }
 });
 
+test('adjusts future offer refreshes with the active demand factor', () => {
+  const baseline = newState('demand-factor');
+  const boom = newState('demand-factor');
+  for (const state of [baseline, boom]) {
+    state.orderMarket.now = 0;
+    state.orderMarket.nextRefreshAt = 600;
+  }
+
+  orderMarket.tick(baseline, 600);
+  orderMarket.tick(boom, 600, { demandFactor: 1.2 });
+
+  assert.ok(boom.orderMarket.nextRefreshAt < baseline.orderMarket.nextRefreshAt);
+  assert.ok(baseline.orderMarket.nextRefreshAt >= 1320);
+  assert.ok(baseline.orderMarket.nextRefreshAt <= 1680);
+});
+
 test('migrates offers from older saves to the slower, lower reward balance', () => {
   const state = newState(8891);
   state.orderMarket.version = 1;
