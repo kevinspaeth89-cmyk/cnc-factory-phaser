@@ -784,12 +784,30 @@ const incomeEntries=factory2Saved.finance.transactions.filter(entry=>entry.categ
 assert.equal(incomeEntries.length,flowLots.length,'each completed lot should be paid once');
 const incomeTotal=incomeEntries.reduce((sum,entry)=>sum+entry.amount,0);
 assert.equal(incomeTotal,12000.07,'deterministic per-lot cents should pay the accepted reward exactly once in aggregate');
+const workedEmployees=[...factory2Saved.staffRoster.shift1,...factory2Saved.staffRoster.shift2];
+const timeTrackedEmployee=workedEmployees.find(employee=>employee.productionMinutes>0);
+assert.ok(timeTrackedEmployee,'staffed production minutes are tracked separately from experience XP');
+const workTimeReload=boot({cnc_factory_save_v3:JSON.stringify(factory2Saved)}).live();
+assert.equal(workTimeReload.staffRoster.shift1.concat(workTimeReload.staffRoster.shift2).find(employee=>employee.id===timeTrackedEmployee.id).productionMinutes,timeTrackedEmployee.productionMinutes,'staffed time survives save normalization');
 factory2=boot({cnc_factory_save_v3:JSON.stringify(factory2Saved)},{random:()=>0.999999});
 assert.equal(factory2.state().finance.transactions.filter(entry=>entry.category==='income'&&entry.meta?.orderId==='FLOW-120').length,flowLots.length);
 console.log('Factory 2 flow: 120 parts, split lots, mixed route, staffed QS time/reload and one-time payout OK');
 
+const freshHireUiState=JSON.parse(JSON.stringify(factory2State));
+freshHireUiState.staffRoster.shift1[0].xp=0;
+const freshHireUiApp=boot({cnc_factory_save_v3:JSON.stringify(freshHireUiState)});
+const freshEmployeeHead=freshHireUiApp.createElement('div');freshEmployeeHead.className='employee-card-head';freshEmployeeHead.append(freshHireUiApp.get('employee-card-close'));
+freshHireUiApp.get('employee-card').append(freshEmployeeHead);
+const freshPersonalSection=freshHireUiApp.createElement('div');freshPersonalSection.className='employee-card-section';freshPersonalSection.append(freshHireUiApp.get('employee-card-personal'));
+freshHireUiApp.get('employee-card').append(freshPersonalSection);
+freshHireUiApp.get('detail-workplace').dataset.bay='1';freshHireUiApp.get('detail-workplace').dataset.shift='1';
+freshHireUiApp.get('detail-workplace').click();
+assert.equal(freshHireUiApp.get('employee-specialization-assign').disabled,true,'a new hire cannot be specialized before earning a level-up');
+assert.equal(freshHireUiApp.get('employee-specialization').children.length,0,'no specialization choices appear before a level-up');
 const specializationUiState=JSON.parse(JSON.stringify(factory2State));
-specializationUiState.staffRoster.shift1[0].xp=240;
+specializationUiState.staffRoster.shift1[0].xp=7200;
+specializationUiState.staffRoster.shift1[0].productionMinutes=7200;
+specializationUiState.staffRoster.shift1[0].development={version:2,legacyMilestonesAwarded:0,experienceMilestonesAwarded:1,eventPromotionsAwarded:0,pendingSpecializationChoices:1,specialEventRewardClaimed:false};
 let specializationUiApp=boot({cnc_factory_save_v3:JSON.stringify(specializationUiState)});
 const employeeHead=specializationUiApp.createElement('div');employeeHead.className='employee-card-head';employeeHead.append(specializationUiApp.get('employee-card-close'));
 specializationUiApp.get('employee-card').append(employeeHead);
@@ -802,6 +820,10 @@ assert.ok(specializationSelect.children.some(option=>option.value==='turning'),'
 specializationSelect.value='turning';
 specializationUiApp.get('employee-specialization-assign').click();
 assert.ok(specializationUiApp.live().staffRoster.shift1[0].specializations.includes('turning'),'the employee card applies and persists the selected specialization');
+const savedSpecializationState=specializationUiApp.state();
+const specializationReload=boot({cnc_factory_save_v3:JSON.stringify(savedSpecializationState)});
+assert.deepEqual(specializationReload.live().staffRoster.shift1[0].specializations,['turning'],'assigned specializations survive save normalization');
+assert.equal(specializationReload.live().staffRoster.shift1[0].development.pendingSpecializationChoices,0,'a consumed level-up is not awarded again after reload');
 console.log('Employee development UI: specialization selection and assignment persist');
 
 const specialOrderUiState=JSON.parse(JSON.stringify(factory2State));
