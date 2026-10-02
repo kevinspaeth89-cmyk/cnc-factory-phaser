@@ -1103,3 +1103,19 @@ const shipChoice=defectiveApp.get('event-actions').children.find(node=>node.text
 assert.equal(defectiveApp.state().finance.transactions.filter(entry=>entry.category==='income'&&entry.meta?.orderId===defectiveOrder.id).reduce((sum,entry)=>sum+entry.amount,0),5000,'secretly shipping defects does not deduct the invoice');
 assert.ok(defectiveApp.state().pendingQualityComplaints.some(item=>item.order.id===defectiveOrder.id&&item.undetected));
 console.log('Known defects secretly delivered at full invoice, with later complaint risk');
+
+
+// Overtime finishes after 22:00 while the global regular shift is zero.
+const nightErrors=[],nightState=JSON.parse(JSON.stringify(factory2State));
+nightState.gameMinutes=22*60+22-360;nightState.speed=10;nightState.paused=false;nightState.eventQueue=[];
+const nightOrder={...factory2Order,id:'NIGHT-RUSH',isRushOrder:true,workMode:'overtime',duration:1,deadlineAt:100000,routing:undefined};
+nightState.ncPrograms[require(dir+'/systems/programmingQuality.js').programKey(nightOrder)]={ready:true};
+nightState.machines=[{...nightState.machines[0],activeId:nightOrder.id,activeOrder:nightOrder,activeOrderSource:'market',progress:99.9,produced:119,deadlineAt:100000,setupPartProduced:true,setupRemainingMinutes:0}];
+const nightApp=boot({cnc_factory_save_v3:JSON.stringify(nightState)},{random:()=>0.999999,console:{...console,error:(...args)=>nightErrors.push(args)}});
+const nightMinute=nightApp.live().gameMinutes;for(let t=250;t<=5000;t+=250)nightApp.frame(t);nightApp.flush();
+assert.deepEqual(nightErrors,[],'overtime completion must not query a nonexistent shift');
+assert.equal(nightApp.live().paused,false);assert.ok(nightApp.live().gameMinutes>nightMinute);assert.equal(nightApp.live().machines[0].activeId,null,'the night shift finishes and releases the machine');
+const parallelState=JSON.parse(JSON.stringify(factory2State));parallelState.orderMarket.available=[{...factory2Order,id:'PARALLEL-TURN',qty:100,routing:[{id:'parallel-turn',type:'turning',requiredMachineKind:'Drehen'}]}];parallelState.factory2.offerPlans={'PARALLEL-TURN':{batchSize:50}};
+const parallelApp=boot({cnc_factory_save_v3:JSON.stringify(parallelState)},{random:()=>0.999999});parallelApp.get('orders').children.find(node=>node.innerHTML?.includes('PARALLEL-TURN')).children.at(-1).click();parallelApp.get('assignment-options').children[0].children[0].click();
+const parallelRunning=parallelApp.live().productionFlow.lots.filter(lot=>lot.orderId==='PARALLEL-TURN'&&lot.status==='running');assert.equal(parallelRunning.length,2);assert.equal(new Set(parallelRunning.map(lot=>lot.machineId)).size,2);assert.deepEqual(parallelRunning.map(lot=>lot.qty),[50,50]);
+console.log('Overtime completion is safe; a single turning order runs as two 50-piece lots on two turning machines');

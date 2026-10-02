@@ -754,7 +754,7 @@
   const upgradeInvestment=m=>m?9000*((m.level-1)*m.level/2):0;
   const resaleValue=m=>m?Math.round((Number.isFinite(m.purchasePrice)?m.purchasePrice:LEGACY_MACHINE_PRICES[m.type]||catalog[m.type].price)*SELL_BASE_RATE+upgradeInvestment(m)*SELL_UPGRADE_RATE+(m.loadingRobot?LOADING_ROBOT_COST*.4:0)):0;
   const skillLevel=employee=>employee?Math.min(3,Math.max(employee.trained,employee.xp>=1500?3:employee.xp>=600?2:employee.xp>=180?1:0)):0;
-  const assignedEmployee=(m,shift)=>state.staffRoster['shift'+shift].find(employee=>employee.assignedBay===m.bay);
+  const assignedEmployee=(m,shift)=>m?(state.staffRoster?.['shift'+shift]||[]).find(employee=>employee.assignedBay===m.bay)||null:null;
   const employeeById=id=>[...(state.staffRoster?.shift1||[]),...(state.staffRoster?.shift2||[])].find(employee=>employee.id===id)||null;
   const hallWorkerSprites=Object.freeze({
     'Vaska Feilensang':'assets/vaska-working.webp?v=2',
@@ -5341,7 +5341,7 @@
             finishOrder(m,o,null,state.gameMinutes+step);
             continue;
           }
-          const inspectionShift=shiftAt(state.gameMinutes)||shift;
+          const inspectionShift=shiftAt(state.gameMinutes)||productionShift;
           const qsInspector=qualityEmployee(inspectionShift);
           if(qsInspector){
             if(m.qualityInspectionOrderId!==o.id){
