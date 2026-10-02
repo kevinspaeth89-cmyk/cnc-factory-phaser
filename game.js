@@ -4,6 +4,7 @@
   const euro = amount => '€ ' + Math.round(amount).toLocaleString('de-DE');
   const euroExact = amount => '€ ' + amount.toLocaleString('de-DE',{minimumFractionDigits:2,maximumFractionDigits:2});
   const SAVE_KEY = 'cnc_factory_save_v3';
+  const BACKUP_SAVE_KEY = SAVE_KEY + '_backup';
   const START = Date.UTC(2026, 0, 5, 6);
   const GAME_MINUTES_PER_REAL_SECOND = 10;
   const EMPLOYEE_REMARK_VISIBLE_MS = 5000;
@@ -119,13 +120,25 @@
     factory2:{version:1,orderSettings:{priority:'normal',batchMode:'auto',routePreset:'single'},preferredBays:{},orderResults:{},projectOrders:{},specialOrderIds:[]}
   });
   let state=defaults();
+  let simulationTickInProgress=false;
+  let lastStableSaveJson=null;
+  let recoveredFromBackup=false;
+  let preserveBackupUntilSuccessfulTick=false;
+  function readStoredSave(key){
+    try{return JSON.parse(localStorage.getItem(key)||'null');}catch(_){return null;}
+  }
+  const usableSave=value=>!!(value&&Number.isFinite(value.money)&&Array.isArray(value.machines)&&
+    (value.gameMinutes===undefined||Number.isFinite(value.gameMinutes)));
   function validMachine(m) {
     return m && Number.isInteger(m.bay) && m.bay>=1 && m.bay<=expansionSystem.getUnlockedBays(state) &&
       !!catalog[m.type] && typeof m.progress==='number';
   }
   try {
-    const stored=JSON.parse(localStorage.getItem(SAVE_KEY) || 'null');
-    if(stored && Number.isFinite(stored.money) && Array.isArray(stored.machines)) {
+    const primarySave=readStoredSave(SAVE_KEY),backupSave=readStoredSave(BACKUP_SAVE_KEY);
+    recoveredFromBackup=!usableSave(primarySave)&&usableSave(backupSave);
+    preserveBackupUntilSuccessfulTick=usableSave(backupSave);
+    const stored=usableSave(primarySave)?primarySave:(recoveredFromBackup?backupSave:null);
+    if(stored) {
       state={...defaults(),...stored};
       state.ncPrograms=stored.ncPrograms&&typeof stored.ncPrograms==='object'&&!Array.isArray(stored.ncPrograms)?stored.ncPrograms:{};
       const savedProgrammer=stored.programmer&&typeof stored.programmer==='object'?stored.programmer:{};
@@ -234,6 +247,7 @@
       (event.event==='quality_complaint'&&event.order&&typeof event.order.id==='string'&&typeof event.customer==='string')
     )
   ).map(event=>({...event,id:event.id||(['rush_order','quality_issue','quality_complaint'].includes(event.event)?`${event.event}:${event.order.id}`:`${event.event}:${event.bay}:${event.since??state.gameMinutes}`)})):[];
+  if(recoveredFromBackup)state.paused=true;
   if(state.eventQueue.length)state.paused=true;
   state.machines.forEach(m=>{
     m.loadingRobot=!!m.loadingRobot;
@@ -445,7 +459,12 @@
   const save = () => {try{
     syncMaterialMirror();
     economySystem.setTime(state,START+state.gameMinutes*60000);
-    localStorage.setItem(SAVE_KEY,JSON.stringify(state));
+    const serialized=JSON.stringify(state);
+    if(!simulationTickInProgress){
+      lastStableSaveJson=serialized;
+      if(!preserveBackupUntilSuccessfulTick)try{localStorage.setItem(BACKUP_SAVE_KEY,serialized);}catch(_){}
+    }
+    localStorage.setItem(SAVE_KEY,serialized);
   }catch(_){}};
   save();
   function gameDateKey(minutes=state.gameMinutes){
@@ -4945,7 +4964,9 @@
     $('new-game-confirm').hidden=true;
     try{
       localStorage.removeItem(SAVE_KEY);
+      localStorage.removeItem(BACKUP_SAVE_KEY);
       localStorage.removeItem('cnc_factory_save_v2');
+      preserveBackupUntilSuccessfulTick=false;
     }catch(_){}
     state=defaults();
     hallPreviewBay=null;
@@ -5952,11 +5973,27 @@
     accumulator+=Math.min((now-previous)/1000,.25);previous=now;
     if(accumulator>=.1){
       const elapsed=accumulator;accumulator=0;
-      try{tick(elapsed);}catch(error){
-        console.error('Simulationsschritt fehlgeschlagen; Spielstand wird pausiert gesichert.',error);
+      const rollbackJson=lastStableSaveJson||JSON.stringify(state);
+      try{
+        simulationTickInProgress=true;
+        tick(elapsed);
+        simulationTickInProgress=false;
+        lastStableSaveJson=JSON.stringify(state);
+        if(preserveBackupUntilSuccessfulTick){
+          preserveBackupUntilSuccessfulTick=false;
+          try{localStorage.setItem(BACKUP_SAVE_KEY,lastStableSaveJson);}catch(_){}
+        }
+      }catch(error){
+        simulationTickInProgress=false;
+        let rolledBack=false;
+        if(rollbackJson){
+          try{state=JSON.parse(rollbackJson);rolledBack=true;}catch(rollbackError){console.error('Letzter stabiler Spielstand konnte nicht wiederhergestellt werden.',rollbackError);}
+        }
+        console.error('Simulationsschritt fehlgeschlagen; der fehlerhafte Schritt wird verworfen.',error);
         state.paused=true;
         try{save();render();}catch(recoveryError){console.error('Spielstand konnte nach dem Fehler nicht dargestellt werden.',recoveryError);}
-        say('Technischer Fehler im Spielablauf. Spielstand wurde gesichert; bitte die Seite neu laden.');
+        say(rolledBack?'Simulationsfehler: Letzter intakter Stand wurde wiederhergestellt und pausiert.':
+          'Technischer Fehler im Spielablauf. Bitte Seite neu laden; der Spielstand wurde nicht sicher wiederhergestellt.');
       }
     }
     requestAnimationFrame(frame);

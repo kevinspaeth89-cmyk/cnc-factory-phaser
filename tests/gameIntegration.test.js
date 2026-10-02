@@ -97,7 +97,9 @@ function boot(storage,options={}){
   const document={head:get('document-head'),getElementById:id=>(id==='order-office-panel'||id==='event-window')&&!elements.has(id)?null:get(id),createElement:tagName=>{const element=new El();element.tagName=String(tagName).toLowerCase();return element},createTextNode:text=>{const node=new El();node.textContent=String(text);return node},querySelector:q=>q==='main'?get('stage'):null,querySelectorAll:()=>[],addEventListener(){}};
   let nextFrame=()=>{},saveInterval=()=>{};
   const windowEvents={};
-  const context={document,console,Date,Math:math,JSON,performance:{now:()=>0},requestAnimationFrame:fn=>nextFrame=fn,setTimeout:(fn,ms)=>{if(options.phaser&&ms===0)fn();return 1},clearTimeout(){},setInterval:fn=>saveInterval=fn,window:{matchMedia:()=>({matches:true}),confirm:()=>true,addEventListener:(type,fn)=>windowEvents[type]=fn},localStorage:{getItem:k=>storage[k]||null,setItem:(k,v)=>storage[k]=v,removeItem:k=>delete storage[k]},CNCModules:{economy:require(dir+'/systems/economy.js').economy,inventory:require(dir+'/systems/economy.js').inventory,orderMarket:require(dir+'/systems/orderMarket.js'),breakdowns,factoryExpansion:require(dir+'/factory-expansion.js'),materials:require(dir+'/systems/materials.js'),recruitment:require(dir+'/systems/recruitment.js'),programmingQuality:require(dir+'/systems/programmingQuality.js'),employeeDevelopment:require(dir+'/systems/employeeDevelopment.js'),productionFlow:require(dir+'/systems/productionFlow.js'),suppliers:require(dir+'/systems/suppliers.js'),customerProjects:require(dir+'/systems/customerProjects.js'),factorySituations:require(dir+'/systems/factorySituations.js')}};
+  const productionFlowApi=require(dir+'/systems/productionFlow.js');
+  const productionFlow=typeof options.productionFlowTick==='function'?{...productionFlowApi,tick:options.productionFlowTick}:productionFlowApi;
+  const context={document,console:options.console||console,Date,Math:math,JSON,performance:{now:()=>0},requestAnimationFrame:fn=>nextFrame=fn,setTimeout:(fn,ms)=>{if(options.phaser&&ms===0)fn();return 1},clearTimeout(){},setInterval:fn=>saveInterval=fn,window:{matchMedia:()=>({matches:true}),confirm:()=>true,addEventListener:(type,fn)=>windowEvents[type]=fn},localStorage:{getItem:k=>storage[k]||null,setItem:(k,v)=>storage[k]=v,removeItem:k=>delete storage[k]},CNCModules:{economy:require(dir+'/systems/economy.js').economy,inventory:require(dir+'/systems/economy.js').inventory,orderMarket:require(dir+'/systems/orderMarket.js'),breakdowns,factoryExpansion:require(dir+'/factory-expansion.js'),materials:require(dir+'/systems/materials.js'),recruitment:require(dir+'/systems/recruitment.js'),programmingQuality:require(dir+'/systems/programmingQuality.js'),employeeDevelopment:require(dir+'/systems/employeeDevelopment.js'),productionFlow,suppliers:require(dir+'/systems/suppliers.js'),customerProjects:require(dir+'/systems/customerProjects.js'),factorySituations:require(dir+'/systems/factorySituations.js')}};
   if(options.phaser)context.Phaser={Scene:class{},Game:class{},AUTO:0,Scale:{FIT:0,CENTER_BOTH:0}};
   context.globalThis=context;context.window.cncFactory=null;
   vm.runInNewContext(fs.readFileSync(dir+'/game.js','utf8'),context,{filename:'game.js'});
@@ -120,6 +122,20 @@ assert.match(app.get('hall-preview-operators').textContent,/S1 ✓ · S2 –/);
 app.get('repair-now').click();st=app.state();assert.equal(st.breakdowns.machines['2'].status,'repairing');assert.equal(st.money,13664);const repairTransactions=st.finance.transactions.filter(x=>x.category==='repairs');assert.equal(repairTransactions.length,1);assert.equal(repairTransactions[0].amount,-336);
 app=boot(storage);st=app.state();assert.equal(st.money,13664);assert.equal(st.breakdowns.machines['2'].status,'repairing');const reloadedRepairs=st.finance.transactions.filter(x=>x.category==='repairs');assert.equal(reloadedRepairs.length,1);assert.equal(reloadedRepairs[0].amount,-336);assert.equal(st.machines[0].activeId,'A12');
 app.frame(1000);st=app.state();assert.equal(st.breakdowns.machines['2'].status,'repairing');assert.equal(st.finance.transactions.filter(x=>x.category==='repairs').length,1);
+const crashStorage={cnc_factory_save_v3:JSON.stringify({money:14000,material:0,capacity:300,staff:{shift1:0,shift2:0},machines:[],gameMinutes:0,speed:1,paused:false})};
+const crashApp=boot(crashStorage,{productionFlowTick(state){state.money=1;throw new Error('injected simulation failure');},console:{error(){}}});
+crashApp.frame(1000);
+const recoveredCrashSave=crashApp.state();
+assert.equal(recoveredCrashSave.money,14000,'failed tick mutations are rolled back');
+assert.equal(recoveredCrashSave.gameMinutes,0,'failed tick time is rolled back');
+assert.equal(recoveredCrashSave.paused,true,'recovered save pauses after the simulation error');
+assert.equal(JSON.parse(crashStorage.cnc_factory_save_v3_backup).money,14000,'the backup contains the last stable save');
+
+const backupRecoveryStorage={cnc_factory_save_v3:'{damaged json',cnc_factory_save_v3_backup:JSON.stringify({money:17000,material:0,capacity:300,staff:{shift1:0,shift2:0},machines:[],gameMinutes:60,speed:1,paused:false})};
+const backupRecovered=boot(backupRecoveryStorage);
+assert.equal(backupRecovered.state().money,17000,'invalid primary save falls back to the backup');
+assert.equal(backupRecovered.state().gameMinutes,60,'backup save progress is retained');
+assert.equal(backupRecovered.state().paused,true,'restoring a backup requires a deliberate resume');
 const wornSave={money:25000,material:120,capacity:300,staff:{shift1:1,shift2:0},
   machines:[{bay:1,type:'standard',level:1,maintenance:36,tool:.5,operator1:true,operator2:false,activeId:'A12',progress:45,produced:22,deadlineAt:420}],
   selectedBay:1,gameMinutes:0,speed:1,paused:false};
