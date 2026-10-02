@@ -3265,16 +3265,39 @@
     $('employee-specializations').textContent=assignedSpecializations.length
       ?`${assignedSpecializations.map(id=>specLabels[id]||id).join(' · ')}${effectParts.length?` · ${effectParts.join(' · ')}`:''}`
       :`Noch keine Spezialisierung.${effectParts.length?` Mögliche Wirkung: ${effectParts.join(' · ')}.`:''}`;
-    const progression={xp:Math.max(0,Number(employee.xp)||0)};
-    const available=employeeDevelopment.getAvailableSpecializations(employee,progression);
+    const progression=employeeDevelopment.getProgress(employee);
+    const available=employeeDevelopment.getAvailableSpecializations(employee);
     const specializationSelect=$('employee-specialization');
     specializationSelect.replaceChildren(...available.map(id=>{
       const option=document.createElement('option');option.value=id;option.textContent=specLabels[id]||id;return option;
     }));
     $('employee-specialization-assign').disabled=!available.length;
-    $('employee-specialization-hint').textContent=assignedSpecializations.length>=2?'Maximal zwei Spezialisierungen erreicht.':progression.xp<employeeDevelopment.FIRST_UNLOCK_XP
-      ?`Erste Spezialisierung ab ${employeeDevelopment.FIRST_UNLOCK_XP} Erfahrungspunkten; die zweite ab ${employeeDevelopment.SECOND_UNLOCK_XP}.`
-      :available.length?'Persönlichkeit und Erfahrung bestimmen die verfügbaren Schwerpunkte.':'Für die zweite Spezialisierung ist mehr Erfahrung nötig.';
+    const productionHours=Math.floor(progression.productionHours);
+    const progressionSummary='Karrierelevel '+progression.careerLevel+' · '+productionHours+' Produktionsstunden';
+    const specializationSummary=assignedSpecializations.length
+      ?assignedSpecializations.map(id=>specLabels[id]||id).join(' · ')
+      :'Noch keine Spezialisierung';
+    $('employee-specializations').textContent=progressionSummary+' · '+specializationSummary+(effectParts.length?' · '+effectParts.join(' · '):'');
+    let progressionHint;
+    if(assignedSpecializations.length>=employeeDevelopment.MAX_SPECIALIZATIONS){
+      progressionHint='Maximal zwei Spezialisierungen erreicht.';
+    }else if(progression.pendingChoices>0){
+      progressionHint=progression.pendingChoices===1
+        ?'Level-up erreicht: Wähle jetzt eine Spezialisierung.'
+        :'Es warten '+progression.pendingChoices+' Level-up-Auswahlen. Jede Auswahl wurde durch einen eigenen Aufstieg verdient.';
+    }else if(progression.nextMilestoneXp!==null){
+      const thresholdHours=Math.ceil(progression.nextMilestoneXp/60);
+      const remainingHours=Math.max(0,Math.ceil((progression.nextMilestoneXp-progression.xp)/60));
+      progressionHint='Nächster Erfahrungsaufstieg bei '+thresholdHours+' Produktionsstunden · noch '+remainingHours+' h.';
+      if(progression.specialEventAvailable){
+        progressionHint+=' Eine erfolgreiche Selbstreparatur kann ebenfalls einmalig ein Level-up bringen.';
+      }else if(!employee.development.specialEventRewardClaimed&&progression.xp<employeeDevelopment.SPECIAL_EVENT_XP){
+        progressionHint+=' Eine besondere Leistung kann ab '+Math.ceil(employeeDevelopment.SPECIAL_EVENT_XP/60)+' h ebenfalls ein Level-up auslösen.';
+      }
+    }else{
+      progressionHint='Alle Spezialisierungen und Level-ups dieses Mitarbeiters wurden verdient.';
+    }
+    $('employee-specialization-hint').textContent=progressionHint;
 
     let conversation=$('employee-card-conversation');
     if(!conversation){
@@ -5404,6 +5427,8 @@
           bay:event.bay
         });
         say(`${repairEmployee.name} hat die Störung auf Platz ${event.bay} erfolgreich selbst behoben · Erfahrung mit diesem Fehler: ${learned.successes}× · künftige Erfolgschance +${Math.round(learned.bonusSuccessChance*100)} %-Punkte.`);
+        const promotion=employeeDevelopment.awardSpecialEvent(repairEmployee,'successful_self_repair');
+        if(promotion.ok)say(repairEmployee.name+' hat mit der erfolgreichen Selbstreparatur ein verdientes Level-up erreicht · eine Spezialisierung steht bereit.');
       }
     }
     if(event.event==='warning'){
