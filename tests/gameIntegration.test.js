@@ -89,6 +89,7 @@ function boot(storage,options={}){
     click(){assert(this.events.click,this.id);this.events.click({stopPropagation(){}})}
   }
   const get=id=>{if(!elements.has(id))elements.set(id,new El(id));return elements.get(id)};
+  const cardHead=new El();cardHead.className='employee-card-head';cardHead.append(get('employee-card-close'));get('employee-card').append(cardHead);const cardPersonal=new El();cardPersonal.className='employee-card-section';cardPersonal.append(get('employee-card-personal'));get('employee-card').append(cardPersonal);
   for(const id of ids)get(id);get('machine-shop').parentElement=get('business-panel');get('material-quantity').value='25';get('loan-amount').value='10000';get('loan-repayment-amount').value='all';get('finance-period').value='day';
   const repairControls=new El();repairControls.append(get('repair-now'),get('continue-risky'));const repairLabel=new El();repairLabel.tagName='span';get('repair-now').append(repairLabel);
   get('detail-view').hidden=true;get('hall-preview').hidden=true;
@@ -760,6 +761,7 @@ factory2State.selectedBay=1;factory2State.factoryExpansion={level:2,unlockedBays
 const flowProject=require(dir+'/systems/customerProjects.js').create(factory2State,{customer:'Veltraxis Mobility',reputation:50},{size:'medium',atMinute:360});
 const factory2Order={id:'FLOW-120',kind:'Drehen',customer:'Veltraxis Mobility',part:'120er Wellenserie',partKey:'shaft',material:'C45 Stahl',kg:120,qty:120,reward:12000.07,duration:12,difficulty:1,deadlineHours:48,createdAt:360,expiresAt:3000};
 Object.assign(factory2Order,{priority:'high',batchMode:'small',routing:[{id:'flow-turn',type:'turning',requiredMachineKind:'Drehen'},{id:'flow-mill',type:'milling',requiredMachineKind:'Fräsen'},{id:'flow-qs',type:'quality',requiredMachineKind:null}]});
+factory2State.factory2.offerPlans={'FLOW-120':{batchSize:12}};
 factory2State.orderMarket.available=[factory2Order];factory2State.orderMarket.now=360;factory2State.orderMarket.nextRefreshAt=3000;factory2State.orderMarket.pendingFollowUps=[];
 let factory2=boot({cnc_factory_save_v3:JSON.stringify(factory2State)},{random:()=>0.999999});
 let flowCard=factory2.get('orders').children.find(node=>node.innerHTML?.includes('FLOW-120'));
@@ -767,7 +769,7 @@ assert.ok(flowCard,'120-part order should be visible in the offer list');
 flowCard.children.at(-1).click();
 factory2.get('assignment-options').children[0].children[0].click();
 let factory2Saved=factory2.state(),flowOrder=factory2Saved.productionFlow.orders['FLOW-120'];
-assert.equal(flowOrder.priority,'high');assert.equal(flowOrder.batchMode,'small');assert.equal(flowOrder.projectId,flowProject.id);
+assert.equal(flowOrder.priority,'high');assert.equal(flowOrder.batchMode,'auto');assert.equal(flowOrder.projectId,flowProject.id);
 assert.deepEqual(flowOrder.routing.map(step=>step.type),['turning','milling','quality']);
 let flowLots=factory2Saved.productionFlow.lots.filter(lot=>lot.orderId==='FLOW-120');
 assert.ok(flowLots.length>1);assert.equal(flowLots.reduce((sum,lot)=>sum+lot.qty,0),120);
@@ -937,7 +939,7 @@ const toolingCard=toolingApp.get('orders').children.find(node=>node.innerHTML?.i
 assert.ok(toolingCard);toolingCard.children.at(-1).click();toolingApp.get('assignment-options').children[0].children[0].click();
 let toolingSaved=toolingApp.state(),toolingFlowOrder=toolingSaved.productionFlow.orders['SIT-TOOLING-TEST'];
 assert.equal(toolingFlowOrder.situationEffects.capacityFactor,0.88);assert.equal(toolingFlowOrder.situationEffects.durationFactor,1.12);
-assert.equal(toolingSaved.productionFlow.lots.filter(lot=>lot.orderId==='SIT-TOOLING-TEST').length,12,'capacity factor reduces automatic batch capacity');
+assert.equal(toolingSaved.productionFlow.lots.filter(lot=>lot.orderId==='SIT-TOOLING-TEST').length,1,'no automatic splitting without player choice');
 assert.equal(require(dir+'/systems/productionFlow.js').createPlan(toolingOrder,{capacity:40}).lots.length,10,'normal automatic capacity baseline');
 const situationApi=require(dir+'/systems/factorySituations.js');
 const durationDuringSituation=situationApi.applyModifiers({},situationApi.getActiveModifiers(toolingApp.live(),555)).situationEffects.durationFactor;
@@ -1037,7 +1039,9 @@ firstProduction.get('orders').children.find(node=>node.innerHTML?.includes(first
 firstProduction.get('assignment-options').children[0].children[0].click();
 assert.equal(firstProduction.live().machines[0].activeId,firstProductionOrder.id);
 firstProduction.get('pause').click();
-for(let t=250;t<=120000;t+=250)firstProduction.frame(t);
+let sawUpgrade=false;
+for(let t=250;t<=120000;t+=250){firstProduction.frame(t);if(firstProduction.get('employee-specialization-hint').textContent.includes('ENTWICKLUNGSSTUFE')){sawUpgrade=true;}}
+assert.ok(sawUpgrade,'crossing the first milestone visibly announces a specialization');
 let firstProductionLive=firstProduction.live();
 assert.deepEqual(firstProductionErrors,[],'first production must not trigger rollback or render errors');
 assert.equal(firstProductionLive.paused,false);
@@ -1075,3 +1079,27 @@ assert.equal(organicSaved.factory2.offerChoices['ORGANIC-PLAN'],undefined);
 planningApp=boot({cnc_factory_save_v3:JSON.stringify(organicSaved)},{random:()=>0.999999});
 assert.equal(planningApp.live().customerProjects.projects.length,1,'reload does not duplicate the accepted project');
 console.log('Organic planning: missing stations, per-offer outsourcing persistence, machine-free acceptance and invitation project verified');
+
+const optionalState=JSON.parse(JSON.stringify(factory2State));optionalState.orderMarket.available=[{...factory2Order,id:'VOLUNTARY-LOTS'}];optionalState.factory2.offerPlans={};
+let optionalApp=boot({cnc_factory_save_v3:JSON.stringify(optionalState)},{random:()=>0});
+let optionalCard=optionalApp.get('orders').children.find(node=>node.innerHTML?.includes('VOLUNTARY-LOTS'));
+let optionalPanel=optionalCard.children.find(node=>node.className==='order-route');
+const lotSelect=optionalPanel.children.find(node=>node.tagName==='label').children[0];assert.equal(lotSelect.value,'120');lotSelect.value='24';lotSelect.events.change();
+optionalCard=optionalApp.get('orders').children.find(node=>node.innerHTML?.includes('VOLUNTARY-LOTS'));optionalPanel=optionalCard.children.find(node=>node.className==='order-route');
+optionalPanel.children.find(node=>node.textContent==='Teil- und Folgelieferung anfragen').click();
+assert.equal(optionalApp.state().factory2.offerPlans['VOLUNTARY-LOTS'].deliveryAgreement.accepted,true);
+optionalApp=boot({cnc_factory_save_v3:JSON.stringify(optionalApp.state())},{random:()=>0});
+optionalCard=optionalApp.get('orders').children.find(node=>node.innerHTML?.includes('VOLUNTARY-LOTS'));optionalCard.children.at(-1).click();optionalApp.get('assignment-options').children[0].children[0].click();
+const optionalSaved=optionalApp.state(),optionalLots=optionalSaved.productionFlow.lots.filter(lot=>lot.orderId==='VOLUNTARY-LOTS');assert.equal(optionalLots.length,2);assert.equal(optionalLots[1].deadlineAt-optionalLots[0].deadlineAt,1440);
+assert.equal(optionalApp.get('cf2-flow-list').children.length,1,'one card represents the entire order');
+assert.ok(optionalApp.get('cf2-flow-list').children[0].children.every(node=>node.tagName!=='select'),'no priority control');
+console.log('Voluntary lots and negotiated partial delivery: choice, reload, two deadlines, one order card verified');
+
+const defectiveState=JSON.parse(JSON.stringify(factory2State));const defectiveOrder={...factory2Order,id:'DEFECT-FEEDBACK',qty:20,kg:1,reward:5000,deadlineAt:3240,routing:undefined};
+defectiveState.machines[0].activeId=defectiveOrder.id;defectiveState.machines[0].activeOrder=defectiveOrder;defectiveState.machines[0].activeOrderSource='market';defectiveState.machines[0].progress=100;defectiveState.machines[0].produced=20;defectiveState.machines[0].deadlineAt=3240;
+defectiveState.eventQueue=[{id:'quality_issue:DEFECT-FEEDBACK',event:'quality_issue',bay:1,order:defectiveOrder,defectParts:2,riskPct:10,reworkCost:500}];defectiveState.paused=true;
+const defectiveApp=boot({cnc_factory_save_v3:JSON.stringify(defectiveState)},{random:()=>0.999999});
+const shipChoice=defectiveApp.get('event-actions').children.find(node=>node.textContent.includes('Trotz Fehler ausliefern'));assert.ok(shipChoice);shipChoice.click();
+assert.equal(defectiveApp.state().finance.transactions.filter(entry=>entry.category==='income'&&entry.meta?.orderId===defectiveOrder.id).reduce((sum,entry)=>sum+entry.amount,0),5000,'secretly shipping defects does not deduct the invoice');
+assert.ok(defectiveApp.state().pendingQualityComplaints.some(item=>item.order.id===defectiveOrder.id&&item.undetected));
+console.log('Known defects secretly delivered at full invoice, with later complaint risk');

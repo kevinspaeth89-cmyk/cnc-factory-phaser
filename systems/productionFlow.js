@@ -195,16 +195,18 @@
     if (!isRecord(options)) options = {};
     const route = normalizeRoute(order);
     if (!route) return { ok: false, code: Array.isArray(order.routing) && order.routing.length > 4 ? 'ROUTE_TOO_LONG' : 'INVALID_ROUTE' };
-    const batch = route.length === 1
-      ? { requested: 'auto', effective: 'single', target: order.qty }
-      : resolveBatch(order, options);
+    const chosenSize=options.batchSize??order.batchSize;
+    const batch = Number.isInteger(chosenSize)&&chosenSize>0
+      ? {requested:'auto',effective:chosenSize>=order.qty?'single':'chosen',target:Math.min(chosenSize,order.qty)}
+      : order.splitLots===false||route.length===1
+        ? {requested:'auto',effective:'single',target:order.qty}:resolveBatch(order,options);
     const count = Math.ceil(order.qty / batch.target);
     const base = Math.floor(order.qty / count);
     const remainder = order.qty - base * count;
     const setupMinutes = Math.max(0, finite(options.setupMinutes, finite(order.setupMinutes, 0)));
     const lots = [];
     for (let index = 0; index < count; index += 1) {
-      const qty = base + (index === count - 1 ? remainder : 0);
+      const qty = Number.isInteger(chosenSize)&&chosenSize>0 ? Math.min(batch.target,order.qty-index*batch.target) : base + (index === count - 1 ? remainder : 0);
       lots.push({ id: `${order.id}-lot-${index + 1}`, orderId: order.id,
         routeStepId: route[0].id, sequence: index + 1, qty, qtyCompleted: 0,
         status: 'waiting', priority: PRIORITIES[order.priority] ? order.priority : 'normal',

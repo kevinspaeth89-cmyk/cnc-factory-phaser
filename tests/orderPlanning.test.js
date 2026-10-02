@@ -18,7 +18,7 @@ test('missing capabilities can be outsourced explicitly, including the first sta
 });
 test('a pure turning order is one production unit regardless of obsolete batch settings',()=>{
   for(const batchMode of ['auto','small','normal','large']){
-    const result=flow.createPlan({...order,routing:undefined,batchMode},{capacity:10,batchSize:2});
+    const result=flow.createPlan({...order,routing:undefined,batchMode},{capacity:10});
     assert.equal(result.lots.length,1);assert.equal(result.lots[0].qty,100);assert.equal(result.effectiveBatchMode,'single');
   }
 });
@@ -30,4 +30,15 @@ test('100 parts in a real chain release the first 20 to milling while turning co
   const next=flow.startNext(state,'turner','Drehen',30).lot;
   assert.equal(milling.id,first.id);assert.equal(milling.qty,20);assert.notEqual(next.id,first.id);assert.equal(next.qty,20);
   flow.ensureState(state);assert.equal(state.productionFlow.machineAssignments.miller,milling.id);assert.equal(state.productionFlow.machineAssignments.turner,next.id);
+});
+
+test('voluntary lots use the chosen size including the final remainder',()=>{
+ for(const routing of [undefined,order.routing]){const result=flow.createPlan({...order,qty:95,routing,splitLots:true,batchSize:20});assert.deepEqual(result.lots.map(lot=>lot.qty),[20,20,20,20,15]);}
+ assert.equal(flow.createPlan({...order,splitLots:false}).lots.length,1);
+});
+test('delivery negotiation preserves the original deadline unless the customer agrees',()=>{
+ const root={...order,deadlineAt:2000};const yes=planning.negotiateDelivery(root,50,()=>0);const no=planning.negotiateDelivery(root,50,()=>0.99);
+ assert.equal(yes.accepted,true);assert.equal(no.accepted,false);assert.equal(planning.negotiateDelivery({...root,isRushOrder:true},100,()=>0).accepted,false);
+ const lots=flow.createPlan({...root,batchSize:50}).lots;const agreed={...root,deliveryAgreement:yes};
+ assert.equal(planning.lotDeadline(agreed,lots,lots[0]),2000);assert.equal(planning.lotDeadline(agreed,lots,lots[1]),3440);assert.equal(planning.lotDeadline({...root,deliveryAgreement:no},lots,lots[1]),2000);
 });

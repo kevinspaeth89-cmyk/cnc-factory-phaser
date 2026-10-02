@@ -25,5 +25,17 @@
       {...check.step,type:'external',operationType:check.operation,requiredMachineKind:null,providerId:check.provider?.id||null}:
       {...check.step,type:check.operation,requiredMachineKind:check.operation==='quality'?null:kind(check.operation)})};
   }
-  return Object.freeze({routeFor,requirements,plan});
+  function negotiateDelivery(order,reputation,random){
+    if(!Number.isInteger(order?.qty)||order.qty<2||order.isRushOrder)return {accepted:false,reason:'Für diesen Auftrag ist keine Teillieferung möglich.'};
+    const chance=Math.min(0.85,Math.max(0.25,0.35+(Number(reputation)||0)/200));
+    const accepted=random()<chance;
+    return {accepted,firstQty:Math.ceil(order.qty/2),extensionMinutes:1440,reason:accepted?'Kunde stimmt zu: erste Hälfte zum ursprünglichen Termin, Rest einen Tag später.':'Kunde lehnt ab; der ursprüngliche Termin gilt für die gesamte Menge.'};
+  }
+  function lotDeadline(order,lots,lot){
+    const deal=order.deliveryAgreement;
+    if(!deal?.accepted)return order.deadlineAt;
+    const before=lots.filter(item=>item.sequence<lot.sequence).reduce((sum,item)=>sum+item.qty,0);
+    return order.deadlineAt+(before>=deal.firstQty?deal.extensionMinutes:0);
+  }
+  return Object.freeze({routeFor,requirements,plan,negotiateDelivery,lotDeadline});
 });
