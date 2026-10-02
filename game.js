@@ -4966,6 +4966,7 @@
       localStorage.removeItem(SAVE_KEY);
       localStorage.removeItem(BACKUP_SAVE_KEY);
       localStorage.removeItem('cnc_factory_save_v2');
+      preserveBackupUntilSuccessfulTick=false;
     }catch(_){}
     state=defaults();
     hallPreviewBay=null;
