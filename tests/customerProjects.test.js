@@ -49,6 +49,20 @@ test('small projects run automatically through prototype, pilot and series', () 
   assert.equal(customerProjects.tick(state, 2000).completed.length, 0);
 });
 
+test('small-project automation pauses while a linked production order is still live', () => {
+  const state = newState('small-project-live-order');
+  const project = customerProjects.create(state, profile, { size: 'small', atMinute: 0 });
+
+  const blocked = customerProjects.tick(state, project.autoMinutes, { blockedProjectIds: [project.id] });
+  assert.equal(blocked.completed.length, 0);
+  assert.equal(customerProjects.getById(state, project.id).phaseResults.length, 0);
+
+  const resumed = customerProjects.tick(state, project.autoMinutes);
+  assert.equal(resumed.completed.length, 1);
+  assert.equal(customerProjects.getById(state, project.id).phaseResults.length, 1);
+});
+
+
 test('one tick can advance small projects created at different times in event-time order', () => {
   const state = newState(43);
   const first = customerProjects.create(state, profile, { size: 'small', atMinute: 0 });

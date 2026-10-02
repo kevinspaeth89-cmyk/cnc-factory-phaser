@@ -230,6 +230,10 @@
       phaseId, completedAtMinute: minute, success,
       quality: success ? 'good' : 'needs-attention',
       probability: goodChance,
+      performance,
+      qualityDefectParts: Math.max(0, Math.floor(finite(result.qualityDefectParts, 0))),
+      late: result.late === true,
+      payout: Math.max(0, finite(result.payout, 0)),
       quantity: project.metrics.quantity,
       expectedProfit: project.metrics.expectedProfit,
       risk: project.metrics.risk,
@@ -292,18 +296,20 @@
     return { ok: true, project: copy(project), resultDescriptor: copy(phaseResult) };
   }
 
-  function tick(state, absoluteGameMinutes) {
+  function tick(state, absoluteGameMinutes, context = {}) {
     const data = ensureState(state);
     if (!data) return { ok: false, code: 'invalid-state' };
     const minute = finite(absoluteGameMinutes, NaN);
     if (!Number.isFinite(minute) || minute < data.now) return { ok: false, code: 'invalid-time' };
     data.now = minute;
     const completed = [];
+    const blockedProjectIds = new Set(Array.isArray(context.blockedProjectIds)
+      ? context.blockedProjectIds.filter(id => typeof id === 'string') : []);
     for (const initial of data.projects) {
       let guard = 0;
       while (guard < 3) {
         const project = findProject(state, initial.id);
-        if (!project || project.status !== 'active' || project.size !== 'small' || !project.currentPhaseId) break;
+        if (!project || blockedProjectIds.has(project.id) || project.status !== 'active' || project.size !== 'small' || !project.currentPhaseId) break;
         const current = project.phases.find(item => item.id === project.currentPhaseId);
         if (!current || minute < current.startedAtMinute + project.autoMinutes) break;
         const completionMinute = current.startedAtMinute + project.autoMinutes;
