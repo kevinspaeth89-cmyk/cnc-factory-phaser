@@ -462,6 +462,21 @@
       isFollowUp,
       parentOrderId: typeof opts.parentOrderId === 'string' ? opts.parentOrderId : null
     };
+    // Requirements belong to the customer's offer, never to a player-selected preset.
+    // The opening offers stay accessible; established customers also bring chains.
+    const chain = !opts.isRushOrder && createdAt >= 1440 && random(market) < 0.22;
+    const first = kind === 'Fräsen' ? 'milling' : 'turning';
+    order.routing = [{ id: id + '-step-1', type: first, requiredMachineKind: kind }];
+    if (chain) {
+      const second = first === 'turning' ? 'milling' : 'turning';
+      order.routing.push({ id: id + '-step-2', type: second, requiredMachineKind: second === 'milling' ? 'Fräsen' : 'Drehen' });
+      order.routing.push({ id: id + '-step-3', type: 'quality', requiredMachineKind: null });
+      order.reward = Math.round(order.reward * 1.4 / 100) * 100;
+    }
+    const completed = market.completedCustomers[profile.customer] || 0;
+    if (completed >= 2 && !opts.isRushOrder && !isFollowUp && createdAt >= 3 * 1440 && random(market) < 0.12) {
+      order.projectInvitation = { size: completed >= 6 ? 'large' : 'medium' };
+    }
     if (!opts.defer) market.available.push(order);
     return order;
   }
@@ -578,7 +593,7 @@
       }
     }
     const kind = kinds[integer(market, 0, kinds.length - 1)];
-    const order = addGeneratedOffer(state, market.now, { kind, profileKey: profile.key, defer: true });
+    const order = addGeneratedOffer(state, market.now, { kind, profileKey: profile.key, defer: true, isRushOrder: true });
     if (!order) return null;
 
     const rushBonusPct = 20;

@@ -9,7 +9,7 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function createSuppliers() {
   'use strict';
 
-  const VERSION = 1;
+  const VERSION = 2;
   const DAY = 1440;
   const OPERATIONS = new Set(['turning', 'milling', 'quality', 'assembly']);
   const DEFAULT_PROVIDERS = [
@@ -49,7 +49,7 @@
       providers,
       jobs: Array.isArray(previous.jobs) ? previous.jobs : [],
       history: Array.isArray(previous.history) ? previous.history : [],
-      quotes: record(previous.quotes) ? previous.quotes : {},
+      quotes: previous.version===VERSION&&record(previous.quotes) ? previous.quotes : {},
       randomState: previous.randomState ?? options.seed ?? 1,
       lastTickAtMinute: finite(previous.lastTickAtMinute) ? previous.lastTickAtMinute : null
     };
@@ -136,7 +136,11 @@
     const seed = options.seed ?? suppliers.randomState;
     const variation = (hash(`${seed}|${providerId}|${order.id ?? ''}|${lotId ?? ''}|${operationType}|${qty}`) % 101) / 1000;
     const leadTimeMinutes = Math.max(60, Math.round(provider.leadTimeMinutes * (1 + variation - 0.05)));
-    const totalCost = round((provider.basePrice + provider.pricePerUnit * qty) * (1 + variation));
+    const machiningSteps=Math.max(1,(order.routing||[]).filter(step=>['turning','milling'].includes(step.type==='external'?step.operationType:step.type)).length);
+    const share=operationType==='quality'?0.18:0.8/machiningSteps;
+    const providerFactor=provider.id==='supplier-express'?1.5:provider.id==='supplier-precision'?1.2:1;
+    const valueCost=Math.max(0,Number(order.reward)||0)*qty/Math.max(1,Number(order.qty)||qty)*share*providerFactor;
+    const totalCost = round(Math.max((provider.basePrice + provider.pricePerUnit * qty)*8,valueCost)*(1+variation));
     const dueAtMinute = atMinute + leadTimeMinutes;
     const reliabilityRange = getReliabilityRange(provider);
     const quoteResult = {

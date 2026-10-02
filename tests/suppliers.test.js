@@ -24,7 +24,7 @@ test('legacy migration is idempotent, JSON-safe, and reputation unlocks provider
   const state = { reputation: 24, money: 1000, orders: [{ id: 'old-order' }] };
   const first = suppliers.ensureState(state, { seed: 42 });
   assert.equal(first.ok, true);
-  assert.equal(state.suppliers.version, 1);
+  assert.equal(state.suppliers.version, 2);
   assert.equal(suppliers.ensureState(state).ok, true);
   assert.equal(state.suppliers.providers.length, 4);
   assert.deepEqual(suppliers.listProviders(state, 'quality').providers, []);
@@ -189,4 +189,11 @@ test('browser global and CommonJS expose the same public API', () => {
     'completeJob', 'ensureState', 'listProviders', 'outsource', 'quote', 'recordOutcome', 'tick'
   ]);
   assert.equal(globalThis.CNCModules.suppliers, suppliers);
+});
+
+test('outsourcing takes most of the order value and does not revive old cheap quotes',()=>{
+ const state=stateWithReputation(50),order=request('VALUE',{reward:10000,qty:100});
+ const quote=suppliers.quote(state,'supplier-local-machining',order,{operationType:'milling',routeStepId:'step-mill'});assert.ok(quote.totalCost>=8000);
+ const job=suppliers.outsource(state,quote.providerId,order.id,quote.routeStepId,100,0,{quoteId:quote.quoteId});assert.equal(job.ok,true);
+ state.suppliers.version=1;state.suppliers.quotes.old={totalCost:10};suppliers.ensureState(state);assert.equal(state.suppliers.quotes.old,undefined);assert.equal(state.suppliers.jobs[0].cost,job.job.cost);
 });

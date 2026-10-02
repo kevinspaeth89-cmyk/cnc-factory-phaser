@@ -12,7 +12,8 @@ assert.ok(ids.includes('recruitment-panel'));
 assert.ok(ids.includes('applicant-list'));
 assert.ok(['employee-specializations','employee-specialization-hint','employee-specialization','employee-specialization-assign'].every(id=>ids.includes(id)));
 assert.ok(html.indexOf('systems/employeeDevelopment.js')<html.indexOf('game.js?v='));
-assert.ok(['cf2-priority','cf2-batch-mode','cf2-route-preset','cf2-generate-special-order','cf2-create-project','cf2-project-list','cf2-flow-list'].every(id=>ids.includes(id)));
+assert.ok(['cf2-project-list','cf2-flow-list','active-production'].every(id=>ids.includes(id)));
+assert.ok(['cf2-priority','cf2-batch-mode','cf2-route-preset','cf2-generate-special-order','cf2-create-project'].every(id=>!ids.includes(id)));
 assert.ok(['systems/productionFlow.js','systems/suppliers.js','systems/customerProjects.js','systems/factorySituations.js'].every(path=>html.indexOf(path)<html.indexOf('game.js?v=')));
 assert.equal(ids.includes('hire-1'),false);
 assert.equal(ids.includes('hire-2'),false);
@@ -88,6 +89,7 @@ function boot(storage,options={}){
     click(){assert(this.events.click,this.id);this.events.click({stopPropagation(){}})}
   }
   const get=id=>{if(!elements.has(id))elements.set(id,new El(id));return elements.get(id)};
+  const cardHead=new El();cardHead.className='employee-card-head';cardHead.append(get('employee-card-close'));get('employee-card').append(cardHead);const cardPersonal=new El();cardPersonal.className='employee-card-section';cardPersonal.append(get('employee-card-personal'));get('employee-card').append(cardPersonal);
   for(const id of ids)get(id);get('machine-shop').parentElement=get('business-panel');get('material-quantity').value='25';get('loan-amount').value='10000';get('loan-repayment-amount').value='all';get('finance-period').value='day';
   const repairControls=new El();repairControls.append(get('repair-now'),get('continue-risky'));const repairLabel=new El();repairLabel.tagName='span';get('repair-now').append(repairLabel);
   get('detail-view').hidden=true;get('hall-preview').hidden=true;
@@ -101,7 +103,7 @@ function boot(storage,options={}){
   const orderMarket=options.orderMarketSeed===undefined?orderMarketApi:{...orderMarketApi,init:(state,initOptions={})=>orderMarketApi.init(state,{...initOptions,seed:options.orderMarketSeed})};
   const productionFlowApi=require(dir+'/systems/productionFlow.js');
   const productionFlow=typeof options.productionFlowTick==='function'?{...productionFlowApi,tick:options.productionFlowTick}:productionFlowApi;
-  const context={document,console:options.console||console,Date,Math:math,JSON,performance:{now:()=>0},requestAnimationFrame:fn=>nextFrame=fn,setTimeout:(fn,ms)=>{if(options.phaser&&ms===0)fn();return 1},clearTimeout(){},setInterval:fn=>saveInterval=fn,window:{matchMedia:()=>({matches:true}),confirm:()=>true,addEventListener:(type,fn)=>windowEvents[type]=fn},localStorage:{getItem:k=>storage[k]||null,setItem:(k,v)=>storage[k]=v,removeItem:k=>delete storage[k]},CNCModules:{economy:require(dir+'/systems/economy.js').economy,inventory:require(dir+'/systems/economy.js').inventory,orderMarket,breakdowns,factoryExpansion:require(dir+'/factory-expansion.js'),materials:require(dir+'/systems/materials.js'),recruitment:require(dir+'/systems/recruitment.js'),programmingQuality:require(dir+'/systems/programmingQuality.js'),employeeDevelopment:require(dir+'/systems/employeeDevelopment.js'),productionFlow,suppliers:require(dir+'/systems/suppliers.js'),customerProjects:require(dir+'/systems/customerProjects.js'),factorySituations:require(dir+'/systems/factorySituations.js')}};
+  const context={document,console:options.console||console,Date,Math:math,JSON,performance:{now:()=>0},requestAnimationFrame:fn=>nextFrame=fn,setTimeout:(fn,ms)=>{if(options.phaser&&ms===0)fn();return 1},clearTimeout(){},setInterval:fn=>saveInterval=fn,window:{matchMedia:()=>({matches:true}),confirm:()=>true,addEventListener:(type,fn)=>windowEvents[type]=fn},localStorage:{getItem:k=>storage[k]||null,setItem:(k,v)=>storage[k]=v,removeItem:k=>delete storage[k]},CNCModules:{orderPlanning:require(dir+'/systems/orderPlanning.js'),economy:require(dir+'/systems/economy.js').economy,inventory:require(dir+'/systems/economy.js').inventory,orderMarket,breakdowns,factoryExpansion:require(dir+'/factory-expansion.js'),materials:require(dir+'/systems/materials.js'),recruitment:require(dir+'/systems/recruitment.js'),programmingQuality:require(dir+'/systems/programmingQuality.js'),employeeDevelopment:require(dir+'/systems/employeeDevelopment.js'),productionFlow,suppliers:require(dir+'/systems/suppliers.js'),customerProjects:require(dir+'/systems/customerProjects.js'),factorySituations:require(dir+'/systems/factorySituations.js')}};
   if(options.phaser)context.Phaser={Scene:class{},Game:class{},AUTO:0,Scale:{FIT:0,CENTER_BOTH:0}};
   context.globalThis=context;context.window.cncFactory=null;
   vm.runInNewContext(fs.readFileSync(dir+'/game.js','utf8'),context,{filename:'game.js'});
@@ -758,17 +760,16 @@ factory2State.staff={shift1:6,shift2:6};factory2State.staffRoster.nextId=13;
 factory2State.selectedBay=1;factory2State.factoryExpansion={level:2,unlockedBays:6};factory2State.nextRushOrderAt=1000000;factory2State.inventory.tools.standard=20;factory2State.inventory.tools.mill3=20;factory2State.factorySituations={version:1,randomState:1,nextSpecialOrderNumber:1,nextSituationNumber:1,nextSituationCheckAtMinute:1000000,lastTickAtMinute:360,scheduled:[],active:[],history:[]};
 const flowProject=require(dir+'/systems/customerProjects.js').create(factory2State,{customer:'Veltraxis Mobility',reputation:50},{size:'medium',atMinute:360});
 const factory2Order={id:'FLOW-120',kind:'Drehen',customer:'Veltraxis Mobility',part:'120er Wellenserie',partKey:'shaft',material:'C45 Stahl',kg:120,qty:120,reward:12000.07,duration:12,difficulty:1,deadlineHours:48,createdAt:360,expiresAt:3000};
+Object.assign(factory2Order,{priority:'high',batchMode:'small',routing:[{id:'flow-turn',type:'turning',requiredMachineKind:'Drehen'},{id:'flow-mill',type:'milling',requiredMachineKind:'Fräsen'},{id:'flow-qs',type:'quality',requiredMachineKind:null}]});
+factory2State.factory2.offerPlans={'FLOW-120':{batchSize:12}};
 factory2State.orderMarket.available=[factory2Order];factory2State.orderMarket.now=360;factory2State.orderMarket.nextRefreshAt=3000;factory2State.orderMarket.pendingFollowUps=[];
 let factory2=boot({cnc_factory_save_v3:JSON.stringify(factory2State)},{random:()=>0.999999});
-factory2.get('cf2-priority').value='high';factory2.get('cf2-priority').events.change();
-factory2.get('cf2-batch-mode').value='small';factory2.get('cf2-batch-mode').events.change();
-factory2.get('cf2-route-preset').value='mixed';factory2.get('cf2-route-preset').events.change();
 let flowCard=factory2.get('orders').children.find(node=>node.innerHTML?.includes('FLOW-120'));
 assert.ok(flowCard,'120-part order should be visible in the offer list');
 flowCard.children.at(-1).click();
 factory2.get('assignment-options').children[0].children[0].click();
 let factory2Saved=factory2.state(),flowOrder=factory2Saved.productionFlow.orders['FLOW-120'];
-assert.equal(flowOrder.priority,'high');assert.equal(flowOrder.batchMode,'small');assert.equal(flowOrder.projectId,flowProject.id);
+assert.equal(flowOrder.priority,'high');assert.equal(flowOrder.batchMode,'auto');assert.equal(flowOrder.projectId,flowProject.id);
 assert.deepEqual(flowOrder.routing.map(step=>step.type),['turning','milling','quality']);
 let flowLots=factory2Saved.productionFlow.lots.filter(lot=>lot.orderId==='FLOW-120');
 assert.ok(flowLots.length>1);assert.equal(flowLots.reduce((sum,lot)=>sum+lot.qty,0),120);
@@ -821,17 +822,6 @@ specializationSelect.value='turning';
 specializationUiApp.get('employee-specialization-assign').click();
 assert.ok(specializationUiApp.live().staffRoster.shift1[0].specializations.includes('turning'),'the employee card applies and persists the selected specialization');
 console.log('Employee development UI: specialization selection and assignment persist');
-
-const specialOrderUiState=JSON.parse(JSON.stringify(factory2State));
-specialOrderUiState.gameMinutes=480;specialOrderUiState.orderMarket.available=[];specialOrderUiState.orderMarket.now=480;specialOrderUiState.orderMarket.nextRefreshAt=1000000;
-let specialOrderUiApp=boot({cnc_factory_save_v3:JSON.stringify(specialOrderUiState)},{random:()=>0.999999});
-specialOrderUiApp.get('cf2-project-customer').value='Veltraxis Mobility';
-specialOrderUiApp.get('cf2-generate-special-order').click();
-const generatedSpecial=specialOrderUiApp.live().orderMarket.available.at(-1);
-assert.equal(generatedSpecial.specialOrder,true);
-assert.ok(generatedSpecial.routing.length<=4);
-assert.equal(generatedSpecial.routing[0].type,generatedSpecial.kind==='Drehen'?'turning':'milling','the visible generator creates a route matching the order’s machine kind');
-console.log('Factory 2 special-order UI: generation creates a compatible, bounded route');
 
 const qualityTimerState=JSON.parse(JSON.stringify(factory2State));
 qualityTimerState.gameMinutes=480;qualityTimerState.speed=1;qualityTimerState.orderMarket.available=[];qualityTimerState.orderMarket.now=480;qualityTimerState.orderMarket.nextRefreshAt=1000000;
@@ -941,17 +931,15 @@ assert.equal(situationMaterialCharge.amount,-Math.round(baseMaterialQuote*1.18*1
 console.log('Factory 2 situations: material-price factor reaches the warehouse purchase');
 
 const toolingSituationState=JSON.parse(JSON.stringify(factory2State));
-const toolingOrder={id:'SIT-TOOLING-TEST',kind:'Drehen',customer:'Testkunde',part:'Werkzeugengpass-Test',partKey:'tooling-test',material:'C45 Stahl',kg:1,qty:200,reward:50000,duration:40,difficulty:1,deadlineHours:48,createdAt:360,expiresAt:3000};
+const toolingOrder={id:'SIT-TOOLING-TEST',kind:'Drehen',customer:'Testkunde',part:'Werkzeugengpass-Test',partKey:'tooling-test',routing:[{id:'tool-turn',type:'turning',requiredMachineKind:'Drehen'},{id:'tool-qs',type:'quality',requiredMachineKind:null}],material:'C45 Stahl',kg:1,qty:200,reward:50000,duration:40,difficulty:1,deadlineHours:48,createdAt:360,expiresAt:3000};
 toolingSituationState.gameMinutes=480;toolingSituationState.orderMarket.available=[toolingOrder];toolingSituationState.orderMarket.now=480;toolingSituationState.orderMarket.nextRefreshAt=3000;
 toolingSituationState.factorySituations.active=[{id:'SIT-TOOLING-ACTIVE',type:'tooling-shortage',status:'active',startAtMinute:420,endAtMinute:570}];
 let toolingApp=boot({cnc_factory_save_v3:JSON.stringify(toolingSituationState)},{random:()=>0.999999});
-toolingApp.get('cf2-batch-mode').value='auto';toolingApp.get('cf2-batch-mode').events.change();
-toolingApp.get('cf2-route-preset').value='single';toolingApp.get('cf2-route-preset').events.change();
 const toolingCard=toolingApp.get('orders').children.find(node=>node.innerHTML?.includes('SIT-TOOLING-TEST'));
 assert.ok(toolingCard);toolingCard.children.at(-1).click();toolingApp.get('assignment-options').children[0].children[0].click();
 let toolingSaved=toolingApp.state(),toolingFlowOrder=toolingSaved.productionFlow.orders['SIT-TOOLING-TEST'];
 assert.equal(toolingFlowOrder.situationEffects.capacityFactor,0.88);assert.equal(toolingFlowOrder.situationEffects.durationFactor,1.12);
-assert.equal(toolingSaved.productionFlow.lots.filter(lot=>lot.orderId==='SIT-TOOLING-TEST').length,12,'capacity factor reduces automatic batch capacity');
+assert.equal(toolingSaved.productionFlow.lots.filter(lot=>lot.orderId==='SIT-TOOLING-TEST').length,1,'no automatic splitting without player choice');
 assert.equal(require(dir+'/systems/productionFlow.js').createPlan(toolingOrder,{capacity:40}).lots.length,10,'normal automatic capacity baseline');
 const situationApi=require(dir+'/systems/factorySituations.js');
 const durationDuringSituation=situationApi.applyModifiers({},situationApi.getActiveModifiers(toolingApp.live(),555)).situationEffects.durationFactor;
@@ -963,7 +951,7 @@ const smallProjectState=JSON.parse(JSON.stringify(factory2State));
 smallProjectState.gameMinutes=360;smallProjectState.orderMarket.available=[];smallProjectState.orderMarket.now=360;smallProjectState.nextRushOrderAt=1000000;
 smallProjectState.customerProjects={version:1,projects:[],decisions:[],nextProjectNumber:1,randomState:1,now:360};
 let smallProjectApp=boot({cnc_factory_save_v3:JSON.stringify(smallProjectState)},{random:()=>0.999999});
-smallProjectApp.get('cf2-project-size').value='small';smallProjectApp.get('cf2-create-project').click();
+const smallCreated=smallProjectApp.state();require(dir+'/systems/customerProjects.js').create(smallCreated,{customer:'Veltraxis Mobility'},{size:'small',atMinute:360});smallProjectApp=boot({cnc_factory_save_v3:JSON.stringify(smallCreated)},{random:()=>0.999999});
 const smallProjectId=smallProjectApp.state().customerProjects.projects[0].id;
 for(let t=250;t<=3750;t+=250)smallProjectApp.frame(t);
 const autoProject=smallProjectApp.live().customerProjects.projects.find(project=>project.id===smallProjectId);
@@ -971,7 +959,7 @@ assert.equal(autoProject.phases[0].status,'completed');assert.equal(autoProject.
 
 const heldProjectState=JSON.parse(JSON.stringify(smallProjectState));heldProjectState.machines=[];heldProjectState.selectedBay=null;
 let heldProjectApp=boot({cnc_factory_save_v3:JSON.stringify(heldProjectState)},{random:()=>0.999999});
-heldProjectApp.get('cf2-project-size').value='small';heldProjectApp.get('cf2-create-project').click();
+const heldCreated=heldProjectApp.state();require(dir+'/systems/customerProjects.js').create(heldCreated,{customer:'Veltraxis Mobility'},{size:'small',atMinute:360});heldProjectApp=boot({cnc_factory_save_v3:JSON.stringify(heldCreated)},{random:()=>0.999999});
 const heldProjectId=heldProjectApp.state().customerProjects.projects[0].id;
 const heldOrder={id:'SMALL-PROJECT-LIVE-ORDER',kind:'Drehen',customer:'Veltraxis Mobility',part:'Prototyp',partKey:'turn-prototype',material:'C45 Stahl',kg:1,qty:1,reward:100,duration:40,difficulty:1,deadlineHours:48,routing:[{id:'held-step',type:'turning',requiredMachineKind:'Drehen'}]};
 const heldState=heldProjectApp.state();assert.equal(require(dir+'/systems/productionFlow.js').addOrder(heldState,heldOrder).ok,true);
@@ -995,20 +983,15 @@ console.log('Factory 2 projects: small phase auto-advance and decision gating wo
 const supplierState=JSON.parse(JSON.stringify(factory2State));
 const supplierOrder={id:'SUPPLIER-E2E',kind:'Drehen',customer:'Veltraxis Mobility',part:'Extern gefrästes Bauteil',partKey:'shaft',material:'C45 Stahl',kg:1,qty:1,reward:5000,duration:1,difficulty:1,deadlineHours:48,createdAt:360,expiresAt:3000,
   routing:[{id:'SUPPLIER-E2E-external',type:'external',operationType:'milling',requiredMachineKind:null},{id:'SUPPLIER-E2E-milling',type:'milling',requiredMachineKind:'Fräsen'}]};
+supplierState.factory2.offerChoices={'SUPPLIER-E2E':{'SUPPLIER-E2E-external':'supplier-local-machining'}};
 supplierState.orderMarket.available=[supplierOrder];supplierState.orderMarket.now=360;supplierState.orderMarket.nextRefreshAt=3000;
 let supplierApp=boot({cnc_factory_save_v3:JSON.stringify(supplierState)});
-supplierApp.get('cf2-batch-mode').value='large';supplierApp.get('cf2-batch-mode').events.change();
 const supplierCard=supplierApp.get('orders').children.find(node=>node.innerHTML?.includes('SUPPLIER-E2E'));
 assert.ok(supplierCard,'external route offer should be visible');supplierCard.children.at(-1).click();
-supplierApp.get('assignment-options').children[0].children[0].click();
+supplierApp.get('assignment-options').children[0].click();
 let supplierSaved=supplierApp.state();
 const supplierLot=supplierSaved.productionFlow.lots.find(lot=>lot.orderId==='SUPPLIER-E2E');
-assert.equal(supplierLot.status,'waiting','an external first step should wait for a supplier quote');
-let supplierRow=supplierApp.get('cf2-supplier-list').children[0];
-supplierRow.children[2].children[1].click();
-supplierRow=supplierApp.get('cf2-supplier-list').children[0];
-supplierRow.children[2].children[2].click();
-supplierSaved=supplierApp.state();
+assert.equal(supplierLot.status,'outsourced','the provider chosen before acceptance is dispatched automatically');
 let supplierJob=supplierSaved.suppliers.jobs.find(job=>job.orderId==='SUPPLIER-E2E');
 assert.ok(supplierJob,'awarding the lot quote should create a supplier job');
 assert.equal(supplierSaved.productionFlow.lots.find(lot=>lot.id===supplierLot.id).status,'outsourced');
@@ -1056,7 +1039,9 @@ firstProduction.get('orders').children.find(node=>node.innerHTML?.includes(first
 firstProduction.get('assignment-options').children[0].children[0].click();
 assert.equal(firstProduction.live().machines[0].activeId,firstProductionOrder.id);
 firstProduction.get('pause').click();
-for(let t=250;t<=120000;t+=250)firstProduction.frame(t);
+let sawUpgrade=false;
+for(let t=250;t<=120000;t+=250){firstProduction.frame(t);if(firstProduction.get('employee-specialization-hint').textContent.includes('ENTWICKLUNGSSTUFE')){sawUpgrade=true;}}
+assert.ok(sawUpgrade,'crossing the first milestone visibly announces a specialization');
 let firstProductionLive=firstProduction.live();
 assert.deepEqual(firstProductionErrors,[],'first production must not trigger rollback or render errors');
 assert.equal(firstProductionLive.paused,false);
@@ -1070,3 +1055,78 @@ for(let t=250;t<=5000;t+=250)firstProduction.frame(t);
 assert.ok(firstProduction.live().gameMinutes>firstProductionReloadMinute);
 assert.deepEqual(firstProductionErrors,[],'reloading and continuing production remains safe');
 console.log('Fresh game: loan, first machine, fresh hire, assignment, material, acceptance, programming, production and reload OK');
+
+// Capabilities and outsourcing choices are checked on the actual offer card.
+const planningState=JSON.parse(JSON.stringify(factory2State));
+planningState.customerProjects={version:1,projects:[],decisions:[],nextProjectNumber:1,randomState:7,now:360};
+planningState.machines=[];planningState.qualityStaff={shift1:[],shift2:[]};
+planningState.orderMarket.available=[{...factory2Order,id:'ORGANIC-PLAN',projectInvitation:{size:'medium'},routing:[{id:'organic-turn',type:'turning',requiredMachineKind:'Drehen'},{id:'organic-mill',type:'milling',requiredMachineKind:'Fräsen'}]}];
+let planningApp=boot({cnc_factory_save_v3:JSON.stringify(planningState)},{random:()=>0.999999});
+let planningCard=planningApp.get('orders').children.find(node=>node.innerHTML?.includes('ORGANIC-PLAN'));
+assert.equal(planningCard.children.at(-1).disabled,true,'missing stations block acceptance');
+assert.equal(planningApp.live().customerProjects.projects.length,0,'an invitation alone does not start a project');
+const routePanel=planningCard.children.find(node=>node.className==='order-route');
+for(const row of routePanel.children.filter(node=>node.className==='order-step')){const select=row.children[1];select.value='supplier-local-machining';select.events.change();}
+assert.equal(planningApp.state().factory2.offerChoices['ORGANIC-PLAN']['organic-turn'],'supplier-local-machining');
+planningApp=boot({cnc_factory_save_v3:JSON.stringify(planningApp.state())},{random:()=>0.999999});
+planningCard=planningApp.get('orders').children.find(node=>node.innerHTML?.includes('ORGANIC-PLAN'));
+assert.equal(planningCard.children.at(-1).disabled,false,'all missing operations can be explicitly outsourced without owning a machine');
+planningCard.children.at(-1).click();planningApp.get('assignment-options').children[0].click();
+const organicSaved=planningApp.state();assert.ok(organicSaved.productionFlow.orders['ORGANIC-PLAN']);
+assert.ok(organicSaved.productionFlow.lots.filter(lot=>lot.orderId==='ORGANIC-PLAN').every(lot=>lot.status==='outsourced'));
+assert.equal(organicSaved.customerProjects.projects.length,1,'accepting the organic invitation starts one project');
+assert.equal(organicSaved.factory2.offerChoices['ORGANIC-PLAN'],undefined);
+planningApp=boot({cnc_factory_save_v3:JSON.stringify(organicSaved)},{random:()=>0.999999});
+assert.equal(planningApp.live().customerProjects.projects.length,1,'reload does not duplicate the accepted project');
+console.log('Organic planning: missing stations, per-offer outsourcing persistence, machine-free acceptance and invitation project verified');
+
+const optionalState=JSON.parse(JSON.stringify(factory2State));optionalState.orderMarket.available=[{...factory2Order,id:'VOLUNTARY-LOTS'}];optionalState.factory2.offerPlans={};
+let optionalApp=boot({cnc_factory_save_v3:JSON.stringify(optionalState)},{random:()=>0});
+let optionalCard=optionalApp.get('orders').children.find(node=>node.innerHTML?.includes('VOLUNTARY-LOTS'));
+let optionalPanel=optionalCard.children.find(node=>node.className==='order-route');
+const lotSelect=optionalPanel.children.find(node=>node.tagName==='label').children[0];assert.equal(lotSelect.value,'120');lotSelect.value='24';lotSelect.events.change();
+optionalCard=optionalApp.get('orders').children.find(node=>node.innerHTML?.includes('VOLUNTARY-LOTS'));optionalPanel=optionalCard.children.find(node=>node.className==='order-route');
+optionalPanel.children.find(node=>node.textContent==='Teil- und Folgelieferung anfragen').click();
+assert.equal(optionalApp.state().factory2.offerPlans['VOLUNTARY-LOTS'].deliveryAgreement.accepted,true);
+optionalApp=boot({cnc_factory_save_v3:JSON.stringify(optionalApp.state())},{random:()=>0});
+optionalCard=optionalApp.get('orders').children.find(node=>node.innerHTML?.includes('VOLUNTARY-LOTS'));optionalCard.children.at(-1).click();optionalApp.get('assignment-options').children[0].children[0].click();
+const optionalSaved=optionalApp.state(),optionalLots=optionalSaved.productionFlow.lots.filter(lot=>lot.orderId==='VOLUNTARY-LOTS');assert.equal(optionalLots.length,2);assert.equal(optionalLots[1].deadlineAt-optionalLots[0].deadlineAt,1440);
+assert.equal(optionalApp.get('cf2-flow-list').children.length,1,'one card represents the entire order');
+assert.ok(optionalApp.get('cf2-flow-list').children[0].children.every(node=>node.tagName!=='select'),'no priority control');
+console.log('Voluntary lots and negotiated partial delivery: choice, reload, two deadlines, one order card verified');
+
+const defectiveState=JSON.parse(JSON.stringify(factory2State));const defectiveOrder={...factory2Order,id:'DEFECT-FEEDBACK',qty:20,kg:1,reward:5000,deadlineAt:3240,routing:undefined};
+defectiveState.machines[0].activeId=defectiveOrder.id;defectiveState.machines[0].activeOrder=defectiveOrder;defectiveState.machines[0].activeOrderSource='market';defectiveState.machines[0].progress=100;defectiveState.machines[0].produced=20;defectiveState.machines[0].deadlineAt=3240;
+defectiveState.eventQueue=[{id:'quality_issue:DEFECT-FEEDBACK',event:'quality_issue',bay:1,order:defectiveOrder,defectParts:2,riskPct:10,reworkCost:500}];defectiveState.paused=true;
+const defectiveApp=boot({cnc_factory_save_v3:JSON.stringify(defectiveState)},{random:()=>0.999999});
+const shipChoice=defectiveApp.get('event-actions').children.find(node=>node.textContent.includes('Trotz Fehler ausliefern'));assert.ok(shipChoice);shipChoice.click();
+assert.equal(defectiveApp.state().finance.transactions.filter(entry=>entry.category==='income'&&entry.meta?.orderId===defectiveOrder.id).reduce((sum,entry)=>sum+entry.amount,0),5000,'secretly shipping defects does not deduct the invoice');
+assert.ok(defectiveApp.state().pendingQualityComplaints.some(item=>item.order.id===defectiveOrder.id&&item.undetected));
+console.log('Known defects secretly delivered at full invoice, with later complaint risk');
+
+
+// Overtime finishes after 22:00 while the global regular shift is zero.
+const nightErrors=[],nightState=JSON.parse(JSON.stringify(factory2State));
+nightState.gameMinutes=22*60+22-360;nightState.speed=10;nightState.paused=false;nightState.eventQueue=[];
+const nightOrder={...factory2Order,id:'NIGHT-RUSH',isRushOrder:true,workMode:'overtime',duration:1,deadlineAt:100000,routing:undefined};
+nightState.ncPrograms[require(dir+'/systems/programmingQuality.js').programKey(nightOrder)]={ready:true};
+nightState.machines=[{...nightState.machines[0],activeId:nightOrder.id,activeOrder:nightOrder,activeOrderSource:'market',progress:99.9,produced:119,deadlineAt:100000,setupPartProduced:true,setupRemainingMinutes:0}];
+const nightApp=boot({cnc_factory_save_v3:JSON.stringify(nightState)},{random:()=>0.999999,console:{...console,error:(...args)=>nightErrors.push(args)}});
+const nightMinute=nightApp.live().gameMinutes;for(let t=250;t<=5000;t+=250)nightApp.frame(t);nightApp.flush();
+assert.deepEqual(nightErrors,[],'overtime completion must not query a nonexistent shift');
+assert.equal(nightApp.live().paused,false);assert.ok(nightApp.live().gameMinutes>nightMinute);assert.equal(nightApp.live().machines[0].activeId,null,'the night shift finishes and releases the machine');
+const parallelState=JSON.parse(JSON.stringify(factory2State));parallelState.orderMarket.available=[{...factory2Order,id:'PARALLEL-TURN',qty:100,routing:[{id:'parallel-turn',type:'turning',requiredMachineKind:'Drehen'}]}];parallelState.factory2.offerPlans={'PARALLEL-TURN':{batchSize:50}};
+const parallelApp=boot({cnc_factory_save_v3:JSON.stringify(parallelState)},{random:()=>0.999999});parallelApp.get('orders').children.find(node=>node.innerHTML?.includes('PARALLEL-TURN')).children.at(-1).click();parallelApp.get('assignment-options').children[0].children[0].click();
+const parallelRunning=parallelApp.live().productionFlow.lots.filter(lot=>lot.orderId==='PARALLEL-TURN'&&lot.status==='running');assert.equal(parallelRunning.length,2);assert.equal(new Set(parallelRunning.map(lot=>lot.machineId)).size,2);assert.deepEqual(parallelRunning.map(lot=>lot.qty),[50,50]);
+console.log('Overtime completion is safe; a single turning order runs as two 50-piece lots on two turning machines');
+
+const blockedQs=boot({cnc_factory_save_v3:JSON.stringify(defectiveState)},{random:()=>0.999999});const blockedMinute=blockedQs.live().gameMinutes;blockedQs.get('pause').click();assert.equal(blockedQs.live().paused,true);blockedQs.live().paused=false;blockedQs.frame(250);assert.equal(blockedQs.live().gameMinutes,blockedMinute);assert.equal(blockedQs.live().machines[0].activeId,defectiveOrder.id);blockedQs.get('event-actions').children.find(node=>node.textContent.includes('Nacharbeiten')).click();assert.equal(blockedQs.live().eventQueue.length,0);assert.ok(blockedQs.live().machines[0].progress<100);
+const staleQsState=JSON.parse(JSON.stringify(defectiveState));staleQsState.machines[0].activeId=null;staleQsState.machines[0].activeOrder=null;const staleQs=boot({cnc_factory_save_v3:JSON.stringify(staleQsState)},{random:()=>0.999999});assert.equal(staleQs.live().eventQueue.length,0);assert.equal(staleQs.get('event-window').hidden,true);assert.equal(staleQs.live().paused,true);console.log('QS modal cannot be bypassed; obsolete saved QS events close safely');
+
+const routeTimingState=JSON.parse(JSON.stringify(factory2State));routeTimingState.orderMarket.available=[{...factory2Order,id:'ROUTE-TIME',routing:[{id:'rt-turn',type:'turning',requiredMachineKind:'Drehen'},{id:'rt-mill',type:'milling',requiredMachineKind:'Fräsen'},{id:'rt-qs',type:'quality',requiredMachineKind:'QS'}]}];const routeTimingApp=boot({cnc_factory_save_v3:JSON.stringify(routeTimingState)},{random:()=>0.999999});const routeTimingText=routeTimingApp.get('orders').textContent;assert.match(routeTimingText,/Durchlaufzeit bei freien Stationen: ca\./);assert.match(routeTimingText,/Drehen:.*Fräsen:.*QS:/);assert.match(routeTimingText,/Schichtpausen/);assert.equal(routeTimingApp.live().suppliers.jobs.length,routeTimingState.suppliers.jobs.length);console.log('Internal multistep offers retain a visible route duration including QS');
+
+assert.match(parallelApp.get('cf2-flow-list').textContent,/Verbleibende Durchlaufzeit bei freien Stationen: ca\./);const timingReload=boot({cnc_factory_save_v3:JSON.stringify(parallelApp.state())},{random:()=>0.999999});assert.match(timingReload.get('cf2-flow-list').textContent,/Verbleibende Durchlaufzeit/);console.log('Running lot orders display a remaining duration after reload');
+
+const blockedHall=boot({cnc_factory_save_v3:JSON.stringify(factory2State)},{random:()=>0.999999});blockedHall.get('orders-tab').click();const blockedView=blockedHall.live().view;blockedHall.get('bay-1').click();assert.equal(blockedHall.get('drawer').hidden,false);assert.equal(blockedHall.live().view,blockedView);assert.equal(blockedHall.get('employee-card').hidden,true);blockedHall.get('close-drawer').click();blockedHall.get('bay-1').click();assert.equal(blockedHall.get('hall-preview').hidden,false);assert.match(require('fs').readFileSync(dir+'/index.html','utf8'),/\.hall-map\{isolation:isolate;z-index:0\}/);console.log('Open drawers block hall input; hall remains interactive after closing');
+
+const outsideCard=boot({cnc_factory_save_v3:JSON.stringify(factory2State)},{random:()=>0.999999});outsideCard.get('detail-workplace').dataset.bay='1';outsideCard.get('detail-workplace').dataset.shift='1';outsideCard.get('detail-workplace').click();assert.equal(outsideCard.get('employee-card').hidden,false);assert.equal(outsideCard.get('employee-card-backdrop').hidden,false);outsideCard.get('employee-card').click();assert.equal(outsideCard.get('employee-card').hidden,false);const outsideBay=outsideCard.live().selectedBay;outsideCard.get('employee-card-backdrop').click();assert.equal(outsideCard.get('employee-card').hidden,true);assert.equal(outsideCard.get('employee-card-backdrop').hidden,true);assert.equal(outsideCard.live().selectedBay,outsideBay);outsideCard.get('detail-workplace').click();outsideCard.get('employee-card-close').click();assert.equal(outsideCard.get('employee-card-backdrop').hidden,true);console.log('Employee card closes outside without activating the hall; inside clicks stay open');

@@ -361,3 +361,17 @@ test('robotics customer is more likely to generate rush work than low-rush secto
   assert.ok(counts['Asteron Robotics'] > counts['Orionis Fluidics']);
   assert.ok(counts['Asteron Robotics'] > counts['Kaeldor Components']);
 });
+
+test('customer offers bring seeded chains and project invitations organically',()=>{
+  const state=newState('organic-chain');const repeat=newState('organic-chain');
+  for(const s of [state,repeat]){s.orderMarket.completedCustomers=Object.fromEntries(Object.keys(orderMarket.getReputation(s)).map(name=>[name,6]));}
+  assert.ok(orderMarket.getAvailable(state).every(order=>order.routing.length===1&&!order.projectInvitation),'opening offers stay simple');
+  const seen=new Map();
+  for(let minute=720;minute<=60*1440;minute+=720){
+    orderMarket.tick(state,minute);orderMarket.tick(repeat,minute);
+    assert.deepEqual(orderMarket.getAvailable(state),orderMarket.getAvailable(repeat),'saved market RNG determines offers');
+    for(const offer of orderMarket.getAvailable(state))seen.set(offer.id,offer);
+  }
+  const offers=[...seen.values()];assert.ok(offers.some(order=>order.routing.length===3));assert.ok(offers.some(order=>order.projectInvitation));
+  assert.ok(offers.filter(order=>order.routing.length===1).length>offers.filter(order=>order.routing.length>1).length);
+});
