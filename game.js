@@ -3141,7 +3141,7 @@
     const items=recruitmentSystem.workplaceItems(employee);
     const visible=items.slice(0,(Number(employee?.xp)||0)>=2400?2:1);
     const gift=employee.personalGiftId&&recruitmentSystem.workplaceGiftFor?.(employee);
-    if(gift?.id===employee.personalGiftId&&!visible.some(item=>item.id===gift.id))visible.push(gift);
+    if(gift&&gift.id===employee.personalGiftId&&!visible.some(item=>item.id===gift.id))visible.push(gift);
     return visible;
   }
   function detailOperatorFor(machine){
