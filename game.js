@@ -1699,6 +1699,12 @@
     if(deferWeekendRushEvents())save();
     const capacityPanel=$('rush-capacity-check');
     if(capacityPanel)capacityPanel.hidden=true;
+    while(state.eventQueue[0]?.event==='quality_issue'){
+      const pending=state.eventQueue[0],pendingMachine=machineAt(pending.bay),pendingOrder=pendingMachine&&job(pendingMachine);
+      if(pendingOrder&&pendingOrder.id===pending.order?.id)break;
+      state.eventQueue.shift();state.paused=true;save();
+      say('Veraltete QS-Meldung geschlossen: Der zugehörige Auftrag ist bereits abgeschlossen.');
+    }
     const event=state.eventQueue[0];overlay.hidden=!event;
     if(!event)return;
     const operatorPanel=$('operator-advice-card');if(operatorPanel)operatorPanel.hidden=true;
@@ -5183,6 +5189,7 @@
   }
 
   function tick(dt){
+    if(state.eventQueue.some(event=>event.event==='quality_issue'||event.event==='quality_complaint')){state.paused=true;return;}
     if(state.paused)return;
     // Slice at minute boundaries so shift changes and month end are charged exactly once.
     let left=dt*state.speed*GAME_MINUTES_PER_REAL_SECOND;
@@ -5747,6 +5754,7 @@
     save();renderBusiness();render();say('Lager um 200 kg erweitert.');
   });
   $('pause').addEventListener('click',()=>{
+    if(state.eventQueue.length){state.paused=true;save();render();say('Bitte zuerst die offene Meldung entscheiden.');return;}
     if(state.pendingRushAssignment){
       state.paused=true;save();render();
       say('Der angenommene Eilauftrag muss zuerst mit Material versorgt und an der gewählten Maschine eingeplant werden.');
