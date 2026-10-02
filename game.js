@@ -123,6 +123,7 @@
   let simulationTickInProgress=false;
   let lastStableSaveJson=null;
   let recoveredFromBackup=false;
+  let preserveBackupUntilSuccessfulTick=false;
   function readStoredSave(key){
     try{return JSON.parse(localStorage.getItem(key)||'null');}catch(_){return null;}
   }
@@ -135,6 +136,7 @@
   try {
     const primarySave=readStoredSave(SAVE_KEY),backupSave=readStoredSave(BACKUP_SAVE_KEY);
     recoveredFromBackup=!usableSave(primarySave)&&usableSave(backupSave);
+    preserveBackupUntilSuccessfulTick=usableSave(backupSave);
     const stored=usableSave(primarySave)?primarySave:(recoveredFromBackup?backupSave:null);
     if(stored) {
       state={...defaults(),...stored};
@@ -460,7 +462,7 @@
     const serialized=JSON.stringify(state);
     if(!simulationTickInProgress){
       lastStableSaveJson=serialized;
-      try{localStorage.setItem(BACKUP_SAVE_KEY,serialized);}catch(_){}
+      if(!preserveBackupUntilSuccessfulTick)try{localStorage.setItem(BACKUP_SAVE_KEY,serialized);}catch(_){}
     }
     localStorage.setItem(SAVE_KEY,serialized);
   }catch(_){}};
@@ -5976,6 +5978,10 @@
         tick(elapsed);
         simulationTickInProgress=false;
         lastStableSaveJson=JSON.stringify(state);
+        if(preserveBackupUntilSuccessfulTick){
+          preserveBackupUntilSuccessfulTick=false;
+          try{localStorage.setItem(BACKUP_SAVE_KEY,lastStableSaveJson);}catch(_){}
+        }
       }catch(error){
         simulationTickInProgress=false;
         let rolledBack=false;
