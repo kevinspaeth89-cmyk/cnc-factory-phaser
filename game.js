@@ -2635,6 +2635,7 @@
     zoomTimer=setTimeout(()=>{
       $('hall-view').hidden=true;
       $('detail-view').hidden=false;
+      document.querySelector('main')?.classList.add('machine-closeup');
       renderHallOverview();
       ensureGame();
       visual?.scale.refresh();
@@ -2645,6 +2646,7 @@
     clearTimeout(zoomTimer);
     $('detail-view').hidden=true;
     $('hall-view').hidden=false;
+    document.querySelector('main')?.classList.remove('machine-closeup');
     renderHallOverview();
     $('hall-map').classList.remove('zooming');
     hallPreviewBay=null;renderHallPreview();
