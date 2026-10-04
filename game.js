@@ -2657,6 +2657,10 @@
       state.productionFlow?.lots.map(lot=>[lot.id,lot.status,lot.routePosition].join(':')).join(','),
       JSON.stringify(state.qualityStaff),state.machines.map(machine=>[machine.bay,machine.type,machine.operator1,machine.operator2].join(':')).join(','),Math.floor(state.money)].join('::');
   }
+  function orderMenuHasFocus(){
+    const active=document.activeElement;
+    return !!active&&!!active.closest?.('#orders-panel')&&['SELECT','SUMMARY'].includes(active.tagName);
+  }
   let pendingOrderAssignmentId=null;
   function renderMachineLoadCard(machine){
     const card=document.createElement('section');
@@ -2878,14 +2882,17 @@
       createFactory2Row(`${item.status==='active'?'Aktiv':'Vorschau'} · ${item.label}`,`${item.description} · ${item.status==='active'?'endet in '+formatEstimateMinutes(item.remainingMinutes):'Start in '+formatEstimateMinutes(item.startsInMinutes)}`)));
     if(!activeSnapshot.active.length&&!activeSnapshot.scheduled.length)$('cf2-situation-list').replaceChildren(createFactory2Row('Keine Sonderlage aktiv','Markt- und Betriebslagen erscheinen gelegentlich und gelten nur für ihren angezeigten Zeitraum.'));
 
+    const flowList=$('cf2-flow-list');
+    const expandedFlowOrders=new Set([...flowList.querySelectorAll('details[open]')]
+      .map(details=>details.dataset.orderId).filter(Boolean));
     const liveLots=state.productionFlow.lots.filter(lot=>!['completed','cancelled'].includes(lot.status));
     const orderIds=[...new Set(liveLots.map(lot=>lot.orderId))];
-    $('cf2-flow-list').replaceChildren(...(orderIds.length?orderIds.map(id=>{
+    flowList.replaceChildren(...(orderIds.length?orderIds.map(id=>{
       const order=state.productionFlow.orders[id],lots=state.productionFlow.lots.filter(lot=>lot.orderId===id),row=document.createElement('article');row.className='factory2-row';
       const title=document.createElement('strong'),detail=document.createElement('p');title.textContent=(order?.part||id)+' · '+order.qty+' Teile';
       detail.textContent=order.routing.map((step,index)=>flowStepLabel(step)+': '+lots.filter(lot=>lot.routePosition>index||lot.status==='completed').reduce((sum,lot)=>sum+lot.qty,0)+'/'+order.qty).join(' → ');
       row.append(title,detail);const timing=routeTimePreview(order,{routing:order.routing,checks:[]},lots),time=document.createElement('p');time.className='order-route-time';time.textContent='Verbleibende Durchlaufzeit bei freien Stationen: '+(timing.minutes===null?'noch offen':('ca. '+formatEstimateMinutes(timing.minutes)))+' · '+timing.details.join(' → ');const timeHint=document.createElement('small');timeHint.textContent='Ab aktuellem Fortschritt; Losüberlappung und parallele Maschinen berücksichtigt. Ohne Warteschlangen, Schichtpausen und Störungen.';row.append(time,timeHint);if(order.deliveryAgreement?.accepted){const delivery=document.createElement('p');delivery.textContent=order.deliveryAgreement.firstQty+' Teile bis '+formatDeliveryAt(order.deadlineAt)+', Rest bis '+formatDeliveryAt(order.deadlineAt+order.deliveryAgreement.extensionMinutes);row.append(delivery);}
-      if(lots.length>1){const details=document.createElement('details'),summary=document.createElement('summary');summary.textContent=lots.length+' Fertigungslose anzeigen';details.append(summary);for(const lot of lots){const line=document.createElement('p');line.textContent='Los '+lot.sequence+' · '+lot.qty+' Teile · '+(lot.status==='completed'?'abgeschlossen':flowStepLabel(order.routing[lot.routePosition]));details.append(line);}row.append(details);}return row;
+      if(lots.length>1){const details=document.createElement('details'),summary=document.createElement('summary');details.dataset.orderId=id;details.open=expandedFlowOrders.has(id);summary.textContent=lots.length+' Fertigungslose anzeigen';details.append(summary);for(const lot of lots){const line=document.createElement('p');line.textContent='Los '+lot.sequence+' · '+lot.qty+' Teile · '+(lot.status==='completed'?'abgeschlossen':flowStepLabel(order.routing[lot.routePosition]));details.append(line);}row.append(details);}return row;
     }):[createFactory2Row('Keine laufende Fertigung','Angenommene Aufträge erscheinen hier mit ihrem Fortschritt je Arbeitsgang.')]));
 
     const supplierRows=[];
@@ -5472,7 +5479,7 @@
       }
     }
     render();
-    if(currentPanel==='orders'&&ordersRenderKey()!==lastOrdersRenderKey)renderOrders();
+    if(currentPanel==='orders'&&ordersRenderKey()!==lastOrdersRenderKey&&!orderMenuHasFocus())renderOrders();
     if(currentPanel==='orders'){
       updateOrderCountdowns();
       updateMachineLoadCards();
