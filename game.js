@@ -3390,17 +3390,40 @@
     $('employee-specializations').textContent=assignedSpecializations.length
       ?`${assignedSpecializations.map(id=>specLabels[id]||id).join(' · ')}${effectParts.length?` · ${effectParts.join(' · ')}`:''}`
       :`Noch keine Spezialisierung.${effectParts.length?` Mögliche Wirkung: ${effectParts.join(' · ')}.`:''}`;
-    const progression={xp:Math.max(0,Number(employee.xp)||0)};
-    const available=employeeDevelopment.getAvailableSpecializations(employee,progression);
+    const progression=employeeDevelopment.getProgress(employee);
+    const available=employeeDevelopment.getAvailableSpecializations(employee);
     const specializationSelect=$('employee-specialization');
     specializationSelect.replaceChildren(...available.map(id=>{
       const option=document.createElement('option');option.value=id;option.textContent=specLabels[id]||id;return option;
     }));
     $('employee-specialization-assign').disabled=!available.length;
-    $('employee-specialization-hint').classList.toggle('upgrade-ready',available.length>0);
-    $('employee-specialization-hint').textContent=assignedSpecializations.length>=2?'Maximal zwei Spezialisierungen erreicht.':progression.xp<employeeDevelopment.FIRST_UNLOCK_XP
-      ?`Erste Spezialisierung ab ${employeeDevelopment.FIRST_UNLOCK_XP} Erfahrungspunkten; die zweite ab ${employeeDevelopment.SECOND_UNLOCK_XP}.`
-      :available.length?'ENTWICKLUNGSSTUFE ERREICHT – eine Spezialisierung ist jetzt verfügbar. Wähle deinen Schwerpunkt.':'Für die zweite Spezialisierung ist mehr Erfahrung nötig.';
+    $('employee-specialization-hint').classList.toggle('upgrade-ready',progression.pendingChoices>0);
+    const productionHours=Math.floor(progression.productionHours);
+    const progressionSummary='Karrierelevel '+progression.careerLevel+' · '+productionHours+' Produktionsstunden';
+    const specializationSummary=assignedSpecializations.length
+      ?assignedSpecializations.map(id=>specLabels[id]||id).join(' · ')
+      :'Noch keine Spezialisierung';
+    $('employee-specializations').textContent=progressionSummary+' · '+specializationSummary+(effectParts.length?' · '+effectParts.join(' · '):'');
+    let progressionHint;
+    if(assignedSpecializations.length>=employeeDevelopment.MAX_SPECIALIZATIONS){
+      progressionHint='Maximal zwei Spezialisierungen erreicht.';
+    }else if(progression.pendingChoices>0){
+      progressionHint=progression.pendingChoices===1
+        ?'Level-up erreicht: Wähle jetzt eine Spezialisierung.'
+        :'Es warten '+progression.pendingChoices+' Level-up-Auswahlen. Jede Auswahl wurde durch einen eigenen Aufstieg verdient.';
+    }else if(progression.nextMilestoneMinutes!==null){
+      const thresholdHours=Math.ceil(progression.nextMilestoneMinutes/60);
+      const remainingHours=Math.max(0,Math.ceil((progression.nextMilestoneMinutes-progression.productionMinutes)/60));
+      progressionHint='Nächster Erfahrungsaufstieg bei '+thresholdHours+' Produktionsstunden · noch '+remainingHours+' h.';
+      if(progression.specialEventAvailable){
+        progressionHint+=' Eine erfolgreiche Selbstreparatur kann ebenfalls einmalig ein Level-up bringen.';
+      }else if(!employee.development.specialEventRewardClaimed&&progression.productionMinutes<employeeDevelopment.SPECIAL_EVENT_MINUTES){
+        progressionHint+=' Eine besondere Leistung kann ab '+Math.ceil(employeeDevelopment.SPECIAL_EVENT_MINUTES/60)+' h ebenfalls ein Level-up auslösen.';
+      }
+    }else{
+      progressionHint='Alle Spezialisierungen und Level-ups dieses Mitarbeiters wurden verdient.';
+    }
+    $('employee-specialization-hint').textContent=progressionHint;
 
     let conversation=$('employee-card-conversation');
     if(!conversation){
@@ -5373,11 +5396,12 @@
           m.tool=Math.max(0,m.tool-gain*.18*recruitmentSystem.toolWearMultiplier(employee));
         }
         if(employee){
-          const wasAvailable=employeeDevelopment.getAvailableSpecializations(employee,{xp:employee.xp}).length>0;
+          const wasAvailable=employeeDevelopment.getAvailableSpecializations(employee).length>0;
           const learningEffect=employeeDevelopment.getEffects(employee).learning;
+          employee.productionMinutes=Math.round((Math.max(0,Number(employee.productionMinutes)||0)+step)*1000)/1000;
           employee.xp=Math.round((employee.xp+step*recruitmentSystem.learningMultiplier(employee)*(1+learningEffect))*1000)/1000;
           recordEmployeeMachineWork(employee,m,step,Math.max(0,m.produced-producedBefore));
-          if(!wasAvailable&&employeeDevelopment.getAvailableSpecializations(employee,{xp:employee.xp}).length){say(employee.name+' hat eine Entwicklungsstufe erreicht! Eine Spezialisierung ist verfügbar.');openEmployeeCard(employee,m,shift);}
+          if(!wasAvailable&&employeeDevelopment.getAvailableSpecializations(employee).length){say(employee.name+' hat eine Entwicklungsstufe erreicht! Eine Spezialisierung ist verfügbar.');openEmployeeCard(employee,m,shift);}
         }
         if(m.activeOrderSource==='factory2'){
           const lot=state.productionFlow.lots.find(item=>item.id===o.flowLotId);
@@ -5549,6 +5573,8 @@
           bay:event.bay
         });
         say(`${repairEmployee.name} hat die Störung auf Platz ${event.bay} erfolgreich selbst behoben · Erfahrung mit diesem Fehler: ${learned.successes}× · künftige Erfolgschance +${Math.round(learned.bonusSuccessChance*100)} %-Punkte.`);
+        const promotion=employeeDevelopment.awardSpecialEvent(repairEmployee,'successful_self_repair');
+        if(promotion.ok)say(repairEmployee.name+' hat mit der erfolgreichen Selbstreparatur ein verdientes Level-up erreicht · eine Spezialisierung steht bereit.');
       }
     }
     if(event.event==='warning'){

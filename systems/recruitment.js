@@ -1198,6 +1198,8 @@
     return {
       id,
       xp: 0,
+      productionMinutes: 0,
+      development: { version: 2, legacyMilestonesAwarded: 0, experienceMilestonesAwarded: 0, eventPromotionsAwarded: 0, pendingSpecializationChoices: 0, specialEventRewardClaimed: false },
       trained: 0,
       assignedBay: null,
       assignedRole: null,
@@ -1229,6 +1231,8 @@
     return {
       id,
       xp: 0,
+      productionMinutes: 0,
+      development: { version: 2, legacyMilestonesAwarded: 0, experienceMilestonesAwarded: 0, eventPromotionsAwarded: 0, pendingSpecializationChoices: 0, specialEventRewardClaimed: false },
       trained: 0,
       assignedBay: null,
       assignedRole: null,
@@ -1290,13 +1294,31 @@
     const savedPortrait = savedPortraitId
       ? portraitPath(savedPortraitId)
       : profile.portrait;
+    const machineHistory = normalizeMachineHistory(entry?.machineHistory);
+    const historicalWorkMinutes = Object.values(machineHistory).reduce((sum, item) => sum + item.workMinutes, 0);
+    const savedProductionMinutes = Number.isFinite(entry?.productionMinutes)
+      ? Math.max(0, entry.productionMinutes)
+      : historicalWorkMinutes > 0 ? historicalWorkMinutes : Math.max(0, Number(entry?.xp) || 0);
+    const savedSpecializations = [];
+    for (const specialization of Array.isArray(entry?.specializations) ? entry.specializations : []) {
+      if (['turning', 'milling', 'precision', 'learning'].includes(specialization)
+        && !savedSpecializations.includes(specialization) && savedSpecializations.length < 2) {
+        savedSpecializations.push(specialization);
+      }
+    }
+    const savedDevelopment = entry?.development && typeof entry.development === 'object' && !Array.isArray(entry.development)
+      ? { ...entry.development }
+      : {};
     return {
       id,
       xp: Number.isFinite(entry?.xp) ? Math.max(0, entry.xp) : 0,
+      specializations: savedSpecializations,
+      development: savedDevelopment,
       trained: Number.isInteger(entry?.trained) ? clamp(entry.trained, 0, 3) : 0,
       assignedBay: Number.isInteger(entry?.assignedBay) ? entry.assignedBay : null,
       assignedRole: entry?.assignedRole === 'quality' ? 'quality' : null,
-      machineHistory: normalizeMachineHistory(entry?.machineHistory),
+      machineHistory,
+      productionMinutes: savedProductionMinutes,
       repairExperience: normalizeRepairExperience(entry?.repairExperience),
       memories: normalizeMemories(entry?.memories),
       personalGiftId: WORKPLACE_ITEMS[entry?.personalGiftId] ? entry.personalGiftId : null,

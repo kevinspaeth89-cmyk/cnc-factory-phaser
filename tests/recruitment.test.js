@@ -56,15 +56,57 @@ test('candidate skills affect the matching machine, learning speed, and tool wea
   assert.equal(recruitment.toolWearMultiplier({ profileVersion: 0 }), 1);
 });
 
+
+test('new hires are marked on the current progression before they accumulate XP', () => {
+  const candidate = recruitment.generateApplicant(77);
+  const employee = recruitment.createEmployee(candidate, 77);
+  assert.equal(employee.productionMinutes, 0);
+  assert.equal(employee.development.version, 2);
+  employee.xp = 9000;
+  employee.productionMinutes = 7199;
+  const development = require('../systems/employeeDevelopment.js');
+  assert.equal(development.getProgress(employee).pendingChoices, 0);
+  employee.productionMinutes = 7200;
+  assert.equal(development.getProgress(employee).pendingChoices, 1);
+});
+
 test('normalizes old anonymous staff without changing their existing progression', () => {
   const migrated = recruitment.normalizeEmployee({ id: 7, xp: 950, trained: 2, assignedBay: 3 }, 7);
   assert.equal(migrated.profileVersion, 0);
   assert.equal(migrated.name, recruitment.legacyProfile(7).name);
   assert.equal(migrated.xp, 950);
+  assert.equal(migrated.productionMinutes, 950, 'older saves without work history receive a one-time experience estimate');
   assert.equal(migrated.trained, 2);
   assert.equal(migrated.assignedBay, 3);
   assert.deepEqual(migrated.skills, { turning: 0, milling: 0, precision: 0, learning: 0 });
 });
+
+test('normalization preserves earned specializations and level-up state across reloads', () => {
+  const saved = recruitment.normalizeEmployee({
+    id: 12, profileVersion: 2, name: 'Mira Stahlwind', xp: 10000,
+    skills: { turning: 8, milling: 6, precision: 8, learning: 6 },
+    specializations: ['turning', 'turning', 'precision', 'learning'],
+    development: {
+      version: 1,
+      experienceMilestonesAwarded: 1,
+      eventPromotionsAwarded: 1,
+      pendingSpecializationChoices: 0,
+      specialEventRewardClaimed: true
+    }
+  }, 12);
+  assert.deepEqual(saved.specializations, ['turning', 'precision']);
+  assert.equal(saved.development.specialEventRewardClaimed, true);
+  const reloaded = recruitment.normalizeEmployee(saved, 12);
+  assert.deepEqual(reloaded.specializations, ['turning', 'precision']);
+  assert.deepEqual(reloaded.development, saved.development);
+  const practiced = recruitment.normalizeEmployee({
+    id: 13, profileVersion: 2, name: 'Kael Stahlwind', xp: 10000,
+    skills: { turning: 8, milling: 6, precision: 8, learning: 6 },
+    machineHistory: { standard: { workMinutes: 3600 } }
+  }, 13);
+  assert.equal(practiced.productionMinutes, 3600, 'saved staffed work time takes precedence over learning-boosted XP');
+});
+
 
 
 test('profile ratings use all four skills and portraits remain stable per employee id', () => {
