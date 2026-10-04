@@ -775,11 +775,6 @@ let flowLots=factory2Saved.productionFlow.lots.filter(lot=>lot.orderId==='FLOW-1
 assert.ok(flowLots.length>1);assert.equal(flowLots.reduce((sum,lot)=>sum+lot.qty,0),120);
 assert.ok(flowLots.some(lot=>lot.status==='running'),'first compatible machine should start a queued lot');
 assert.equal(factory2Saved.inventory.rawMaterial.c45,380);
-const workedEmployees=[...factory2Saved.staffRoster.shift1,...factory2Saved.staffRoster.shift2];
-const timeTrackedEmployee=workedEmployees.find(employee=>employee.productionMinutes>0);
-assert.ok(timeTrackedEmployee,'staffed production minutes are tracked separately from experience XP');
-const workTimeReload=boot({cnc_factory_save_v3:JSON.stringify(factory2Saved)}).live();
-assert.equal(workTimeReload.staffRoster.shift1.concat(workTimeReload.staffRoster.shift2).find(employee=>employee.id===timeTrackedEmployee.id).productionMinutes,timeTrackedEmployee.productionMinutes,'staffed time survives save normalization');
 factory2=boot({cnc_factory_save_v3:JSON.stringify(factory2Saved)},{random:()=>0.999999});
 assert.equal(factory2.state().productionFlow.lots.filter(lot=>lot.orderId==='FLOW-120').length,flowLots.length);
 let flowClock=1000;
@@ -799,6 +794,11 @@ for(let t=flowClock;t<=flowClock+120000;t+=250){
 }
 assert.ok(flowLots.every(lot=>lot.status==='completed'),'all 120 parts should finish the mixed route');
 factory2.flush();factory2Saved=factory2.state();
+const workedEmployees=[...factory2Saved.staffRoster.shift1,...factory2Saved.staffRoster.shift2];
+const timeTrackedEmployee=workedEmployees.find(employee=>employee.productionMinutes>0);
+assert.ok(timeTrackedEmployee,'staffed production minutes are tracked separately from experience XP');
+const workTimeReload=boot({cnc_factory_save_v3:JSON.stringify(factory2Saved)}).live();
+assert.equal(workTimeReload.staffRoster.shift1.concat(workTimeReload.staffRoster.shift2).find(employee=>employee.id===timeTrackedEmployee.id).productionMinutes,timeTrackedEmployee.productionMinutes,'staffed time survives save normalization');
 const completedFlowProject=factory2Saved.customerProjects.projects.find(project=>project.id===flowProject.id);
 assert.equal(completedFlowProject.phaseResults.length,1,'all lots should advance exactly one project phase');
 assert.equal(completedFlowProject.phaseResults[0].qualityDefectParts,factory2Saved.factory2.orderResults['FLOW-120'].qualityDefectParts,'project phase should record aggregate lot quality');
@@ -1053,6 +1053,13 @@ assert.equal(firstProduction.live().staffRoster.shift1[0].personalGiftId,undefin
 firstProduction.get('operator-1').click();
 assert.doesNotThrow(()=>firstProduction.get('operator-picker').children[1].children[0].children[2].click(),'assigning a fresh employee without a gift must render safely');
 assert.equal(firstProduction.live().staffRoster.shift1[0].assignedBay,1);
+assert.equal(firstProduction.live().staffRoster.shift1[0].specializations?.length||0,0,'a fresh hire starts without a specialization');
+// Seed a realistic near-milestone save; the UI test should exercise the boundary without simulating 120 work hours.
+const nearMilestoneState=firstProduction.live(),nearMilestoneEmployee=nearMilestoneState.staffRoster.shift1[0];
+nearMilestoneEmployee.productionMinutes=require(dir+'/systems/employeeDevelopment.js').FIRST_UNLOCK_MINUTES-1;
+nearMilestoneEmployee.development={version:2,legacyMilestonesAwarded:0,experienceMilestonesAwarded:0,eventPromotionsAwarded:0,pendingSpecializationChoices:0,specialEventRewardClaimed:true};
+firstProductionStorage.cnc_factory_save_v3=JSON.stringify(nearMilestoneState);
+firstProduction=boot(firstProductionStorage,{orderMarketSeed:1,random:()=>0.999999,console:{...console,error:(...args)=>firstProductionErrors.push(args)}});
 assert.equal(firstProduction.get('detail-workplace-items').children.length,1,'no phantom gift is displayed');
 firstProduction.get('material-quantity').value='25';firstProduction.get('buy-material').click();
 const firstProductionOrder=firstProduction.live().orderMarket.available.find(order=>order.kind==='Drehen'&&order.material==='C45 Stahl');
@@ -1062,7 +1069,7 @@ firstProduction.get('assignment-options').children[0].children[0].click();
 assert.equal(firstProduction.live().machines[0].activeId,firstProductionOrder.id);
 firstProduction.get('pause').click();
 let sawUpgrade=false;
-for(let t=250;t<=120000;t+=250){firstProduction.frame(t);if(firstProduction.get('employee-specialization-hint').textContent.includes('ENTWICKLUNGSSTUFE')){sawUpgrade=true;}}
+for(let t=250;t<=120000;t+=250){firstProduction.frame(t);if(firstProduction.get('employee-specialization-hint').textContent.includes('Level-up erreicht')){sawUpgrade=true;}}
 assert.ok(sawUpgrade,'crossing the first milestone visibly announces a specialization');
 let firstProductionLive=firstProduction.live();
 assert.deepEqual(firstProductionErrors,[],'first production must not trigger rollback or render errors');
