@@ -2144,6 +2144,96 @@
     }
     return {cost:Math.round(cost*100)/100,details,valid:true};
   }
+  function routeDeliveryPreview(order,plan){
+    const settings=state.factory2.offerPlans[order.id]||{};
+    const deliveryOrder={...order,...settings,routing:plan.routing};
+    const flow=productionFlow.createPlan({...deliveryOrder,splitLots:!!settings.batchSize},{capacity:Math.max(1,Math.floor(40*factory2SituationEffectsAt(state.gameMinutes).capacityFactor))});
+    if(!flow.ok)return {valid:false,reason:'Fertigungslose lassen sich mit diesen Einstellungen nicht berechnen.',details:[]};
+    const preview={gameMinutes:state.gameMinutes,reputation:state.reputation,suppliers:JSON.parse(JSON.stringify(state.suppliers))};
+    const machiningSteps=Math.max(1,plan.routing.filter(step=>['turning','milling'].includes(step.type)||step.type==='external'&&['turning','milling'].includes(step.operationType)).length);
+    const machineLanes=state.machines.map(machine=>{
+      const load=plannedMachineLoad(machine),shifts=[1,2].filter(shift=>(machine['operator'+shift]&&assignedEmployee(machine,shift))||(shift===2&&machine.loadingRobot));
+      if(!shifts.length||machine.maintenanceRemainingMinutes>0||machine.maintenance<8||machine.tool<1)return null;
+      return {machine,kind:catalog[machine.type]?.kind,freeAt:Math.max(state.gameMinutes,load.freeAt),
+        factor:shifts.reduce((sum,shift)=>sum+productionFactorForShift(machine,shift),0)/shifts.length};
+    }).filter(Boolean);
+    const qualityLanes=[1,2].filter(shift=>qualityEmployee(shift)).map(shift=>({shift,freeAt:state.gameMinutes}));
+    const qualityWorkFinish=(shift,startAt,workMinutes)=>{
+      let remaining=Math.max(0,workMinutes),minuteAt=Math.max(state.gameMinutes,startAt);
+      if(remaining<=1e-8)return minuteAt;
+      for(let dayIndex=0;dayIndex<366;dayIndex++){
+        const date=dateAt(minuteAt),dayStart=(Date.UTC(date.getUTCFullYear(),date.getUTCMonth(),date.getUTCDate())-START)/60000;
+        const weekday=dateAt(dayStart).getUTCDay();
+        if(weekday===0||weekday===6){minuteAt=dayStart+1440;continue;}
+        const windowStart=dayStart+(shift===1?360:840),windowEnd=dayStart+(shift===1?840:1320);
+        if(minuteAt>=windowEnd){minuteAt=dayStart+1440;continue;}
+        const workStart=Math.max(minuteAt,windowStart),worked=Math.min(remaining,windowEnd-workStart);
+        if(worked>0){minuteAt=workStart+worked;remaining-=worked;if(remaining<=1e-8)return minuteAt;}
+        minuteAt=dayStart+1440;
+      }
+      return Infinity;
+    };
+    const reserveQualityWork=(qualityOrder,availableAt,remainingMinutes=null)=>{
+      const candidates=qualityLanes.map(lane=>{
+        const work=Number.isFinite(remainingMinutes)?remainingMinutes:programmingQuality.inspectionMinutes({order:qualityOrder,policy:qualityPolicyFor(lane.shift).id});
+        const finishAt=qualityWorkFinish(lane.shift,Math.max(availableAt,lane.freeAt),work);
+        return {lane,finishAt};
+      }).filter(candidate=>Number.isFinite(candidate.finishAt));
+      candidates.sort((left,right)=>left.finishAt-right.finishAt||left.lane.shift-right.lane.shift);
+      const best=candidates[0];
+      if(!best)return null;
+      best.lane.freeAt=best.finishAt;
+      return best;
+    };
+    const runningQualityLot=state.productionFlow?.lots.find(lot=>lot.status==='running'&&factory2RootOrder(lot)?.routing?.[lot.routePosition]?.type==='quality');
+    if(runningQualityLot){
+      const root=factory2RootOrder(runningQualityLot),work=runningQualityLot.qualityInspection;
+      reserveQualityWork({...root,qty:runningQualityLot.qty},state.gameMinutes,Math.max(0,Number(work?.remainingMinutes)||0));
+    }
+    const queuedQualityIds=state.productionFlow?.queues?.QS||[];
+    for(const id of queuedQualityIds){
+      const lot=state.productionFlow.lots.find(item=>item.id===id&&item.status==='queued'),root=factory2RootOrder(lot);
+      if(lot&&root)reserveQualityWork({...root,qty:lot.qty},state.gameMinutes);
+    }
+    const lotFinishes=flow.lots.map(()=>state.gameMinutes),details=[];
+    for(const step of plan.routing){
+      const check=plan.checks.find(item=>item.step.id===step.id);
+      if(!check?.ready)return {valid:false,reason:check?.reason||flowStepLabel(step)+' ist noch nicht verfügbar.',details};
+      const arrivals=lotFinishes.slice(),stageFinishes=[],resources=new Set();
+      for(const [lotIndex,lot] of flow.lots.entries()){
+        const availableAt=arrivals[lotIndex];
+        if(step.type==='external'){
+          if(!check.provider)return {valid:false,reason:check.label+': Zulieferer wählen.',details};
+          const quote=suppliers.quote(preview,check.provider.id,deliveryOrder,{routeStepId:step.id,operationType:check.operation,qty:lot.qty,lotId:lot.id,atMinute:availableAt});
+          if(!quote.ok)return {valid:false,reason:check.label+': Lieferzeit beim gewählten Zulieferer nicht verfügbar.',details};
+          lotFinishes[lotIndex]=quote.dueAtMinute;resources.add(check.provider.name);
+        }else if(step.type==='quality'){
+          const assigned=reserveQualityWork({...order,qty:lot.qty},availableAt);
+          if(!assigned)return {valid:false,reason:'Für die QS-Prognose ist keine besetzte Schicht verfügbar.',details};
+          lotFinishes[lotIndex]=assigned.finishAt;resources.add('QS S'+assigned.lane.shift);
+        }else{
+          const lanes=machineLanes.filter(lane=>lane.kind===step.requiredMachineKind);
+          if(!lanes.length)return {valid:false,reason:step.requiredMachineKind+': keine einsatzbereite, besetzte Maschine verfügbar.',details};
+          const part={...order,qty:lot.qty,kind:step.requiredMachineKind,
+            duration:order.duration*lot.qty/Math.max(1,order.qty)/machiningSteps};
+          const candidates=lanes.map(lane=>({lane,forecast:forecastOrderOnMachine(lane.machine,part,Math.max(availableAt,lane.freeAt),lane.factor,false)}))
+            .filter(candidate=>Number.isFinite(candidate.forecast.finishAt));
+          candidates.sort((left,right)=>left.forecast.finishAt-right.forecast.finishAt||left.lane.machine.bay-right.lane.machine.bay);
+          const best=candidates[0];
+          if(!best)return {valid:false,reason:step.requiredMachineKind+': keine Fertigstellung mit der aktuellen Schichtplanung berechenbar.',details};
+          best.lane.freeAt=best.forecast.finishAt;lotFinishes[lotIndex]=best.forecast.finishAt;resources.add('Platz '+best.lane.machine.bay);
+        }
+        stageFinishes.push(lotFinishes[lotIndex]);
+      }
+      const stageFinish=Math.max(...stageFinishes),stageStart=Math.min(...arrivals);
+      details.push(`${flowStepLabel(step)}${resources.size?' · '+[...resources].join('/'):''}: ${formatEstimateMinutes(Math.max(0,stageFinish-stageStart))} · fertig ${formatDeliveryAt(stageFinish)}`);
+    }
+    const deadlines=flow.lots.map(lot=>orderPlanning.lotDeadline(deliveryOrder,flow.lots,lot));
+    const buffers=lotFinishes.map((finishAt,index)=>Number.isFinite(deadlines[index])?deadlines[index]-finishAt:null).filter(Number.isFinite);
+    const finishAt=Math.max(...lotFinishes),bufferMinutes=buffers.length?Math.min(...buffers):null;
+    return {valid:true,finishAt,durationMinutes:Math.max(0,finishAt-state.gameMinutes),bufferMinutes,lotCount:flow.lots.length,
+      lateLots:lotFinishes.filter((finish,index)=>Number.isFinite(deadlines[index])&&finish>deadlines[index]).length,details};
+  }
   function routeTimePreview(order,plan,liveLots=null){
     const settings=state.factory2.offerPlans[order.id]||{};
     const flow=liveLots?{ok:true,lots:liveLots}:productionFlow.createPlan({...order,...settings,splitLots:!!settings.batchSize,routing:plan.routing});
@@ -2212,10 +2302,18 @@
       const delivery=document.createElement('p');delivery.className='hint';delivery.textContent=settings.deliveryAgreement?.reason||'Lose erleichtern parallele Fertigung. Der Liefertermin bleibt bestehen.';panel.append(delivery);
       if(!order.isRushOrder&&!settings.deliveryAgreement){const request=document.createElement('button');request.type='button';request.textContent='Teil- und Folgelieferung anfragen';request.addEventListener('click',event=>{event.stopPropagation();settings.deliveryAgreement=orderPlanning.negotiateDelivery(order,orderMarketSystem.getReputation(state)[order.customer],Math.random);if(settings.deliveryAgreement.accepted)settings.batchSize=settings.deliveryAgreement.firstQty;save();renderOrders();});panel.append(request);}
     }
-    const timing=routeTimePreview(order,plan),time=document.createElement('p');time.className='order-route-time';
-    time.textContent='Durchlaufzeit bei freien Stationen: '+(timing.minutes===null?'noch offen':('ca. '+formatEstimateMinutes(timing.minutes)))+' · '+timing.details.join(' → ');
-    const timingHint=document.createElement('small');timingHint.textContent='Richtwert für die gewählten Lose und Maschinen, inklusive Programmieren, Rüsten und QS. Parallel laufende Lose sind berücksichtigt. Warteschlangen, Schichtpausen, fehlende Bediener und Störungen verlängern die Zeit; fehlende Maschinen werden mit einer Grundmaschine geschätzt.';
-    panel.append(time,timingHint);card.append(panel);return estimate;
+    const timing=routeDeliveryPreview(order,plan),time=document.createElement('p');
+    time.className='order-route-time route-delivery-preview '+(!timing.valid?'unavailable':timing.bufferMinutes<0?'late':'on-time');
+    time.textContent=!timing.valid?'Liefertermin-Prognose offen · '+timing.reason:
+      `${timing.bufferMinutes===null?'Voraussichtlich fertig':'Voraussichtlich '+(timing.bufferMinutes<0?'zu spät':'pünktlich')} · Abschluss ${formatDeliveryAt(timing.finishAt)} · ${formatEstimateMinutes(timing.durationMinutes)} Gesamtdurchlauf`+
+      (timing.bufferMinutes===null?'':timing.bufferMinutes<0?' · '+formatEstimateMinutes(-timing.bufferMinutes)+' hinter dem Liefertermin':' · '+formatEstimateMinutes(timing.bufferMinutes)+' Puffer')+
+      (timing.lateLots?` · ${timing.lateLots}/${timing.lotCount} Lose verspätet`:'');
+    const timingBreakdown=document.createElement('small');timingBreakdown.className='order-route-breakdown';
+    timingBreakdown.textContent=timing.valid?timing.details.join(' → '):timing.reason;
+    const timingHint=document.createElement('small');timingHint.textContent=timing.valid
+      ?'Live-Prognose mit aktueller Maschinenbelegung, Schichten, Losgröße und gewählten Zulieferern. Je Station zählt die schnellste passende eigene Maschine.'
+      :'Sobald alle Stationen besetzt und fehlende Zulieferer gewählt sind, wird die Liefertermin-Prognose hier berechnet.';
+    panel.append(time,timingBreakdown,timingHint);card.append(panel);return estimate;
   }
   function factory2ProjectForOrder(order){
     const projects=state.customerProjects?.projects||[];
@@ -2657,7 +2755,8 @@
     const marketDay=Math.floor(state.gameMinutes/1440);
     return [offers.map(o=>o.id).join(','),JSON.stringify(state.inventory.rawMaterial),marketDay,Object.keys(state.ncPrograms||{}).sort().join(','),
       state.productionFlow?.lots.map(lot=>[lot.id,lot.status,lot.routePosition].join(':')).join(','),
-      JSON.stringify(state.qualityStaff),state.machines.map(machine=>[machine.bay,machine.type,machine.operator1,machine.operator2].join(':')).join(','),Math.floor(state.money)].join('::');
+      JSON.stringify(state.qualityStaff),state.machines.map(machine=>[machine.bay,machine.type,machine.operator1,machine.operator2,machine.activeId,machine.maintenanceRemainingMinutes>0,
+        (machine.orderQueue||[]).map(entry=>entry.order.id).join(','),(machine.qualityReworkQueue||[]).map(task=>task.id).join(','),Math.floor(machine.maintenance),Math.floor(machine.tool)].join(':')).join(','),Math.floor(state.money)].join('::');
   }
   function orderMenuHasFocus(){
     const active=document.activeElement;
@@ -2812,7 +2911,7 @@
       const contributionPerHour=simpleInternal&&Number.isFinite(materialContribution)&&estimateMinutes>0?materialContribution/(estimateMinutes/60):null;
       const risks=compatibleMachines.map(machine=>qualityRiskFor(machine,o)).sort((a,b)=>a-b);
       const qualityHint=` · ${programmingQuality.toleranceClass(o)}${risks.length?` · Qualitätsrisiko ${risks[0]}${risks.length>1&&risks[0]!==risks[risks.length-1]?`–${risks[risks.length-1]}`:''} %`:''}`;
-      detailsContent.innerHTML=`<div class="top"><span>${o.customer}</span><span>${o.kind} · #${o.id}</span></div><h3>${o.part}</h3><p>${customerType}${o.material} · ${o.qty} Teile${difficulty}${qualityHint}</p><div class="values"><span>${o.kg} kg · Liefertermin ${formatDeliveryAt(o.deadlineAt)}${o.reputationBonusPct?` · ${o.reputationBonusPct<0?'Kundenabschlag':'Kundenbonus'} ${o.reputationBonusPct>0?'+':''}${o.reputationBonusPct} %`:''}</span><b>${euro(o.reward)}</b></div><div class="order-economics${materialContribution!==null&&materialContribution<0?' loss':''}"><div class="order-economics-grid"><span>Material zum Tageskurs<strong>${materialCost===null?'—':euro(materialCost)}</strong></span><span>Nach Material<strong>${materialContribution===null?'—':euro(materialContribution)}</strong></span></div><p>${contributionPerHour===null?'':`Etwa ${euro(contributionPerHour)} je Maschinenstunde · ${formatMinutes(estimateMinutes)} Rüst- und Maschinenzeit`}</p><small>${simpleInternal?'Grundmaschine, ohne Lohn, Strom und Verschleiß':'Kosten und Laufzeit hängen von den gewählten Stationen ab; Fremdvergabe kommt zum Material hinzu.'}</small></div>`;
+      detailsContent.innerHTML=`<div class="top"><span>${o.customer}</span><span>${o.kind} · #${o.id}</span></div><h3>${o.part}</h3><p>${customerType}${o.material} · ${o.qty} Teile${difficulty}${qualityHint}</p><div class="values"><span>${o.kg} kg · Liefertermin ${formatDeliveryAt(o.deadlineAt)}${o.reputationBonusPct?` · ${o.reputationBonusPct<0?'Kundenabschlag':'Kundenbonus'} ${o.reputationBonusPct>0?'+':''}${o.reputationBonusPct} %`:''}</span><b>${euro(o.reward)}</b></div><div class="order-economics${materialContribution!==null&&materialContribution<0?' loss':''}"><div class="order-economics-grid"><span>Material zum Tageskurs<strong>${materialCost===null?'—':euro(materialCost)}</strong></span><span>Nach Material<strong>${materialContribution===null?'—':euro(materialContribution)}</strong></span></div><p>${contributionPerHour===null?'':`Etwa ${euro(contributionPerHour)} je Maschinenstunde · ${formatMinutes(estimateMinutes)} Rüst- und Maschinenzeit`}</p><small>${simpleInternal?'Grundmaschine, ohne Lohn, Strom und Verschleiß':'Die Liefertermin-Prognose unten berücksichtigt Stationen, Fertigungslose, Maschinenbelegung und Zulieferer.'}</small></div>`;
       const orderBrand=customerBrandIdentity(o.customer),orderTop=card.querySelector('.top');
       orderTop.firstElementChild.replaceWith(createCustomerBrandLine(o.customer,true));
       orderTop.classList.add('customer-order-top','customer-order-'+orderBrand.brandClass);
